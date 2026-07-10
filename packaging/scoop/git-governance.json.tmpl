@@ -1,0 +1,30 @@
+{
+  "version": "{{VERSION}}",
+  "description": "Native CLI for governed Git branches, commits, and workflows.",
+  "homepage": "https://github.com/CyberT33N/git-governance",
+  "license": "Proprietary",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/CyberT33N/git-governance/releases/download/{{TAG}}/git-governance_{{VERSION}}_Windows_x86_64.zip",
+      "hash": "{{WINDOWS_AMD64_SHA256}}"
+    },
+    "arm64": {
+      "url": "https://github.com/CyberT33N/git-governance/releases/download/{{TAG}}/git-governance_{{VERSION}}_Windows_arm64.zip",
+      "hash": "{{WINDOWS_ARM64_SHA256}}"
+    }
+  },
+  "bin": "git-governance.exe",
+  "checkver": {
+    "github": "https://github.com/CyberT33N/git-governance"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/CyberT33N/git-governance/releases/download/v$version/git-governance_$version_Windows_x86_64.zip"
+      },
+      "arm64": {
+        "url": "https://github.com/CyberT33N/git-governance/releases/download/v$version/git-governance_$version_Windows_arm64.zip"
+      }
+    }
+  }
+}

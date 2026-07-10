@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "gates": [
+    {
+      "name": "unit-and-integration-tests",
+      "command": "go",
+      "args": [
+        "test",
+        "./..."
+      ],
+      "timeout": "2m"
+    },
+    {
+      "name": "static-analysis",
+      "command": "go",
+      "args": [
+        "vet",
+        "./..."
+      ],
+      "timeout": "1m"
+    }
+  ]
+}

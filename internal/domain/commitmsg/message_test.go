@@ -1,0 +1,294 @@
+package commitmsg
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/CyberT33N/git-governance/internal/domain/problem"
+	"github.com/CyberT33N/git-governance/internal/domain/ticket"
+)
+
+func TestTypesAreCompleteAndDefensivelyCopied(t *testing.T) {
+	t.Parallel()
+
+	actual := Types()
+	if len(actual) != 11 {
+		t.Fatalf("Types() length = %d, want 11", len(actual))
+	}
+	if actual[0] != TypeBuild || actual[len(actual)-1] != TypeTest {
+		t.Fatalf("Types() = %v", actual)
+	}
+	actual[0] = "mutated"
+	if Types()[0] != TypeBuild {
+		t.Fatal("Types() returned mutable shared backing storage")
+	}
+}
+
+func TestParseType(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		raw   string
+		valid bool
+	}{
+		{raw: "feat", valid: true},
+		{raw: "fix", valid: true},
+		{raw: "revert", valid: true},
+		{raw: "feature", valid: false},
+		{raw: "FEAT", valid: false},
+		{raw: "", valid: false},
+	} {
+		testCase := testCase
+		t.Run(testCase.raw, func(t *testing.T) {
+			t.Parallel()
+			actual, err := ParseType(testCase.raw)
+			if testCase.valid {
+				if err != nil || actual.String() != testCase.raw {
+					t.Fatalf("ParseType(%q) = (%q, %v)", testCase.raw, actual, err)
+				}
+				return
+			}
+			assertProblemCode(t, err, problem.CodeCommitTypeInvalid)
+		})
+	}
+}
+
+func TestParseHeader(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		raw      string
+		valid    bool
+		breaking bool
+		code     problem.Code
+	}{
+		{raw: "feat(ABC-123): add export button", valid: true},
+		{raw: "feat(ABC-123)!: replace export contract", valid: true, breaking: true},
+		{raw: "fix(PLATFORM2-7): resolve timeout", valid: true},
+		{raw: "feat: add export button", valid: false, code: problem.CodeCommitHeaderInvalid},
+		{raw: "feat(abc-123): add export button", valid: false, code: problem.CodeCommitHeaderInvalid},
+		{raw: "feat(ABC-001): add export button", valid: false, code: problem.CodeCommitHeaderInvalid},
+		{raw: "feature(ABC-123): add export button", valid: false, code: problem.CodeCommitHeaderInvalid},
+		{raw: "feat(ABC-123):  padded", valid: false, code: problem.CodeCommitDescriptionInvalid},
+		{raw: "feat(ABC-123): ", valid: false, code: problem.CodeCommitHeaderInvalid},
+		{raw: "feat(ABC-123): add\nexport", valid: false, code: problem.CodeCommitHeaderInvalid},
+		{raw: "feat(ABC-123): " + strings.Repeat("a", maxSubjectRunes+1), valid: false, code: problem.CodeCommitDescriptionInvalid},
+	} {
+		testCase := testCase
+		t.Run(testCase.raw, func(t *testing.T) {
+			t.Parallel()
+			actual, err := ParseHeader(testCase.raw)
+			if testCase.valid {
+				if err != nil {
+					t.Fatalf("ParseHeader(%q) error = %v", testCase.raw, err)
+				}
+				if actual.String() != testCase.raw || actual.IsBreaking() != testCase.breaking {
+					t.Fatalf("ParseHeader(%q) = (%q, breaking=%t)", testCase.raw, actual.String(), actual.IsBreaking())
+				}
+				return
+			}
+			assertProblemCode(t, err, testCase.code)
+		})
+	}
+}
+
+func TestParseMessage(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name       string
+		raw        string
+		body       string
+		footers    int
+		breaking   bool
+		serialized string
+	}{
+		{
+			name:       "header only",
+			raw:        "feat(ABC-123): add export button\n",
+			serialized: "feat(ABC-123): add export button",
+		},
+		{
+			name:       "crlf body",
+			raw:        "fix(ABC-123): resolve timeout\r\n\r\nThe timeout now honors cancellation.\r\n",
+			body:       "The timeout now honors cancellation.",
+			serialized: "fix(ABC-123): resolve timeout\n\nThe timeout now honors cancellation.",
+		},
+		{
+			name:       "footer",
+			raw:        "docs(ABC-123): document export workflow\n\nRefs: #123",
+			footers:    1,
+			serialized: "docs(ABC-123): document export workflow\n\nRefs: #123",
+		},
+		{
+			name:       "body and multiple footers",
+			raw:        "feat(ABC-123)!: replace export contract\n\nThe endpoint now returns a resource envelope.\n\nBREAKING CHANGE: clients must read the resource field.\nRefs: #123",
+			body:       "The endpoint now returns a resource envelope.",
+			footers:    2,
+			breaking:   true,
+			serialized: "feat(ABC-123)!: replace export contract\n\nThe endpoint now returns a resource envelope.\n\nBREAKING CHANGE: clients must read the resource field.\nRefs: #123",
+		},
+		{
+			name:       "multiline footer",
+			raw:        "docs(ABC-123): document migration\n\nReviewed-by: Alice\n additional reviewer context",
+			footers:    1,
+			serialized: "docs(ABC-123): document migration\n\nReviewed-by: Alice\n additional reviewer context",
+		},
+		{
+			name:       "revert with sha",
+			raw:        "revert(ABC-123): revert export contract\n\nRefs: 0123456789abcdef",
+			footers:    1,
+			serialized: "revert(ABC-123): revert export contract\n\nRefs: 0123456789abcdef",
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			actual, err := Parse(testCase.raw)
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+			if actual.Body() != testCase.body {
+				t.Fatalf("Body() = %q, want %q", actual.Body(), testCase.body)
+			}
+			if len(actual.Footers()) != testCase.footers {
+				t.Fatalf("len(Footers()) = %d, want %d", len(actual.Footers()), testCase.footers)
+			}
+			if actual.IsBreaking() != testCase.breaking {
+				t.Fatalf("IsBreaking() = %t, want %t", actual.IsBreaking(), testCase.breaking)
+			}
+			if actual.String() != testCase.serialized {
+				t.Fatalf("String() = %q, want %q", actual.String(), testCase.serialized)
+			}
+		})
+	}
+}
+
+func TestParseMessageRejectsInvalidStructure(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		raw  string
+		code problem.Code
+	}{
+		{name: "empty", raw: "", code: problem.CodeCommitHeaderInvalid},
+		{name: "missing blank after header", raw: "feat(ABC-123): add export\nbody", code: problem.CodeCommitDescriptionInvalid},
+		{name: "lone carriage return", raw: "feat(ABC-123): add export\r", code: problem.CodeCommitDescriptionInvalid},
+		{name: "control character", raw: "feat(ABC-123): add export\x00", code: problem.CodeCommitDescriptionInvalid},
+		{name: "invalid footer after valid footer", raw: "feat(ABC-123): add export\n\nRefs: #123\nnot a footer", code: problem.CodeCommitDescriptionInvalid},
+		{name: "breaking hash footer", raw: "feat(ABC-123): add export\n\nBREAKING CHANGE #wrong", code: problem.CodeBreakingChangeInvalid},
+		{name: "revert without sha", raw: "revert(ABC-123): revert export", code: problem.CodeCommitDescriptionInvalid},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(testCase.raw)
+			assertProblemCode(t, err, testCase.code)
+		})
+	}
+}
+
+func TestNewHeaderMessageAndFooter(t *testing.T) {
+	t.Parallel()
+
+	id, err := ticket.ParseID("ABC-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := NewHeader(TypeFix, id, "resolve timeout", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	footer, err := NewFooter("Refs", "#123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := NewMessage(header, "The timeout now honors cancellation.", []Footer{footer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actual.String() != "fix(ABC-123): resolve timeout\n\nThe timeout now honors cancellation.\n\nRefs: #123" {
+		t.Fatalf("NewMessage().String() = %q", actual.String())
+	}
+
+	footers := actual.Footers()
+	footers[0].value = "mutated"
+	if actual.Footers()[0].Value() != "#123" {
+		t.Fatal("Footers() returned mutable shared backing storage")
+	}
+}
+
+func TestInternalSectionAndFooterHelpers(t *testing.T) {
+	t.Parallel()
+
+	if got := findFooterStart([]string{"body", "", "Refs: #123", "Reviewed-by: Alice"}); got != 2 {
+		t.Fatalf("findFooterStart() = %d, want 2", got)
+	}
+	if got := findFooterStart([]string{"body", "still body"}); got != -1 {
+		t.Fatalf("findFooterStart() = %d, want -1", got)
+	}
+
+	footers, err := parseFooters([]string{"Refs: #123", " continuation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(footers) != 1 || footers[0].String() != "Refs: #123\n continuation" {
+		t.Fatalf("parseFooters() = %#v", footers)
+	}
+	if _, err := parseFooters([]string{"invalid"}); err == nil {
+		t.Fatal("parseFooters accepted invalid line")
+	}
+
+	if _, err := normalizeInput("\n"); err == nil {
+		t.Fatal("normalizeInput accepted an empty message")
+	}
+	if err := validateText("line one\nline two", true); err != nil {
+		t.Fatalf("validateText allowed newline error = %v", err)
+	}
+	if err := validateText("line one\nline two", false); err == nil {
+		t.Fatal("validateText allowed forbidden newline")
+	}
+}
+
+func assertProblemCode(t *testing.T, err error, expected problem.Code) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected problem code %q, got nil", expected)
+	}
+	actual, ok := problem.As(err)
+	if !ok {
+		t.Fatalf("error %T does not carry a problem: %v", err, err)
+	}
+	if actual.Code != expected {
+		t.Fatalf("problem code = %q, want %q", actual.Code, expected)
+	}
+}
+
+func FuzzParseCommitMessage(f *testing.F) {
+	for _, seed := range []string{
+		"feat(ABC-123): add export",
+		"feat(ABC-123)!: replace export\n\nBREAKING CHANGE: clients must migrate",
+		"docs(ABC-123): document export\n\nRefs: #123",
+		"revert(ABC-123): revert export\n\nRefs: 0123456789abcdef",
+		"",
+		"\x00",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, raw string) {
+		message, err := Parse(raw)
+		if err != nil {
+			return
+		}
+		roundTrip, err := Parse(message.String())
+		if err != nil {
+			t.Fatalf("valid message did not round-trip: %q: %v", message.String(), err)
+		}
+		if roundTrip.String() != message.String() {
+			t.Fatalf("round-trip changed %q to %q", message.String(), roundTrip.String())
+		}
+	})
+}

@@ -1,0 +1,6 @@
+git-governance release artifacts are built from this repository's pinned Go
+module graph. A release-specific SBOM identifies the exact third-party
+components and licenses included in each artifact.
+
+The copyright and distribution status of git-governance itself is defined in
+LICENSE.

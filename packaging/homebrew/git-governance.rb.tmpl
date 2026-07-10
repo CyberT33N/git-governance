@@ -1,0 +1,23 @@
+class GitGovernance < Formula
+  desc "Native CLI for governed Git branches, commits, and workflows"
+  homepage "https://github.com/CyberT33N/git-governance"
+  license :cannot_represent
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://github.com/CyberT33N/git-governance/releases/download/{{TAG}}/git-governance_{{VERSION}}_Darwin_arm64.tar.gz"
+      sha256 "{{DARWIN_ARM64_SHA256}}"
+    else
+      url "https://github.com/CyberT33N/git-governance/releases/download/{{TAG}}/git-governance_{{VERSION}}_Darwin_x86_64.tar.gz"
+      sha256 "{{DARWIN_AMD64_SHA256}}"
+    end
+  end
+
+  def install
+    bin.install "git-governance"
+  end
+
+  test do
+    assert_match "git-governance {{VERSION}}", shell_output("#{bin}/git-governance --version")
+  end
+end

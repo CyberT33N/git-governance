@@ -1,0 +1,899 @@
+package bootstrap
+
+import (
+	"github.com/CyberT33N/git-governance/internal/application/port"
+	"github.com/CyberT33N/git-governance/internal/application/workflow"
+	"github.com/CyberT33N/git-governance/internal/domain/branch"
+	"github.com/CyberT33N/git-governance/internal/domain/ticket"
+	"github.com/spf13/cobra"
+)
+
+func newWorkflowCommand(application *application) *cobra.Command {
+	command := &cobra.Command{
+		Use:   "workflow",
+		Short: "Run bounded governed Git workflows",
+	}
+	command.AddCommand(
+		newTicketWorkflowCommand(application),
+		newHotfixWorkflowCommand(application),
+		newReleaseWorkflowCommand(application),
+		newCleanupWorkflowCommand(application),
+	)
+	return command
+}
+
+func newTicketWorkflowCommand(application *application) *cobra.Command {
+	command := &cobra.Command{
+		Use:   "ticket",
+		Short: "Start and publish regular ticket work",
+	}
+	command.AddCommand(
+		newTicketStartCommand(application),
+		newTicketPublishCommand(application),
+	)
+	return command
+}
+
+func newTicketStartCommand(application *application) *cobra.Command {
+	var (
+		familyRaw     string
+		keyRaw        string
+		numberRaw     string
+		slugRaw       string
+		createScratch bool
+		scratchSlug   string
+	)
+	command := &cobra.Command{
+		Use:   "start",
+		Short: "Create a regular ticket branch and optionally a private scratch branch",
+		RunE: func(command *cobra.Command, _ []string) error {
+			services := application.services()
+			repository, err := application.discover(command.Context(), services)
+			if err != nil {
+				return err
+			}
+			family, err := application.resolveFamily(command.Context(), familyRaw, false)
+			if err != nil {
+				return err
+			}
+			key, err := application.resolveKey(command.Context(), services, keyRaw)
+			if err != nil {
+				return err
+			}
+			number, err := application.resolveNumber(command.Context(), numberRaw)
+			if err != nil {
+				return err
+			}
+			id := ticket.NewID(key, number)
+			slug, err := application.resolveSlug(command.Context(), slugRaw, "Branch description")
+			if err != nil {
+				return err
+			}
+			if !createScratch && application.promptAvailable() && !application.options.yes {
+				createScratch, err = application.prompt().Confirm(command.Context(), port.ConfirmRequest{
+					Label:       "Create a private scratch branch?",
+					Description: "Scratch branches are for uncertain exploration only. Do not open a pull request from them; move stable work to the official ticket branch.",
+					Default:     false,
+				})
+				if err != nil {
+					return err
+				}
+			}
+			var parsedScratchSlug branch.Slug
+			if scratchSlug != "" {
+				parsedScratchSlug, err = branch.ParseSlug(scratchSlug)
+				if err != nil {
+					return err
+				}
+			}
+			if err := application.confirmMutation(command.Context(), "Start ticket workflow", "Create the official ticket branch and any selected scratch branch?"); err != nil {
+				return err
+			}
+			result, err := services.tickets.StartTicket(command.Context(), workflow.StartTicketRequest{
+				Repository:    repository,
+				Family:        family,
+				Ticket:        id,
+				Slug:          slug,
+				CreateScratch: createScratch,
+				ScratchSlug:   parsedScratchSlug,
+				DryRun:        application.options.dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			fields := map[string]string{
+				"officialBranch": result.Official.Name.String(),
+				"activeBranch":   result.Active.String(),
+				"dryRun":         boolString(application.options.dryRun),
+			}
+			if result.Scratch != nil {
+				fields["scratchBranch"] = result.Scratch.Name.String()
+			}
+			return application.report(command, port.Report{
+				Operation: "workflow.ticket.start",
+				Summary:   "Ticket workflow start completed.",
+				Fields:    fields,
+			})
+		},
+	}
+	command.Flags().StringVar(&familyRaw, "family", "", "regular ticket branch family")
+	command.Flags().StringVar(&keyRaw, "key", "", "ticket key")
+	command.Flags().StringVar(&numberRaw, "ticket", "", "ticket number")
+	command.Flags().StringVar(&slugRaw, "slug", "", "kebab-case branch description")
+	command.Flags().BoolVar(&createScratch, "scratch", false, "create a private scratch branch")
+	command.Flags().StringVar(&scratchSlug, "scratch-slug", "", "optional scratch branch slug")
+	return command
+}
+
+func newTicketPublishCommand(application *application) *cobra.Command {
+	var (
+		branchRaw string
+		baseRaw   string
+		push      bool
+		draft     bool
+	)
+	command := &cobra.Command{
+		Use:   "publish",
+		Short: "Validate, synchronize, optionally push, and prepare a ticket pull request",
+		RunE: func(command *cobra.Command, _ []string) error {
+			services := application.services()
+			repository, err := application.discover(command.Context(), services)
+			if err != nil {
+				return err
+			}
+			name, err := currentOrSpecified(command.Context(), services, branchRaw, repository)
+			if err != nil {
+				return err
+			}
+			base, err := parseBase(baseRaw, repository.Remote)
+			if err != nil {
+				return err
+			}
+			if err := application.confirmMutation(command.Context(), "Publish ticket workflow", "Validate the commit series, synchronize safely, and optionally push the branch?"); err != nil {
+				return err
+			}
+			result, err := services.tickets.PublishTicket(command.Context(), workflow.PublishTicketRequest{
+				Repository: repository,
+				Branch:     name,
+				Base:       base,
+				Push:       push,
+				Draft:      draft,
+				DryRun:     application.options.dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			fields := map[string]string{
+				"branch":               result.Branch.String(),
+				"pushed":               boolString(result.Pushed),
+				"syncAction":           result.Sync.RecommendedAction,
+				"pullRequestSource":    result.PullRequest.Source.String(),
+				"pullRequestTarget":    result.PullRequest.Target.String(),
+				"pullRequestTitle":     result.PullRequest.Title,
+				"publishedPullRequest": result.PublishedURL,
+			}
+			addQualityFields(fields, result)
+			return application.report(command, port.Report{
+				Operation: "workflow.ticket.publish",
+				Summary:   "Ticket publish workflow completed.",
+				Fields:    fields,
+				Data:      result.PullRequest,
+			})
+		},
+	}
+	command.Flags().StringVar(&branchRaw, "branch", "", "ticket branch; defaults to the current branch")
+	command.Flags().StringVar(&baseRaw, "base", "", "explicit base for hotfix ticket publication")
+	command.Flags().BoolVar(&push, "push", false, "push the branch after validation")
+	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
+	return command
+}
+
+func newHotfixWorkflowCommand(application *application) *cobra.Command {
+	var (
+		keyRaw      string
+		numberRaw   string
+		slugRaw     string
+		affectedRaw string
+	)
+	command := &cobra.Command{
+		Use:   "hotfix",
+		Short: "Start a hotfix from the active line that contains the defect",
+	}
+	start := &cobra.Command{
+		Use:   "start",
+		Short: "Create a hotfix branch from main, release, or support",
+		RunE: func(command *cobra.Command, _ []string) error {
+			services := application.services()
+			repository, err := application.discover(command.Context(), services)
+			if err != nil {
+				return err
+			}
+			key, err := application.resolveKey(command.Context(), services, keyRaw)
+			if err != nil {
+				return err
+			}
+			number, err := application.resolveNumber(command.Context(), numberRaw)
+			if err != nil {
+				return err
+			}
+			slug, err := application.resolveSlug(command.Context(), slugRaw, "Hotfix description")
+			if err != nil {
+				return err
+			}
+			affectedRaw, err = application.requireInput(command.Context(), affectedRaw, "Affected line", "Use main, release/<semver>, or support/<major.minor>.")
+			if err != nil {
+				return err
+			}
+			affected, err := branch.ParseName(affectedRaw)
+			if err != nil {
+				return err
+			}
+			if err := application.confirmMutation(command.Context(), "Start hotfix", "Create a hotfix from "+affected.String()+"?"); err != nil {
+				return err
+			}
+			result, err := services.releases.StartHotfix(command.Context(), workflow.StartHotfixRequest{
+				Repository:   repository,
+				Ticket:       ticket.NewID(key, number),
+				Slug:         slug,
+				AffectedLine: affected,
+				DryRun:       application.options.dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			return application.report(command, port.Report{
+				Operation: "workflow.hotfix.start",
+				Summary:   "Hotfix branch created.",
+				Fields: map[string]string{
+					"branch": result.Name.String(),
+					"base":   result.Base.String(),
+					"dryRun": boolString(result.DryRun),
+				},
+			})
+		},
+	}
+	start.Flags().StringVar(&keyRaw, "key", "", "ticket key")
+	start.Flags().StringVar(&numberRaw, "ticket", "", "ticket number")
+	start.Flags().StringVar(&slugRaw, "slug", "", "kebab-case hotfix description")
+	start.Flags().StringVar(&affectedRaw, "affected-line", "", "main, release/<semver>, or support/<major.minor>")
+	command.AddCommand(
+		start,
+		newHotfixPublishCommand(application),
+		newHotfixPropagateCommand(application),
+	)
+	return command
+}
+
+func newHotfixPublishCommand(application *application) *cobra.Command {
+	var (
+		branchRaw   string
+		affectedRaw string
+		push        bool
+		draft       bool
+	)
+	command := &cobra.Command{
+		Use:   "publish",
+		Short: "Validate, publish, and prepare a pull request for a hotfix",
+		RunE: func(command *cobra.Command, _ []string) error {
+			services := application.services()
+			repository, err := application.discover(command.Context(), services)
+			if err != nil {
+				return err
+			}
+			name, err := currentOrSpecified(command.Context(), services, branchRaw, repository)
+			if err != nil {
+				return err
+			}
+			if name.Family() != branch.FamilyHotfix {
+				return invalidOption("branch", name.String(), "a hotfix/<ticket>-<slug> branch")
+			}
+			affectedRaw, err = application.requireInput(
+				command.Context(),
+				affectedRaw,
+				"Affected line",
+				"Use the same main, release/<semver>, or support/<major.minor> line from which the hotfix started.",
+			)
+			if err != nil {
+				return err
+			}
+			affected, err := branch.ParseName(affectedRaw)
+			if err != nil {
+				return err
+			}
+			switch affected.Family() {
+			case branch.FamilyMain, branch.FamilyRelease, branch.FamilySupport:
+			default:
+				return invalidOption("affected-line", affected.String(), "main, release/<semver>, or support/<major.minor>")
+			}
+			base, err := branch.NewTargetBase(repository.Remote, affected)
+			if err != nil {
+				return err
+			}
+			if err := application.confirmMutation(
+				command.Context(),
+				"Publish hotfix",
+				"Validate the hotfix and prepare its pull request for "+affected.String()+"?",
+			); err != nil {
+				return err
+			}
+			result, err := services.tickets.PublishTicket(command.Context(), workflow.PublishTicketRequest{
+				Repository: repository,
+				Branch:     name,
+				Base:       &base,
+				Push:       push,
+				Draft:      draft,
+				DryRun:     application.options.dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			fields := map[string]string{
+				"branch":               result.Branch.String(),
+				"affectedLine":         affected.String(),
+				"pushed":               boolString(result.Pushed),
+				"pullRequestSource":    result.PullRequest.Source.String(),
+				"pullRequestTarget":    result.PullRequest.Target.String(),
+				"pullRequestTitle":     result.PullRequest.Title,
+				"publishedPullRequest": result.PublishedURL,
+			}
+			addQualityFields(fields, result)
+			return application.report(command, port.Report{
+				Operation: "workflow.hotfix.publish",
+				Summary:   "Hotfix publish workflow completed.",
+				Fields:    fields,
+				Data:      result.PullRequest,
+			})
+		},
+	}
+	command.Flags().StringVar(&branchRaw, "branch", "", "hotfix branch; defaults to the current branch")
+	command.Flags().StringVar(&affectedRaw, "affected-line", "", "main, release/<semver>, or support/<major.minor>")
+	command.Flags().BoolVar(&push, "push", false, "push the hotfix branch after validation")
+	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
+	return command
+}
+
+func newHotfixPropagateCommand(application *application) *cobra.Command {
+	var (
+		sourceRaw string
+		targetRaw string
+		commitID  string
+		slugRaw   string
+		push      bool
+		draft     bool
+	)
+	command := &cobra.Command{
+		Use:   "propagate",
+		Short: "Forward-port or backport one reviewed hotfix commit",
+		RunE: func(command *cobra.Command, _ []string) error {
+			services := application.services()
+			repository, err := application.discover(command.Context(), services)
+			if err != nil {
+				return err
+			}
+			source, err := currentOrSpecified(command.Context(), services, sourceRaw, repository)
+			if err != nil {
+				return err
+			}
+			if source.Family() != branch.FamilyHotfix {
+				return invalidOption("source", source.String(), "a hotfix/<ticket>-<slug> branch")
+			}
+			targetRaw, err = application.requireInput(
+				command.Context(),
+				targetRaw,
+				"Propagation target line",
+				"Use main, develop, release/<semver>, or support/<major.minor>.",
+			)
+			if err != nil {
+				return err
+			}
+			target, err := branch.ParseName(targetRaw)
+			if err != nil {
+				return err
+			}
+			commitID, err = application.requireInput(
+				command.Context(),
+				commitID,
+				"Reviewed source commit",
+				"Enter the commit SHA to cherry-pick with provenance.",
+			)
+			if err != nil {
+				return err
+			}
+			var slug branch.Slug
+			if slugRaw != "" {
+				slug, err = branch.ParseSlug(slugRaw)
+				if err != nil {
+					return err
+				}
+			}
+			if err := application.confirmMutation(
+				command.Context(),
+				"Propagate hotfix",
+				"Create a controlled fix branch from "+target.String()+" and cherry-pick "+commitID+" with -x?",
+			); err != nil {
+				return err
+			}
+			result, err := services.releases.PropagateHotfix(command.Context(), workflow.PropagateHotfixRequest{
+				Repository: repository,
+				Source:     source,
+				TargetLine: target,
+				CommitID:   commitID,
+				Slug:       slug,
+				Push:       push,
+				Draft:      draft,
+				DryRun:     application.options.dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			return application.report(command, port.Report{
+				Operation: "workflow.hotfix.propagate",
+				Summary:   "Hotfix propagation workflow completed.",
+				Fields: map[string]string{
+					"source":               source.String(),
+					"target":               target.String(),
+					"branch":               result.Branch.Name.String(),
+					"cherryPicked":         boolString(result.CherryPicked),
+					"pullRequestSource":    result.Publication.PullRequest.Source.String(),
+					"pullRequestTarget":    result.Publication.PullRequest.Target.String(),
+					"publishedPullRequest": result.Publication.PublishedURL,
+				},
+				Data: result.Publication.PullRequest,
+			})
+		},
+	}
+	command.Flags().StringVar(&sourceRaw, "source", "", "hotfix source branch; defaults to the current branch")
+	command.Flags().StringVar(&targetRaw, "target-line", "", "main, develop, release/<semver>, or support/<major.minor>")
+	command.Flags().StringVar(&commitID, "commit", "", "reviewed source commit SHA")
+	command.Flags().StringVar(&slugRaw, "slug", "", "optional kebab-case propagation branch description")
+	command.Flags().BoolVar(&push, "push", false, "push the propagation branch after validation")
+	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
+	return command
+}
+
+func newReleaseWorkflowCommand(application *application) *cobra.Command {
+	command := &cobra.Command{
+		Use:   "release",
+		Short: "Cut and reconcile governed release lines",
+	}
+	command.AddCommand(
+		newReleaseCutCommand(application),
+		newReleaseStabilizeCommand(application),
+		newReleasePublishStabilizationCommand(application),
+		newReleasePromotionCommand(application),
+		newReleaseBackmergeCommand(application),
+		newSupportPrepareCommand(application),
+	)
+	return command
+}
+
+func newCleanupWorkflowCommand(application *application) *cobra.Command {
+	var (
+		branchRaw    string
+		deleteRemote bool
+	)
+	command := &cobra.Command{
+		Use:   "cleanup",
+		Short: "Delete a completed governed branch after its lifecycle obligations are complete",
+		RunE: func(command *cobra.Command, _ []string) error {
+			services := application.services()
+			repository, err := application.discover(command.Context(), services)
+			if err != nil {
+				return err
+			}
+			name, err := currentOrSpecified(command.Context(), services, branchRaw, repository)
+			if err != nil {
+				return err
+			}
+			if err := application.confirmMutation(
+				command.Context(),
+				"Clean up branch",
+				"Delete "+name.String()+" locally"+cleanupRemoteDescription(deleteRemote)+" after confirming that its merge and propagation obligations are complete?",
+			); err != nil {
+				return err
+			}
+			result, err := services.releases.CleanupBranch(command.Context(), workflow.CleanupBranchRequest{
+				Repository:   repository,
+				Branch:       name,
+				DeleteRemote: deleteRemote,
+				DryRun:       application.options.dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			return application.report(command, port.Report{
+				Operation: "workflow.cleanup",
+				Summary:   "Branch cleanup completed.",
+				Fields: map[string]string{
+					"branch":        result.Branch.String(),
+					"deletedLocal":  boolString(result.DeletedLocal),
+					"deletedRemote": boolString(result.DeletedRemote),
+					"dryRun":        boolString(result.DryRun),
+				},
+			})
+		},
+	}
+	command.Flags().StringVar(&branchRaw, "branch", "", "completed branch; defaults to the current branch")
+	command.Flags().BoolVar(&deleteRemote, "delete-remote", false, "delete the completed branch from the selected remote")
+	return command
+}
+
+func cleanupRemoteDescription(deleteRemote bool) string {
+	if deleteRemote {
+		return " and from the selected remote"
+	}
+	return ""
+}
+
+func addQualityFields(fields map[string]string, result workflow.PublishTicketResult) {
+	fields["qualityStatus"] = string(result.Quality.Status)
+	fields["qualityDetail"] = result.Quality.Detail
+	if result.PostMutationQuality != nil {
+		fields["postMutationQualityStatus"] = string(result.PostMutationQuality.Status)
+		fields["postMutationQualityDetail"] = result.PostMutationQuality.Detail
+	}
+}
+
+func newReleaseCutCommand(application *application) *cobra.Command {
+	var versionRaw string
+	var switchTo bool
+	command := &cobra.Command{
+		Use:   "cut",
+		Short: "Cut release/<semver> directly from origin/develop",
+		RunE: func(command *cobra.Command, _ []string) error {
+			services := application.services()
+			repository, err := application.discover(command.Context(), services)
+			if err != nil {
+				return err
+			}
+			versionRaw, err = application.requireInput(command.Context(), versionRaw, "Release version", "Use Semantic Versioning without a leading v.")
+			if err != nil {
+				return err
+			}
+			version, err := branch.ParseSemanticVersion(versionRaw)
+			if err != nil {
+				return err
+			}
+			if err := application.confirmMutation(command.Context(), "Cut release", "Create release/"+version.String()+" from origin/develop?"); err != nil {
+				return err
+			}
+			result, err := services.releases.CutRelease(command.Context(), workflow.CutReleaseRequest{
+				Repository: repository,
+				Version:    version,
+				Switch:     &switchTo,
+				DryRun:     application.options.dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			return application.report(command, port.Report{
+				Operation: "workflow.release.cut",
+				Summary:   "Release line created.",
+				Fields: map[string]string{
+					"branch":   result.Name.String(),
+					"base":     result.Base.String(),
+					"switched": boolString(result.Switched),
+					"dryRun":   boolString(result.DryRun),
+				},
+			})
+		},
+	}
+	command.Flags().StringVar(&versionRaw, "version", "", "release semantic version")
+	command.Flags().BoolVar(&switchTo, "switch", true, "switch to the release branch after creating it")
+	return command
+}
+
+func newReleaseStabilizeCommand(application *application) *cobra.Command {
+	var (
+		releaseRaw string
+		kindRaw    string
+		keyRaw     string
+		numberRaw  string
+		slugRaw    string
+		switchTo   bool
+	)
+	command := &cobra.Command{
+		Use:   "stabilize",
+		Short: "Create a permitted stabilization branch from a frozen release line",
+		RunE: func(command *cobra.Command, _ []string) error {
+			services := application.services()
+			repository, err := application.discover(command.Context(), services)
+			if err != nil {
+				return err
+			}
+			releaseRaw, err = application.requireInput(command.Context(), releaseRaw, "Release line", "Use release/<semver>.")
+			if err != nil {
+				return err
+			}
+			release, err := branch.ParseName(releaseRaw)
+			if err != nil {
+				return err
+			}
+			kindRaw, err = application.requireInput(
+				command.Context(),
+				kindRaw,
+				"Stabilization kind",
+				"Use blocker, docs, or release-prep. New features and refactors are not allowed on a frozen release line.",
+			)
+			if err != nil {
+				return err
+			}
+			key, err := application.resolveKey(command.Context(), services, keyRaw)
+			if err != nil {
+				return err
+			}
+			number, err := application.resolveNumber(command.Context(), numberRaw)
+			if err != nil {
+				return err
+			}
+			slug, err := application.resolveSlug(command.Context(), slugRaw, "Stabilization description")
+			if err != nil {
+				return err
+			}
+			if err := application.confirmMutation(
+				command.Context(),
+				"Create release stabilization branch",
+				"Create a "+kindRaw+" stabilization branch from "+release.String()+"?",
+			); err != nil {
+				return err
+			}
+			result, err := services.releases.CreateReleaseStabilization(command.Context(), workflow.CreateReleaseStabilizationRequest{
+				Repository: repository,
+				Release:    release,
+				Ticket:     ticket.NewID(key, number),
+				Slug:       slug,
+				Kind:       workflow.ReleaseStabilizationKind(kindRaw),
+				Switch:     &switchTo,
+				DryRun:     application.options.dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			return application.report(command, port.Report{
+				Operation: "workflow.release.stabilize",
+				Summary:   "Release stabilization branch created.",
+				Fields: map[string]string{
+					"release": release.String(),
+					"branch":  result.Name.String(),
+					"base":    result.Base.String(),
+					"kind":    kindRaw,
+					"dryRun":  boolString(result.DryRun),
+				},
+			})
+		},
+	}
+	command.Flags().StringVar(&releaseRaw, "release", "", "release/<semver> line")
+	command.Flags().StringVar(&kindRaw, "kind", "", "blocker, docs, or release-prep")
+	command.Flags().StringVar(&keyRaw, "key", "", "ticket key")
+	command.Flags().StringVar(&numberRaw, "ticket", "", "ticket number")
+	command.Flags().StringVar(&slugRaw, "slug", "", "kebab-case stabilization description")
+	command.Flags().BoolVar(&switchTo, "switch", true, "switch to the stabilization branch after creating it")
+	return command
+}
+
+func newReleasePublishStabilizationCommand(application *application) *cobra.Command {
+	var (
+		branchRaw  string
+		releaseRaw string
+		push       bool
+		draft      bool
+	)
+	command := &cobra.Command{
+		Use:   "publish-stabilization",
+		Short: "Validate and prepare a stabilization pull request for its release line",
+		RunE: func(command *cobra.Command, _ []string) error {
+			services := application.services()
+			repository, err := application.discover(command.Context(), services)
+			if err != nil {
+				return err
+			}
+			name, err := currentOrSpecified(command.Context(), services, branchRaw, repository)
+			if err != nil {
+				return err
+			}
+			switch name.Family() {
+			case branch.FamilyFix, branch.FamilyDocs, branch.FamilyChore:
+			default:
+				return invalidOption("branch", name.String(), "a release stabilization fix, docs, or chore branch")
+			}
+			releaseRaw, err = application.requireInput(command.Context(), releaseRaw, "Release line", "Use the release/<semver> line from which the stabilization branch was created.")
+			if err != nil {
+				return err
+			}
+			release, err := branch.ParseName(releaseRaw)
+			if err != nil {
+				return err
+			}
+			if release.Family() != branch.FamilyRelease {
+				return invalidOption("release", release.String(), "a release/<semver> line")
+			}
+			base, err := branch.NewTargetBase(repository.Remote, release)
+			if err != nil {
+				return err
+			}
+			if err := application.confirmMutation(
+				command.Context(),
+				"Publish release stabilization",
+				"Validate the stabilization branch and prepare its pull request for "+release.String()+"?",
+			); err != nil {
+				return err
+			}
+			result, err := services.tickets.PublishTicket(command.Context(), workflow.PublishTicketRequest{
+				Repository:      repository,
+				Branch:          name,
+				Base:            &base,
+				WorkflowManaged: true,
+				Push:            push,
+				Draft:           draft,
+				DryRun:          application.options.dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			fields := map[string]string{
+				"branch":               result.Branch.String(),
+				"release":              release.String(),
+				"pushed":               boolString(result.Pushed),
+				"pullRequestSource":    result.PullRequest.Source.String(),
+				"pullRequestTarget":    result.PullRequest.Target.String(),
+				"publishedPullRequest": result.PublishedURL,
+			}
+			addQualityFields(fields, result)
+			return application.report(command, port.Report{
+				Operation: "workflow.release.publish-stabilization",
+				Summary:   "Release stabilization pull request prepared.",
+				Fields:    fields,
+				Data:      result.PullRequest,
+			})
+		},
+	}
+	command.Flags().StringVar(&branchRaw, "branch", "", "stabilization branch; defaults to the current branch")
+	command.Flags().StringVar(&releaseRaw, "release", "", "release/<semver> target line")
+	command.Flags().BoolVar(&push, "push", false, "push the stabilization branch after validation")
+	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
+	return command
+}
+
+func newReleasePromotionCommand(application *application) *cobra.Command {
+	var (
+		releaseRaw string
+		draft      bool
+	)
+	command := &cobra.Command{
+		Use:   "promote",
+		Short: "Prepare the release/<semver> to main pull request",
+		RunE: func(command *cobra.Command, _ []string) error {
+			services := application.services()
+			repository, err := application.discover(command.Context(), services)
+			if err != nil {
+				return err
+			}
+			releaseRaw, err = application.requireInput(command.Context(), releaseRaw, "Release branch", "Use release/<semver>.")
+			if err != nil {
+				return err
+			}
+			release, err := branch.ParseName(releaseRaw)
+			if err != nil {
+				return err
+			}
+			result, err := services.releases.PrepareReleasePromotion(command.Context(), workflow.PrepareReleasePromotionRequest{
+				Repository: repository,
+				Release:    release,
+				Draft:      draft,
+				DryRun:     application.options.dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			return application.report(command, port.Report{
+				Operation: "workflow.release.promote",
+				Summary:   "Release promotion pull request prepared.",
+				Fields: map[string]string{
+					"source": result.PullRequest.Source.String(),
+					"target": result.PullRequest.Target.String(),
+					"title":  result.PullRequest.Title,
+					"url":    result.PublishedURL,
+				},
+				Data: result.PullRequest,
+			})
+		},
+	}
+	command.Flags().StringVar(&releaseRaw, "release", "", "release/<semver> branch")
+	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
+	return command
+}
+
+func newReleaseBackmergeCommand(application *application) *cobra.Command {
+	var releaseRaw string
+	var draft bool
+	command := &cobra.Command{
+		Use:   "backmerge",
+		Short: "Prepare the release/<semver> to develop pull request",
+		RunE: func(command *cobra.Command, _ []string) error {
+			services := application.services()
+			repository, err := application.discover(command.Context(), services)
+			if err != nil {
+				return err
+			}
+			releaseRaw, err = application.requireInput(command.Context(), releaseRaw, "Release branch", "Use release/<semver>.")
+			if err != nil {
+				return err
+			}
+			release, err := branch.ParseName(releaseRaw)
+			if err != nil {
+				return err
+			}
+			result, err := services.releases.PrepareReleaseBackmerge(command.Context(), workflow.PrepareReleaseBackmergeRequest{
+				Repository: repository,
+				Release:    release,
+				Draft:      draft,
+				DryRun:     application.options.dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			return application.report(command, port.Report{
+				Operation: "workflow.release.backmerge",
+				Summary:   "Release backmerge pull request prepared.",
+				Fields: map[string]string{
+					"source": result.PullRequest.Source.String(),
+					"target": result.PullRequest.Target.String(),
+					"title":  result.PullRequest.Title,
+					"url":    result.PublishedURL,
+				},
+				Data: result.PullRequest,
+			})
+		},
+	}
+	command.Flags().StringVar(&releaseRaw, "release", "", "release/<semver> branch")
+	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
+	return command
+}
+
+func newSupportPrepareCommand(application *application) *cobra.Command {
+	var versionRaw string
+	var switchTo bool
+	command := &cobra.Command{
+		Use:   "support",
+		Short: "Create support/<major.minor> from origin/main",
+		RunE: func(command *cobra.Command, _ []string) error {
+			services := application.services()
+			repository, err := application.discover(command.Context(), services)
+			if err != nil {
+				return err
+			}
+			versionRaw, err = application.requireInput(command.Context(), versionRaw, "Support version", "Use major.minor without a leading v.")
+			if err != nil {
+				return err
+			}
+			version, err := branch.ParseSupportVersion(versionRaw)
+			if err != nil {
+				return err
+			}
+			if err := application.confirmMutation(command.Context(), "Create support line", "Create support/"+version.String()+" from origin/main?"); err != nil {
+				return err
+			}
+			result, err := services.releases.PrepareSupport(command.Context(), workflow.PrepareSupportRequest{
+				Repository: repository,
+				Version:    version,
+				Switch:     &switchTo,
+				DryRun:     application.options.dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			return application.report(command, port.Report{
+				Operation: "workflow.release.support",
+				Summary:   "Support line created.",
+				Fields: map[string]string{
+					"branch": result.Name.String(),
+					"base":   result.Base.String(),
+					"dryRun": boolString(result.DryRun),
+				},
+			})
+		},
+	}
+	command.Flags().StringVar(&versionRaw, "version", "", "support major.minor version")
+	command.Flags().BoolVar(&switchTo, "switch", true, "switch to the support branch after creating it")
+	return command
+}
