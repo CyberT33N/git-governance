@@ -4,7 +4,7 @@
 /.cache/
 *.coverprofile
 *.test
-coverage.out
+*.out
 
 # Platform-specific local binaries.
 /git-governance
