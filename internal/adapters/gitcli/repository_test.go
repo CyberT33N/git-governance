@@ -470,6 +470,7 @@ func TestBranchCleanupAndReleaseTagOperationsUseArgumentArrays(t *testing.T) {
 	}
 	runner := &fakeRunner{results: []processResult{
 		{},
+		{stdout: `{"hotfix/ABC-999-payment-timeout":"origin/main"}`},
 		{},
 		{stdout: "v2.8.0\nv2.8.1\n"},
 	}}
@@ -477,7 +478,7 @@ func TestBranchCleanupAndReleaseTagOperationsUseArgumentArrays(t *testing.T) {
 	if err := repository.DeleteLocalBranch(context.Background(), testIdentity(), name, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.DeleteRemoteBranch(context.Background(), testIdentity(), name); err != nil {
+	if err := repository.ClearWorkflowBase(context.Background(), testIdentity(), name); err != nil {
 		t.Fatal(err)
 	}
 	tags, err := repository.ReleaseTagsAt(context.Background(), testIdentity(), "origin/main")
@@ -488,8 +489,9 @@ func TestBranchCleanupAndReleaseTagOperationsUseArgumentArrays(t *testing.T) {
 		t.Fatalf("ReleaseTagsAt() = %v", tags)
 	}
 	assertCall(t, runner.calls[0], "C:/repo", "", "branch", "-d", name.String())
-	assertCall(t, runner.calls[1], "C:/repo", "", "push", "origin", "--delete", name.String())
-	assertCall(t, runner.calls[2], "C:/repo", "", "tag", "--points-at", "origin/main")
+	assertCall(t, runner.calls[1], "C:/repo", "", "config", "--local", "--get", workflowBasesConfigKey)
+	assertCall(t, runner.calls[2], "C:/repo", "", "config", "--local", workflowBasesConfigKey, `{}`)
+	assertCall(t, runner.calls[3], "C:/repo", "", "tag", "--points-at", "origin/main")
 }
 
 func TestWorkflowBaseMetadataUsesLocalGitConfiguration(t *testing.T) {

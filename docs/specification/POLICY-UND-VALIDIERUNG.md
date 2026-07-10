@@ -268,6 +268,42 @@ lesen diese Basis, wenn keine explizite `--base` übergeben wurde. Dadurch wird
 ein Hotfix- oder Stabilisierung-Branch nicht fälschlich gegen
 `origin/develop` geprüft.
 
+### 6.5 Repository-Quality-Gates
+
+Eine vorhandene, gültige `git-governance.quality.json` ist ein expliziter
+Repository-Vertrag. Auf allen offiziellen Arbeitsbranches sind ihre Gates
+vor jedem Push verpflichtend. Der Pre-Push-Validator führt die Suite nach der
+Prüfung aller tatsächlichen Ref-Updates genau einmal aus. Ein Push mehrerer
+offizieller Refs führt nicht zu mehrfacher Gate-Ausführung.
+
+Die Konfiguration verwendet einen Default-Scope und einen Scope je Gate.
+`includeFamilies` wählt Branch-Familien aus; `excludeFamilies` wird danach
+angewendet und entfernt Familien. Ein Gate ohne eigenen Scope erbt den
+Default. Dadurch kann eine Basissuite auf allen offiziellen Arbeitsfamilien
+laufen, ein Dokumentations-Linkcheck nur auf `docs/*`, und ein aufwendiger
+Stress-Test nur auf `feature/*` und `perf/*`.
+
+`scratch/*` ist private Exploration und nicht Teil des Default-Scopes. Ein
+konkretes Gate kann Scratch aber über `includeFamilies` bewusst einschließen.
+Eine fehlende Datei lautet stets `unconfigured`, nie `passed`.
+
+### 6.6 Cleanup-Grenze
+
+Remote-Löschung ist keine CLI-Aufgabe. Hosting-Plattform und CI steuern die
+Löschung gemergter Ticket- und Hotfix-Branches sowie den zeitlich späteren
+Release-Cleanup nach Promotion und Backmerge. Die CLI löscht:
+
+- `scratch/*` lokal,
+- einen lokalen offiziellen Arbeitsbranch nur mit explizitem
+  `--local-official`,
+- niemals `main`, `develop`, `release/*` oder `support/*`,
+- niemals einen Remote-Branch.
+
+Beim lokalen Löschen entfernt die CLI die zugehörige lokale
+`git-governance.workflow-bases`-Metadatenzeile. Merge-, PR- und
+Forward-/Backport-Nachweise gehören zu Hosting-/CI-Gates, solange kein
+konfigurierter Hosting-Adapter diese Daten autoritativ liefern kann.
+
 ## 7. Commit-Typen
 
 Zugelassene kanonische Typen:

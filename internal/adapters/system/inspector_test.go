@@ -82,6 +82,64 @@ func TestFileExistsAndFailures(t *testing.T) {
 	})
 }
 
+func TestInspectorErrorAndProcessPaths(t *testing.T) {
+	t.Parallel()
+
+	inspector := New(Options{})
+	if _, err := inspector.Version(context.Background(), ""); err == nil {
+		t.Fatal("Version accepted an empty executable")
+	}
+
+	t.Run("command failure", func(t *testing.T) {
+		inspector := New(Options{
+			LookPath: func(string) (string, error) { return "tool", nil },
+			Run: func(context.Context, string, ...string) ([]byte, error) {
+				return nil, errors.New("version failed")
+			},
+		})
+		if _, err := inspector.Version(context.Background(), "tool"); err == nil {
+			t.Fatal("Version unexpectedly succeeded")
+		}
+	})
+
+	t.Run("empty output", func(t *testing.T) {
+		inspector := New(Options{
+			LookPath: func(string) (string, error) { return "tool", nil },
+			Run:      func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+		})
+		if _, err := inspector.Version(context.Background(), "tool"); err == nil {
+			t.Fatal("Version accepted empty output")
+		}
+	})
+
+	t.Run("nil context", func(t *testing.T) {
+		inspector := New(Options{
+			LookPath: func(string) (string, error) { return "tool", nil },
+			Run:      func(context.Context, string, ...string) ([]byte, error) { return []byte("tool 1.0\n"), nil },
+		})
+		version, err := inspector.Version(nil, "tool")
+		if err != nil || version != "tool 1.0" {
+			t.Fatalf("Version(nil) = (%q, %v)", version, err)
+		}
+	})
+
+	t.Run("stat failure", func(t *testing.T) {
+		inspector := New(Options{
+			Stat: func(string) (os.FileInfo, error) {
+				return nil, errors.New("permission denied")
+			},
+		})
+		if _, err := inspector.FileExists("blocked"); err == nil {
+			t.Fatal("FileExists suppressed a stat error")
+		}
+	})
+
+	output, err := runCommand(context.Background(), "go", "version")
+	if err != nil || len(output) == 0 {
+		t.Fatalf("runCommand() = (%q, %v)", output, err)
+	}
+}
+
 type fakeFileInfo struct{}
 
 func (fakeFileInfo) Name() string       { return "test" }

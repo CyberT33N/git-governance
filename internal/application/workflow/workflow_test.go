@@ -104,6 +104,12 @@ func (fake *fakeGitRepository) StoreWorkflowBase(_ context.Context, _ port.Repos
 	return fake.err
 }
 
+func (fake *fakeGitRepository) ClearWorkflowBase(_ context.Context, _ port.RepositoryIdentity, name branch.BranchName) error {
+	fake.calls = append(fake.calls, "clear-workflow-base")
+	delete(fake.workflowBases, name.String())
+	return fake.err
+}
+
 func (fake *fakeGitRepository) WorkflowBase(_ context.Context, _ port.RepositoryIdentity, name branch.BranchName) (branch.TargetBase, bool, error) {
 	fake.calls = append(fake.calls, "workflow-base")
 	base, found := fake.workflowBases[name.String()]
@@ -156,11 +162,6 @@ func (fake *fakeGitRepository) DeleteLocalBranch(context.Context, port.Repositor
 	return fake.err
 }
 
-func (fake *fakeGitRepository) DeleteRemoteBranch(context.Context, port.RepositoryIdentity, branch.BranchName) error {
-	fake.calls = append(fake.calls, "delete-remote-branch")
-	return fake.err
-}
-
 func (fake *fakeGitRepository) ReleaseTagsAt(context.Context, port.RepositoryIdentity, string) ([]string, error) {
 	fake.calls = append(fake.calls, "release-tags")
 	return append([]string(nil), fake.releaseTags...), fake.err
@@ -205,7 +206,7 @@ type fakeQualityRunner struct {
 	err   error
 }
 
-func (fake *fakeQualityRunner) Run(context.Context, port.RepositoryIdentity) (port.QualityResult, error) {
+func (fake *fakeQualityRunner) Run(context.Context, port.RepositoryIdentity, port.QualityRequest) (port.QualityResult, error) {
 	fake.calls++
 	return port.QualityResult{Status: port.QualityPassed}, fake.err
 }
@@ -488,8 +489,14 @@ func TestReleaseWorkflows(t *testing.T) {
 			Repository: testRepository(),
 			Version:    version,
 		})
-		if err != nil || result.Name.String() != "release/2.8.0" || result.Base.String() != "origin/develop" {
+		if err != nil || result.Intent.Branch.String() != "release/2.8.0" || result.Intent.Source.String() != "origin/develop" {
 			t.Fatalf("CutRelease() = (%#v, %v)", result, err)
+		}
+		if result.Intent.Workflow != "create-protected-line.yml" || result.Intent.Kind != "release" {
+			t.Fatalf("release intent = %#v", result.Intent)
+		}
+		if strings.Contains(strings.Join(git.calls, ","), "create-branch") {
+			t.Fatalf("release intent must not create a local shared line: %v", git.calls)
 		}
 	})
 
@@ -501,8 +508,11 @@ func TestReleaseWorkflows(t *testing.T) {
 			Repository: testRepository(),
 			Version:    version,
 		})
-		if err != nil || result.Name.String() != "support/2.8" || result.Base.String() != "origin/main" {
+		if err != nil || result.Intent.Branch.String() != "support/2.8" || result.Intent.Source.String() != "origin/main" {
 			t.Fatalf("PrepareSupport() = (%#v, %v)", result, err)
+		}
+		if result.Intent.Workflow != "create-protected-line.yml" || result.Intent.Kind != "support" {
+			t.Fatalf("support intent = %#v", result.Intent)
 		}
 	})
 }
@@ -596,32 +606,43 @@ func TestReleasePromotionAndSupportProvenance(t *testing.T) {
 	})
 }
 
-func TestCleanupBranchProtectsSharedLinesAndDeletesCompletedBranches(t *testing.T) {
+func TestCleanupBranchLimitsDeletionToPermittedLocalBranches(t *testing.T) {
 	t.Parallel()
 
-	t.Run("completed hotfix deletes local and remote", func(t *testing.T) {
+	t.Run("official branches are never local cleanup targets", func(t *testing.T) {
 		git := &fakeGitRepository{}
 		service := newReleaseService(git, nil)
-		result, err := service.CleanupBranch(context.Background(), CleanupBranchRequest{
-			Repository:   testRepository(),
-			Branch:       mustBranch("hotfix/ABC-999-payment-timeout"),
-			DeleteRemote: true,
+		_, err := service.CleanupBranch(context.Background(), CleanupBranchRequest{
+			Repository: testRepository(),
+			Branch:     mustBranch("hotfix/ABC-999-payment-timeout"),
 		})
-		if err != nil || !result.DeletedLocal || !result.DeletedRemote {
-			t.Fatalf("CleanupBranch() = (%#v, %v)", result, err)
-		}
-		if got := strings.Join(git.calls, ","); got != "delete-local-branch,delete-remote-branch" {
-			t.Fatalf("cleanup calls = %q", got)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+		if len(git.calls) != 0 {
+			t.Fatalf("official cleanup must not call Git: %v", git.calls)
 		}
 	})
 
-	t.Run("shared line is protected", func(t *testing.T) {
-		service := newReleaseService(&fakeGitRepository{}, nil)
-		_, err := service.CleanupBranch(context.Background(), CleanupBranchRequest{
+	t.Run("scratch cleanup is private and direct", func(t *testing.T) {
+		git := &fakeGitRepository{}
+		service := newReleaseService(git, nil)
+		result, err := service.CleanupBranch(context.Background(), CleanupBranchRequest{
 			Repository: testRepository(),
-			Branch:     mustBranch("develop"),
+			Branch:     mustBranch("scratch/ABC-123-experiment"),
 		})
-		assertProblemCode(t, err, problem.CodeInvalidInput)
+		if err != nil || !result.DeletedLocal || !result.MetadataCleared {
+			t.Fatalf("CleanupBranch() = (%#v, %v)", result, err)
+		}
+	})
+
+	t.Run("shared and release lines are protected", func(t *testing.T) {
+		service := newReleaseService(&fakeGitRepository{}, nil)
+		for _, name := range []string{"develop", "release/2.8.0", "support/2.8"} {
+			_, err := service.CleanupBranch(context.Background(), CleanupBranchRequest{
+				Repository: testRepository(),
+				Branch:     mustBranch(name),
+			})
+			assertProblemCode(t, err, problem.CodeInvalidInput)
+		}
 	})
 }
 

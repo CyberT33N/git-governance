@@ -3,6 +3,7 @@
 /coverage/
 /.cache/
 *.coverprofile
+/profile.cov
 *.test
 
 # Platform-specific local binaries.

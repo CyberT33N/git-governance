@@ -96,3 +96,32 @@ func TestAsRejectsUntypedError(t *testing.T) {
 		t.Fatalf("As() = (%v, %t), want (nil, false)", actual, ok)
 	}
 }
+
+func TestProblemErrorAndUnwrapZeroPaths(t *testing.T) {
+	t.Parallel()
+
+	var nilProblem *Problem
+	if nilProblem.Error() != "" || nilProblem.Unwrap() != nil {
+		t.Fatal("nil problem must expose empty error text and nil cause")
+	}
+
+	expectedOnly := New(Details{
+		Code:     CodeInvalidInput,
+		Category: CategoryUsage,
+		Expected: "a valid value",
+	})
+	if got := expectedOnly.Error(); !strings.Contains(got, "expected a valid value") {
+		t.Fatalf("Error() = %q", got)
+	}
+	ruleOnly := New(Details{
+		Code:     CodeInvalidInput,
+		Category: CategoryUsage,
+		Rule:     "must be valid",
+	})
+	if got := ruleOnly.Error(); !strings.Contains(got, "must be valid") {
+		t.Fatalf("Error() = %q", got)
+	}
+	if expectedOnly.Unwrap() != nil {
+		t.Fatal("problem without a cause must unwrap to nil")
+	}
+}

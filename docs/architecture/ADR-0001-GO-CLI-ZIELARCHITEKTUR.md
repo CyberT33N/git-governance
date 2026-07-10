@@ -434,7 +434,8 @@ Im JSON-Modus geht genau ein versioniertes Resultat auf stdout; Diagnosen gehen 
 - Der Arbeitsbaum muss vor Switch, Rebase und Merge sauber sein.
 - Cancellation wird über `context.Context` an Git-Prozesse propagiert.
 - Keine Fire-and-forget-Goroutines; Git-Schritte laufen bewusst sequenziell.
-- Konfigurationsdateien werden atomar ersetzt und mit restriktiven Rechten angelegt.
+- Konfigurationsdateien werden mit plattformgerechter Recovery-Strategie ersetzt
+  und mit restriktiven Rechten angelegt.
 - Policy-Bundles benötigen später Version, Herkunft, Signatur/Checksumme und Staleness-Regel.
 - Hooks sind lokale Frühprüfung; CI und Remote Protection bleiben bindend.
 

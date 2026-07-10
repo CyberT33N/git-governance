@@ -217,7 +217,9 @@ func (service *TicketService) PublishTicket(ctx context.Context, request Publish
 				Detail: "no quality runner is configured",
 			}
 		} else {
-			quality, err = service.quality.Run(ctx, repository)
+			quality, err = service.quality.Run(ctx, repository, port.QualityRequest{
+				Families: []branch.Family{validation.Name.Family()},
+			})
 			if err != nil {
 				return PublishTicketResult{}, err
 			}

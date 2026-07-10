@@ -208,7 +208,7 @@ func TestSaveRejectsUnavailableParentAndCancelledContext(t *testing.T) {
 	})
 }
 
-func TestInternalNormalizationAndAtomicWrite(t *testing.T) {
+func TestInternalNormalizationAndConfigurationWrite(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), configFileName)
@@ -229,10 +229,10 @@ func TestInternalNormalizationAndAtomicWrite(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), defaultDirectoryMode); err != nil {
 		t.Fatal(err)
 	}
-	if err := atomicWrite(path, []byte("first")); err != nil {
+	if err := writeConfiguration(path, []byte("first")); err != nil {
 		t.Fatal(err)
 	}
-	if err := atomicWrite(path, []byte("second")); err != nil {
+	if err := writeConfiguration(path, []byte("second")); err != nil {
 		t.Fatal(err)
 	}
 	actual, err := os.ReadFile(path)
@@ -240,7 +240,7 @@ func TestInternalNormalizationAndAtomicWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(actual) != "second" {
-		t.Fatalf("atomicWrite content = %q", actual)
+		t.Fatalf("writeConfiguration content = %q", actual)
 	}
 }
 

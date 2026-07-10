@@ -386,6 +386,39 @@ func (repository *Repository) StoreWorkflowBase(ctx context.Context, identity po
 	return nil
 }
 
+// ClearWorkflowBase removes the local base metadata for a branch after local
+// cleanup. An absent entry is already clear and therefore succeeds.
+func (repository *Repository) ClearWorkflowBase(
+	ctx context.Context,
+	identity port.RepositoryIdentity,
+	name branch.BranchName,
+) error {
+	bases, err := repository.workflowBases(ctx, identity)
+	if err != nil {
+		return err
+	}
+	if _, found := bases[name.String()]; !found {
+		return nil
+	}
+	delete(bases, name.String())
+	encoded, err := json.Marshal(bases)
+	if err != nil {
+		return problem.Wrap(problem.Details{
+			Code:        problem.CodeConfigurationInvalid,
+			Category:    problem.CategoryConfig,
+			Field:       "workflow base metadata",
+			Expected:    "a serializable local workflow-base map",
+			Rule:        "workflow base metadata must remain machine-readable after cleanup",
+			Remediation: "remove malformed local Git configuration and retry cleanup",
+		}, err)
+	}
+	result := repository.invoke(ctx, identity.Root, nil, "config", "--local", workflowBasesConfigKey, string(encoded))
+	if result.err != nil {
+		return repository.commandProblem(problem.CodeGitCommandFailed, identity, "clear workflow base metadata", result)
+	}
+	return nil
+}
+
 // WorkflowBase loads a recorded specialized workflow base for a branch.
 func (repository *Repository) WorkflowBase(ctx context.Context, identity port.RepositoryIdentity, name branch.BranchName) (branch.TargetBase, bool, error) {
 	bases, err := repository.workflowBases(ctx, identity)
@@ -500,16 +533,6 @@ func (repository *Repository) DeleteLocalBranch(ctx context.Context, identity po
 	result := repository.invoke(ctx, identity.Root, nil, "branch", option, name.String())
 	if result.err != nil {
 		return repository.commandProblem(problem.CodeGitCommandFailed, identity, "delete the local branch", result)
-	}
-	return nil
-}
-
-// DeleteRemoteBranch removes a completed remote branch through an explicit
-// branch deletion refspec.
-func (repository *Repository) DeleteRemoteBranch(ctx context.Context, identity port.RepositoryIdentity, name branch.BranchName) error {
-	result := repository.invoke(ctx, identity.Root, nil, "push", identity.Remote, "--delete", name.String())
-	if result.err != nil {
-		return repository.commandProblem(problem.CodeGitCommandFailed, identity, "delete the remote branch", result)
 	}
 	return nil
 }

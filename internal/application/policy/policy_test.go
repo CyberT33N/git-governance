@@ -114,6 +114,10 @@ func (doctorGit) StoreWorkflowBase(context.Context, port.RepositoryIdentity, bra
 	return nil
 }
 
+func (doctorGit) ClearWorkflowBase(context.Context, port.RepositoryIdentity, branch.BranchName) error {
+	return nil
+}
+
 func (doctorGit) WorkflowBase(context.Context, port.RepositoryIdentity, branch.BranchName) (branch.TargetBase, bool, error) {
 	return branch.TargetBase{}, false, nil
 }
@@ -147,10 +151,6 @@ func (doctorGit) CherryPick(context.Context, port.RepositoryIdentity, string) er
 }
 
 func (doctorGit) DeleteLocalBranch(context.Context, port.RepositoryIdentity, branch.BranchName, bool) error {
-	return nil
-}
-
-func (doctorGit) DeleteRemoteBranch(context.Context, port.RepositoryIdentity, branch.BranchName) error {
 	return nil
 }
 

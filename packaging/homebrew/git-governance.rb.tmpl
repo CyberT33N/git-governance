@@ -5,10 +5,10 @@ class GitGovernance < Formula
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/CyberT33N/git-governance/releases/download/{{TAG}}/git-governance_{{VERSION}}_Darwin_arm64.tar.gz"
+      url "https://github.com/CyberT33N/git-governance/releases/download/{{TAG}}/git-governance_{{VERSION}}_darwin_arm64.tar.gz"
       sha256 "{{DARWIN_ARM64_SHA256}}"
     else
-      url "https://github.com/CyberT33N/git-governance/releases/download/{{TAG}}/git-governance_{{VERSION}}_Darwin_x86_64.tar.gz"
+      url "https://github.com/CyberT33N/git-governance/releases/download/{{TAG}}/git-governance_{{VERSION}}_darwin_amd64.tar.gz"
       sha256 "{{DARWIN_AMD64_SHA256}}"
     end
   end

@@ -88,6 +88,11 @@ func (fake *fakeGitRepository) StoreWorkflowBase(context.Context, port.Repositor
 	return fake.err
 }
 
+func (fake *fakeGitRepository) ClearWorkflowBase(context.Context, port.RepositoryIdentity, branch.BranchName) error {
+	fake.calls = append(fake.calls, "clear-workflow-base")
+	return fake.err
+}
+
 func (fake *fakeGitRepository) WorkflowBase(context.Context, port.RepositoryIdentity, branch.BranchName) (branch.TargetBase, bool, error) {
 	fake.calls = append(fake.calls, "workflow-base")
 	return branch.TargetBase{}, false, fake.err
@@ -130,11 +135,6 @@ func (fake *fakeGitRepository) CherryPick(context.Context, port.RepositoryIdenti
 
 func (fake *fakeGitRepository) DeleteLocalBranch(context.Context, port.RepositoryIdentity, branch.BranchName, bool) error {
 	fake.calls = append(fake.calls, "delete-local-branch")
-	return fake.err
-}
-
-func (fake *fakeGitRepository) DeleteRemoteBranch(context.Context, port.RepositoryIdentity, branch.BranchName) error {
-	fake.calls = append(fake.calls, "delete-remote-branch")
 	return fake.err
 }
 

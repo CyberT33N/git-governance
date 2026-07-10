@@ -1,10 +1,14 @@
 package terminal
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"charm.land/huh/v2"
 
 	"github.com/CyberT33N/git-governance/internal/application/port"
 	"github.com/CyberT33N/git-governance/internal/domain/problem"
@@ -215,6 +219,34 @@ func TestFormInputAndConfirmAccessibleMode(t *testing.T) {
 	})
 }
 
+func TestTerminalFailureHelpersAndOptionalPromptPaths(t *testing.T) {
+	t.Parallel()
+
+	assertProblemCode(t, formFailure(huh.ErrUserAborted), problem.CodeOperationCancelled)
+	assertProblemCode(t, formFailure(errors.New("render failed")), problem.CodeExternalCommandFailed)
+	assertProblemCode(t, writeFailure(errors.New("write failed")), problem.CodeExternalCommandFailed)
+
+	output := &bytes.Buffer{}
+	prompt := New(Options{Input: strings.NewReader("\n"), Output: output})
+	confirmed, err := prompt.Confirm(context.Background(), port.ConfirmRequest{
+		Label:   "Continue",
+		Default: false,
+	})
+	if err != nil || confirmed {
+		t.Fatalf("default confirmation = (%t, %v)", confirmed, err)
+	}
+
+	_, err = New(Options{
+		Input:  strings.NewReader("value\n"),
+		Output: failingTerminalWriter{},
+	}).Input(context.Background(), port.InputRequest{Label: "Key"})
+	assertProblemCode(t, err, problem.CodeExternalCommandFailed)
+
+	prompt.reader = bufio.NewReader(failingTerminalReader{})
+	_, err = prompt.readLine(context.Background())
+	assertProblemCode(t, err, problem.CodeExternalCommandFailed)
+}
+
 func assertProblemCode(t *testing.T, err error, expected problem.Code) {
 	t.Helper()
 	if err == nil {
@@ -227,4 +259,16 @@ func assertProblemCode(t *testing.T, err error, expected problem.Code) {
 	if actual.Code != expected {
 		t.Fatalf("problem code = %q, want %q", actual.Code, expected)
 	}
+}
+
+type failingTerminalWriter struct{}
+
+func (failingTerminalWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
+}
+
+type failingTerminalReader struct{}
+
+func (failingTerminalReader) Read([]byte) (int, error) {
+	return 0, errors.New("read failed")
 }

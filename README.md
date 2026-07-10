@@ -142,7 +142,13 @@ array; no shell command string is interpreted.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "defaults": {
+    "includeFamilies": [
+      "feature", "fix", "docs", "refactor",
+      "chore", "test", "perf", "hotfix"
+    ]
+  },
   "gates": [
     {
       "name": "unit-tests",
@@ -151,10 +157,16 @@ array; no shell command string is interpreted.
       "timeout": "2m"
     },
     {
-      "name": "lint",
+      "name": "documentation-links",
       "command": "npm",
-      "args": ["run", "lint"],
-      "workingDirectory": "frontend",
+      "args": ["run", "docs:check"],
+      "includeFamilies": ["docs"],
+      "timeout": "2m"
+    },
+    {
+      "name": "stress",
+      "command": "./scripts/stress-test",
+      "includeFamilies": ["feature", "perf"],
       "timeout": "2m"
     }
   ]
@@ -170,6 +182,21 @@ If no configuration exists, the workflow reports `qualityStatus:
 unconfigured`; it does not claim that project-specific checks passed. The
 configuration is a trust boundary because running project-defined commands can
 execute project code. Review it before using it in an unfamiliar repository.
+
+When a valid configuration exists, each gate receives a typed branch-family
+scope. A gate without `includeFamilies` or `excludeFamilies` inherits
+`defaults`. `includeFamilies` selects only the listed families;
+`excludeFamilies` is applied afterward and removes specific families. A
+multi-ref push runs every eligible gate once after its per-ref governance
+checks pass.
+
+The recommended default includes every official working family:
+`feature`, `fix`, `docs`, `refactor`, `chore`, `test`, `perf`, and `hotfix`.
+`scratch` is absent from that default because it is private exploration. It is
+not a hardcoded exception: a repository can include `scratch` for one small
+gate without enabling expensive gates there. This lets a documentation branch
+run link checks while skipping a stress test, or a performance branch run a
+stress test that other families do not need.
 
 ## Command overview
 
@@ -464,6 +491,12 @@ Release cut:
 git governance --yes workflow release cut --version 2.8.0
 ```
 
+The CLI validates the requested `release/2.8.0` line and emits an intent for
+the protected `create-protected-line.yml` GitHub Actions workflow. It does not
+create, switch to, or push a local `release/*` branch. An authorized
+release-environment workflow creates the remote line from `origin/develop`;
+developers fetch it before starting controlled stabilization work.
+
 Only release-blocking fixes, final documentation, and release preparation are
 allowed after a cut. Create the corresponding short-lived stabilization branch:
 
@@ -502,21 +535,35 @@ Support line:
 git governance --yes workflow release support --version 2.8
 ```
 
-The command requires a matching `v2.8.<patch>` release tag on `origin/main`;
+The command requires a matching `v2.8.<patch>` release tag on `origin/main`
+and emits the same protected-line workflow intent. The privileged workflow
+creates the remote support line from the tagged `origin/main` revision;
 support lines cannot be created from an untagged integration state.
 
-Clean up a completed ticket, scratch, hotfix, or release branch only after its
-merge and propagation obligations are complete:
+Clean up a private scratch branch locally:
 
 ```powershell
 git governance --yes workflow cleanup `
-  --branch hotfix/ABC-999-payment-timeout `
-  --delete-remote
+  --branch scratch/ABC-123-export-exploration
 ```
 
-Tagging, artifact publication, production deployment, and Git hosting merge
-approval are release-pipeline responsibilities, not direct developer CLI
-mutations.
+The CLI never deletes a remote branch. GitHub or GitLab deletes merged
+ticket- and hotfix-branch remotes through its configured merge-request policy.
+CI or hosting automation retains and later deletes a release branch only after
+both promotion to `main` and the backmerge to `develop` are complete.
+
+After that remote lifecycle has completed, a developer may remove a local
+official working branch with an explicit `--local-official` confirmation:
+
+```powershell
+git governance --yes workflow cleanup `
+  --branch feature/ABC-123-add-export-button `
+  --local-official
+```
+
+The CLI does not claim to prove merge, propagation, or hosting lifecycle
+completion; those are GitHub/GitLab/CI responsibilities. `main`, `develop`,
+`release/*`, and `support/*` are never local cleanup targets.
 
 ## Ticket-key preferences
 
@@ -544,8 +591,11 @@ Configuration location uses Go `os.UserConfigDir()`:
 | macOS | `$HOME/Library/Application Support/git-governance` |
 | Windows | `%AppData%\git-governance` |
 
-The file is versioned JSON and is atomically replaced. It never stores
-secrets or a global default ticket number.
+The file is versioned JSON and uses a platform-aware recoverable replacement
+strategy. Unix replacement uses same-directory rename semantics; Windows keeps
+and restores a temporary `.bak` recovery copy if an interrupted replacement
+leaves the target absent. It never stores secrets or a global default ticket
+number.
 
 ## Lefthook
 

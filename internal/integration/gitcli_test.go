@@ -109,7 +109,7 @@ func TestGitCLIAdapterAgainstLocalRepositories(t *testing.T) {
 		nil,
 	)
 	checked, err := synchronizer.ValidatePrePushUpdates(ctx, identity, updates, nil)
-	if err != nil || len(checked) != 1 || checked[0].Update.Target.String() != feature.String() {
+	if err != nil || len(checked.Updates) != 1 || checked.Updates[0].Update.Target.String() != feature.String() {
 		t.Fatalf("ValidatePrePushUpdates(feature) = (%#v, %v)", checked, err)
 	}
 

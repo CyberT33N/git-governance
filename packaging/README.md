@@ -31,3 +31,21 @@ Replace these placeholders only from the final immutable release:
 The release process must verify the source release asset and its checksum
 before submitting any template. Do not replace a published package version or
 checksum in place.
+
+## Artifact-name contract
+
+The templates use the archive names emitted by `.goreleaser.yaml`:
+
+```text
+git-governance_{{VERSION}}_windows_amd64.zip
+git-governance_{{VERSION}}_windows_arm64.zip
+git-governance_{{VERSION}}_darwin_amd64.tar.gz
+git-governance_{{VERSION}}_darwin_arm64.tar.gz
+git-governance_{{VERSION}}_linux_amd64.tar.gz
+git-governance_{{VERSION}}_linux_arm64.tar.gz
+```
+
+`windows`, `darwin`, `linux`, `amd64`, and `arm64` are GoReleaser's Go target
+identifiers. Package templates must not substitute display names such as
+`Windows`, `Darwin`, or `x86_64`, because those strings do not name published
+assets.

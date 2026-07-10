@@ -162,10 +162,86 @@ func TestReportFailureAndCancellation(t *testing.T) {
 	})
 }
 
+func TestReporterDefaultAndOptionalFieldPaths(t *testing.T) {
+	t.Parallel()
+
+	if err := New(Options{}).Report(context.Background(), port.Report{}); err != nil {
+		t.Fatalf("default reporter error = %v", err)
+	}
+
+	fieldsOnly := &bytes.Buffer{}
+	if err := New(Options{Writer: fieldsOnly, Format: FormatHuman}).Report(context.Background(), port.Report{
+		Fields: map[string]string{"branch": "feature/ABC-123-add-export"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if fieldsOnly.String() != "branch: feature/ABC-123-add-export\n" {
+		t.Fatalf("fields-only output = %q", fieldsOnly.String())
+	}
+
+	jsonFailure := New(Options{Writer: failingWriter{}, Format: FormatJSON})
+	if err := jsonFailure.Report(context.Background(), port.Report{Summary: "result"}); err == nil {
+		t.Fatal("JSON reporter suppressed writer failure")
+	}
+
+	minimalProblem := &bytes.Buffer{}
+	if err := New(Options{Writer: minimalProblem}).Report(context.Background(), port.Report{
+		Problem: problem.New(problem.Details{Code: problem.CodeInternal, Category: problem.CategoryInternal}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(minimalProblem.String(), "Error [INTERNAL]") {
+		t.Fatalf("minimal problem output = %q", minimalProblem.String())
+	}
+
+	for failAt := 0; failAt < 7; failAt++ {
+		failAt := failAt
+		t.Run("problem writer failure "+string(rune('0'+failAt)), func(t *testing.T) {
+			writer := &failAfterWriter{failAt: failAt}
+			err := New(Options{Writer: writer}).Report(context.Background(), port.Report{
+				Problem: problem.New(problem.Details{
+					Code:        problem.CodeInvalidInput,
+					Category:    problem.CategoryUsage,
+					Field:       "field",
+					Actual:      "actual",
+					Rule:        "rule",
+					Expected:    "expected",
+					Example:     "example",
+					Remediation: "remediation",
+				}),
+			})
+			if err == nil {
+				t.Fatalf("failure point %d was not propagated", failAt)
+			}
+		})
+	}
+
+	err := New(Options{Writer: &failAfterWriter{failAt: 1}}).Report(context.Background(), port.Report{
+		Summary: "summary",
+		Fields:  map[string]string{"field": "value"},
+	})
+	if err == nil {
+		t.Fatal("human field writer failure was not propagated")
+	}
+}
+
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) {
 	return 0, errors.New("write failed")
+}
+
+type failAfterWriter struct {
+	writes int
+	failAt int
+}
+
+func (writer *failAfterWriter) Write(value []byte) (int, error) {
+	if writer.writes == writer.failAt {
+		return 0, errors.New("write failed")
+	}
+	writer.writes++
+	return len(value), nil
 }
 
 func assertProblemCode(t *testing.T, err error, expected problem.Code) {

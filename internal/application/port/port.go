@@ -42,6 +42,7 @@ type GitRepository interface {
 	Fetch(ctx context.Context, repository RepositoryIdentity) error
 	CreateBranch(ctx context.Context, repository RepositoryIdentity, name branch.BranchName, base branch.TargetBase, switchTo bool) error
 	StoreWorkflowBase(ctx context.Context, repository RepositoryIdentity, name branch.BranchName, base branch.TargetBase) error
+	ClearWorkflowBase(ctx context.Context, repository RepositoryIdentity, name branch.BranchName) error
 	WorkflowBase(ctx context.Context, repository RepositoryIdentity, name branch.BranchName) (branch.TargetBase, bool, error)
 	SwitchBranch(ctx context.Context, repository RepositoryIdentity, name branch.BranchName) error
 	PublicationState(ctx context.Context, repository RepositoryIdentity, name branch.BranchName) (branch.PublicationState, error)
@@ -51,7 +52,6 @@ type GitRepository interface {
 	Merge(ctx context.Context, repository RepositoryIdentity, base branch.TargetBase, message commitmsg.Message) error
 	CherryPick(ctx context.Context, repository RepositoryIdentity, commitID string) error
 	DeleteLocalBranch(ctx context.Context, repository RepositoryIdentity, name branch.BranchName, force bool) error
-	DeleteRemoteBranch(ctx context.Context, repository RepositoryIdentity, name branch.BranchName) error
 	ReleaseTagsAt(ctx context.Context, repository RepositoryIdentity, revision string) ([]string, error)
 	HasStagedChanges(ctx context.Context, repository RepositoryIdentity) (bool, error)
 	Stage(ctx context.Context, repository RepositoryIdentity, paths []string) error
@@ -185,10 +185,17 @@ type QualityResult struct {
 	Gates  []QualityGateResult
 }
 
+// QualityRequest identifies the branch families relevant to one
+// publication-affecting operation. The runner evaluates each configured gate
+// once against this complete set, so a multi-ref push cannot duplicate work.
+type QualityRequest struct {
+	Families []branch.Family
+}
+
 // QualityRunner runs repository-defined local quality gates before a
 // publication-affecting operation.
 type QualityRunner interface {
-	Run(ctx context.Context, repository RepositoryIdentity) (QualityResult, error)
+	Run(ctx context.Context, repository RepositoryIdentity, request QualityRequest) (QualityResult, error)
 }
 
 // PullRequest describes a provider-neutral pull request intent.

@@ -87,7 +87,13 @@ gate:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "defaults": {
+    "includeFamilies": [
+      "feature", "fix", "docs", "refactor",
+      "chore", "test", "perf", "hotfix"
+    ]
+  },
   "gates": [
     {
       "name": "unit-tests",
@@ -100,8 +106,11 @@ gate:
 ```
 
 The runner rejects shell strings, absolute or escaping working directories,
-unknown fields, duplicate names, and invalid timeouts. No file means
-`qualityStatus=unconfigured`, not a successful project-quality result.
+unknown fields, duplicate names, invalid family scopes, and invalid timeouts.
+No file means `qualityStatus=unconfigured`, not a successful
+project-quality result. Gates inherit the default family set unless they
+declare `includeFamilies` and/or `excludeFamilies`; private `scratch` work is
+included only by a gate that explicitly selects it.
 
 ## Manual CLI smoke test
 

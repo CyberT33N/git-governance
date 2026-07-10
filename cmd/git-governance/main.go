@@ -10,18 +10,23 @@ import (
 )
 
 var (
-	version = "devel"
-	commit  = "unknown"
-	date    = "unknown"
+	version      = "devel"
+	commit       = "unknown"
+	date         = "unknown"
+	exitProcess  = os.Exit
+	buildCommand = newCommand
 )
 
 func main() {
-	command := newCommand()
+	exitProcess(execute(context.Background(), buildCommand()))
+}
 
-	if err := command.ExecuteContext(context.Background()); err != nil {
+func execute(ctx context.Context, command *cobra.Command) int {
+	if err := command.ExecuteContext(ctx); err != nil {
 		bootstrap.RenderError(command, err)
-		os.Exit(problem.ExitCode(err))
+		return problem.ExitCode(err)
 	}
+	return problem.ExitSuccess
 }
 
 func newCommand() *cobra.Command {

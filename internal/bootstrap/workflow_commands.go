@@ -468,13 +468,10 @@ func newReleaseWorkflowCommand(application *application) *cobra.Command {
 }
 
 func newCleanupWorkflowCommand(application *application) *cobra.Command {
-	var (
-		branchRaw    string
-		deleteRemote bool
-	)
+	var branchRaw string
 	command := &cobra.Command{
 		Use:   "cleanup",
-		Short: "Delete a completed governed branch after its lifecycle obligations are complete",
+		Short: "Delete a local private scratch branch without deleting a remote branch",
 		RunE: func(command *cobra.Command, _ []string) error {
 			services := application.services()
 			repository, err := application.discover(command.Context(), services)
@@ -487,16 +484,15 @@ func newCleanupWorkflowCommand(application *application) *cobra.Command {
 			}
 			if err := application.confirmMutation(
 				command.Context(),
-				"Clean up branch",
-				"Delete "+name.String()+" locally"+cleanupRemoteDescription(deleteRemote)+" after confirming that its merge and propagation obligations are complete?",
+				"Clean up scratch branch",
+				"Delete "+name.String()+" locally? Official branch lifecycle and remote deletion remain GitHub, GitLab, or CI responsibilities.",
 			); err != nil {
 				return err
 			}
 			result, err := services.releases.CleanupBranch(command.Context(), workflow.CleanupBranchRequest{
-				Repository:   repository,
-				Branch:       name,
-				DeleteRemote: deleteRemote,
-				DryRun:       application.options.dryRun,
+				Repository: repository,
+				Branch:     name,
+				DryRun:     application.options.dryRun,
 			})
 			if err != nil {
 				return err
@@ -505,24 +501,16 @@ func newCleanupWorkflowCommand(application *application) *cobra.Command {
 				Operation: "workflow.cleanup",
 				Summary:   "Branch cleanup completed.",
 				Fields: map[string]string{
-					"branch":        result.Branch.String(),
-					"deletedLocal":  boolString(result.DeletedLocal),
-					"deletedRemote": boolString(result.DeletedRemote),
-					"dryRun":        boolString(result.DryRun),
+					"branch":          result.Branch.String(),
+					"deletedLocal":    boolString(result.DeletedLocal),
+					"metadataCleared": boolString(result.MetadataCleared),
+					"dryRun":          boolString(result.DryRun),
 				},
 			})
 		},
 	}
-	command.Flags().StringVar(&branchRaw, "branch", "", "completed branch; defaults to the current branch")
-	command.Flags().BoolVar(&deleteRemote, "delete-remote", false, "delete the completed branch from the selected remote")
+	command.Flags().StringVar(&branchRaw, "branch", "", "local scratch branch; defaults to the current branch")
 	return command
-}
-
-func cleanupRemoteDescription(deleteRemote bool) string {
-	if deleteRemote {
-		return " and from the selected remote"
-	}
-	return ""
 }
 
 func addQualityFields(fields map[string]string, result workflow.PublishTicketResult) {
@@ -536,10 +524,9 @@ func addQualityFields(fields map[string]string, result workflow.PublishTicketRes
 
 func newReleaseCutCommand(application *application) *cobra.Command {
 	var versionRaw string
-	var switchTo bool
 	command := &cobra.Command{
 		Use:   "cut",
-		Short: "Cut release/<semver> directly from origin/develop",
+		Short: "Prepare a protected CI request for release/<semver> from develop",
 		RunE: func(command *cobra.Command, _ []string) error {
 			services := application.services()
 			repository, err := application.discover(command.Context(), services)
@@ -560,7 +547,6 @@ func newReleaseCutCommand(application *application) *cobra.Command {
 			result, err := services.releases.CutRelease(command.Context(), workflow.CutReleaseRequest{
 				Repository: repository,
 				Version:    version,
-				Switch:     &switchTo,
 				DryRun:     application.options.dryRun,
 			})
 			if err != nil {
@@ -568,18 +554,18 @@ func newReleaseCutCommand(application *application) *cobra.Command {
 			}
 			return application.report(command, port.Report{
 				Operation: "workflow.release.cut",
-				Summary:   "Release line created.",
+				Summary:   "Protected release-line creation intent prepared.",
 				Fields: map[string]string{
-					"branch":   result.Name.String(),
-					"base":     result.Base.String(),
-					"switched": boolString(result.Switched),
+					"branch":   result.Intent.Branch.String(),
+					"base":     result.Intent.Source.String(),
+					"workflow": result.Intent.Workflow,
 					"dryRun":   boolString(result.DryRun),
 				},
+				Data: result.Intent,
 			})
 		},
 	}
 	command.Flags().StringVar(&versionRaw, "version", "", "release semantic version")
-	command.Flags().BoolVar(&switchTo, "switch", true, "switch to the release branch after creating it")
 	return command
 }
 
@@ -852,10 +838,9 @@ func newReleaseBackmergeCommand(application *application) *cobra.Command {
 
 func newSupportPrepareCommand(application *application) *cobra.Command {
 	var versionRaw string
-	var switchTo bool
 	command := &cobra.Command{
 		Use:   "support",
-		Short: "Create support/<major.minor> from origin/main",
+		Short: "Prepare a protected CI request for support/<major.minor> from main",
 		RunE: func(command *cobra.Command, _ []string) error {
 			services := application.services()
 			repository, err := application.discover(command.Context(), services)
@@ -876,7 +861,6 @@ func newSupportPrepareCommand(application *application) *cobra.Command {
 			result, err := services.releases.PrepareSupport(command.Context(), workflow.PrepareSupportRequest{
 				Repository: repository,
 				Version:    version,
-				Switch:     &switchTo,
 				DryRun:     application.options.dryRun,
 			})
 			if err != nil {
@@ -884,16 +868,17 @@ func newSupportPrepareCommand(application *application) *cobra.Command {
 			}
 			return application.report(command, port.Report{
 				Operation: "workflow.release.support",
-				Summary:   "Support line created.",
+				Summary:   "Protected support-line creation intent prepared.",
 				Fields: map[string]string{
-					"branch": result.Name.String(),
-					"base":   result.Base.String(),
-					"dryRun": boolString(result.DryRun),
+					"branch":   result.Intent.Branch.String(),
+					"base":     result.Intent.Source.String(),
+					"workflow": result.Intent.Workflow,
+					"dryRun":   boolString(result.DryRun),
 				},
+				Data: result.Intent,
 			})
 		},
 	}
 	command.Flags().StringVar(&versionRaw, "version", "", "support major.minor version")
-	command.Flags().BoolVar(&switchTo, "switch", true, "switch to the support branch after creating it")
 	return command
 }

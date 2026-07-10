@@ -1,5 +1,17 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "defaults": {
+    "includeFamilies": [
+      "feature",
+      "fix",
+      "docs",
+      "refactor",
+      "chore",
+      "test",
+      "perf",
+      "hotfix"
+    ]
+  },
   "gates": [
     {
       "name": "unit-and-integration-tests",

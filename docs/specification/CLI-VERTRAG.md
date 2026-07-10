@@ -55,6 +55,20 @@ Command-/Argumentarrays. Fehlt die Datei, lautet das Ergebnis
 `qualityStatus=unconfigured`; es wird niemals als bestandener Build oder Lint
 ausgegeben.
 
+Ist eine gültige Konfiguration vorhanden, ermittelt `validate pre-push` den
+Scope jedes Gates gegen die tatsächlichen Branch-Familien im Update-Stream.
+Ein Gate ohne eigenen Scope erbt `defaults.includeFamilies`; ein Gate mit
+`includeFamilies` beschränkt sich auf diese Familien und `excludeFamilies`
+zieht danach Familien ab. Jedes dadurch berechtigte Gate läuft bei einem
+Multi-Ref-Push höchstens einmal.
+
+Die empfohlene Default-Menge enthält alle offiziellen Arbeitsfamilien:
+`feature`, `fix`, `docs`, `refactor`, `chore`, `test`, `perf` und `hotfix`.
+`scratch` ist damit standardmäßig nicht ausgewählt, kann aber gezielt für ein
+einzelnes leichtgewichtiges Gate eingeschlossen werden. Das ist keine globale
+Sonderregel, sondern dieselbe Scope-Semantik wie für Dokumentations-, Test-,
+Performance- oder Stress-Gates.
+
 ## 3. Command Tree
 
 ```text
@@ -82,7 +96,7 @@ git governance
 │       ├── promote
 │       ├── backmerge
 │       └── support
-├── cleanup
+│   └── cleanup
 ├── validate
 │   └── pre-push
 ├── config
@@ -431,9 +445,11 @@ git governance workflow release cut --version 2.8.0
 Das Kommando:
 
 - verlangt eine explizite Governance-Bestätigung
-- aktualisiert `origin/develop` per Fetch
-- erzeugt `release/2.8.0` direkt von `origin/develop`
-- pusht nur bei expliziter Freigabe
+- prüft die lokale Release-Anfrage und erzeugt einen maschinenlesbaren Intent
+  für `create-protected-line.yml`
+- erstellt, wechselt oder pusht keinen lokalen `release/*`-Branch
+- übergibt die tatsächliche Remote-Erstellung an einen geschützten,
+  autorisierten CI-Workflow
 - erklärt die danach erlaubte begrenzte Stabilisierung
 
 ### 13.2 `workflow release stabilize`
@@ -480,15 +496,30 @@ Die Freigabe nach `main`, Tagging und Artefakterstellung bleiben Release-/CI-Ver
 
 ### 13.6 `workflow release support`
 
-`support/<major.minor>` darf nur erzeugt werden, wenn die aktuell gefetchte
-`origin/main`-Revision einen passenden `v<major.minor.patch>`-Release-Tag
-trägt.
+`support/<major.minor>` darf nur angefordert werden, wenn die aktuell
+gefetchte `origin/main`-Revision einen passenden
+`v<major.minor.patch>`-Release-Tag trägt. Die CLI erzeugt einen Intent für
+`create-protected-line.yml`; der geschützte CI-Workflow erstellt die Remote
+Support-Linie von dieser freigegebenen Main-Revision.
 
 ### 13.7 `workflow cleanup`
 
-Der Cleanup-Workflow löscht nach ausdrücklicher Bestätigung abgeschlossene
-Ticket-, Scratch-, Hotfix- oder Release-Branches lokal und optional remote.
-`main`, `develop` und aktive `support/*`-Linien bleiben ausgeschlossen.
+`workflow cleanup` löscht niemals Remote-Branches. Remote-Löschung und
+Lifecycle-Nachweise gehören zu GitHub, GitLab oder CI:
+
+- Ticket- und Hotfix-Remote-Branches werden nach dem passenden PR-Merge durch
+  die Hosting-Plattform entfernt.
+- Ein Release-Remote-Branch bleibt bis Main-Promotion, Tag/Artefakt-Workflow
+  und Backmerge nach `develop` erhalten; danach löscht ihn Hosting-Automation
+  oder CI.
+- `main`, `develop`, `release/*` und `support/*` sind nie lokale
+  CLI-Cleanup-Ziele.
+
+Die CLI erlaubt standardmäßig nur lokale `scratch/*`-Bereinigung. Ein lokaler
+offizieller Arbeitsbranch kann erst mit dem expliziten Flag
+`--local-official` entfernt werden. Das Kommando entfernt anschließend auch
+seine lokale Workflow-Basis-Metadaten. Es behauptet nicht, einen Hosting-Merge
+oder Forward-/Backport-Abschluss beweisen zu können.
 
 ## 14. `validate pre-push`
 
@@ -523,7 +554,7 @@ git governance config key remove PLATFORM2
 Regeln:
 
 - nur syntaktisch gültige Keys werden gespeichert
-- Speicherung ist dedupliziert und atomar
+- Speicherung ist dedupliziert und plattformgerecht wiederherstellbar
 - ein gespeicherter Key gilt nicht automatisch als Registry-zugelassen
 - Ticketnummern werden nicht als globaler Default gespeichert
 - Commits leiten das Ticket aus dem aktuellen Branch ab

@@ -178,9 +178,9 @@ func TestDryRunCommandContractsCoverWorkflowSurfaces(t *testing.T) {
 			args:    []string{"workflow", "release", "support", "--version", "2.8"},
 		},
 		{
-			name:    "branch cleanup",
-			current: "hotfix/ABC-999-payment-timeout",
-			args:    []string{"workflow", "cleanup", "--branch", "hotfix/ABC-999-payment-timeout", "--delete-remote"},
+			name:    "scratch cleanup",
+			current: "scratch/ABC-123-experiment",
+			args:    []string{"workflow", "cleanup", "--branch", "scratch/ABC-123-experiment"},
 		},
 		{
 			name:    "doctor",
@@ -498,6 +498,10 @@ func (*prePushGit) StoreWorkflowBase(context.Context, port.RepositoryIdentity, b
 	return nil
 }
 
+func (*prePushGit) ClearWorkflowBase(context.Context, port.RepositoryIdentity, branch.BranchName) error {
+	return nil
+}
+
 func (*prePushGit) WorkflowBase(context.Context, port.RepositoryIdentity, branch.BranchName) (branch.TargetBase, bool, error) {
 	return branch.TargetBase{}, false, nil
 }
@@ -531,10 +535,6 @@ func (*prePushGit) CherryPick(context.Context, port.RepositoryIdentity, string) 
 }
 
 func (*prePushGit) DeleteLocalBranch(context.Context, port.RepositoryIdentity, branch.BranchName, bool) error {
-	return nil
-}
-
-func (*prePushGit) DeleteRemoteBranch(context.Context, port.RepositoryIdentity, branch.BranchName) error {
 	return nil
 }
 
@@ -638,6 +638,11 @@ func (git *commandGit) StoreWorkflowBase(_ context.Context, _ port.RepositoryIde
 	return nil
 }
 
+func (git *commandGit) ClearWorkflowBase(_ context.Context, _ port.RepositoryIdentity, name branch.BranchName) error {
+	delete(git.workflowBases, name.String())
+	return nil
+}
+
 func (git *commandGit) WorkflowBase(_ context.Context, _ port.RepositoryIdentity, name branch.BranchName) (branch.TargetBase, bool, error) {
 	base, found := git.workflowBases[name.String()]
 	return base, found, nil
@@ -672,10 +677,6 @@ func (*commandGit) CherryPick(context.Context, port.RepositoryIdentity, string) 
 }
 
 func (*commandGit) DeleteLocalBranch(context.Context, port.RepositoryIdentity, branch.BranchName, bool) error {
-	return nil
-}
-
-func (*commandGit) DeleteRemoteBranch(context.Context, port.RepositoryIdentity, branch.BranchName) error {
 	return nil
 }
 

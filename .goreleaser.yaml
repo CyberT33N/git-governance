@@ -2,6 +2,10 @@
 version: 2
 project_name: git-governance
 
+before:
+  hooks:
+    - go run ./cmd/generate-docs --out dist/generated
+
 builds:
   - id: git-governance
     main: ./cmd/git-governance
@@ -35,6 +39,8 @@ archives:
       - CONTRIBUTING.md
       - LICENSE
       - NOTICE
+      - dist/generated/completions/*
+      - dist/generated/man/*
 
 nfpms:
   - id: linux-packages

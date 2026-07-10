@@ -42,7 +42,7 @@ type Options struct {
 	Directory ConfigDirectory
 }
 
-// Store is an atomic JSON implementation of port.PreferencesStore.
+// Store is a recoverable JSON implementation of port.PreferencesStore.
 type Store struct {
 	path      string
 	directory ConfigDirectory
@@ -69,6 +69,9 @@ func (store *Store) Load(ctx context.Context) (port.Preferences, error) {
 	path, err := store.Path()
 	if err != nil {
 		return port.Preferences{}, err
+	}
+	if err := recoverConfiguration(path); err != nil {
+		return port.Preferences{}, unavailable(path, "recover an interrupted configuration replacement", err)
 	}
 
 	bytes, err := os.ReadFile(path)
@@ -98,6 +101,9 @@ func (store *Store) Save(ctx context.Context, preferences port.Preferences) erro
 	if err != nil {
 		return err
 	}
+	if err := recoverConfiguration(path); err != nil {
+		return unavailable(path, "recover an interrupted configuration replacement", err)
+	}
 
 	disk, err := toDisk(path, preferences)
 	if err != nil {
@@ -115,7 +121,7 @@ func (store *Store) Save(ctx context.Context, preferences port.Preferences) erro
 	if err := os.MkdirAll(filepath.Dir(path), defaultDirectoryMode); err != nil {
 		return unavailable(path, "create the configuration directory", err)
 	}
-	return atomicWrite(path, encoded)
+	return writeConfiguration(path, encoded)
 }
 
 // Path returns the effective configuration file path.
@@ -258,7 +264,7 @@ func keyStrings(keys []ticket.Key) []string {
 	return result
 }
 
-func atomicWrite(path string, contents []byte) (returnErr error) {
+func writeConfiguration(path string, contents []byte) (returnErr error) {
 	directory := filepath.Dir(path)
 	file, err := os.CreateTemp(directory, ".config-*.tmp")
 	if err != nil {
@@ -286,8 +292,8 @@ func atomicWrite(path string, contents []byte) (returnErr error) {
 	if err := file.Close(); err != nil {
 		return unavailable(path, "close the temporary configuration file", err)
 	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return unavailable(path, "atomically replace the configuration file", err)
+	if err := replaceConfiguration(path, temporaryPath); err != nil {
+		return unavailable(path, "replace the configuration file", err)
 	}
 	return nil
 }

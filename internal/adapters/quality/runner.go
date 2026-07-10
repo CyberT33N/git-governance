@@ -15,19 +15,32 @@ import (
 	"time"
 
 	"github.com/CyberT33N/git-governance/internal/application/port"
+	"github.com/CyberT33N/git-governance/internal/domain/branch"
 	"github.com/CyberT33N/git-governance/internal/domain/problem"
 )
 
 const (
 	defaultConfigName = "git-governance.quality.json"
-	currentSchema     = 1
+	currentSchema     = 2
 	maxConfigBytes    = 1 << 20
 	maxGateCount      = 32
 	maxArgumentCount  = 64
 	defaultTimeout    = 5 * time.Minute
 )
 
-var gateNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+var (
+	gateNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+	defaultFamilies = []branch.Family{
+		branch.FamilyFeature,
+		branch.FamilyFix,
+		branch.FamilyDocs,
+		branch.FamilyRefactor,
+		branch.FamilyChore,
+		branch.FamilyTest,
+		branch.FamilyPerf,
+		branch.FamilyHotfix,
+	}
+)
 
 type commandRunner func(ctx context.Context, directory, executable string, arguments ...string) error
 
@@ -38,6 +51,7 @@ type Options struct {
 	DefaultTimeout time.Duration
 	ReadFile       func(string) ([]byte, error)
 	Run            commandRunner
+	Diagnostic     io.Writer
 }
 
 // Runner executes a trusted repository's explicitly declared local quality
@@ -61,7 +75,13 @@ func New(options Options) *Runner {
 	}
 	run := options.Run
 	if run == nil {
-		run = runCommand
+		diagnostic := options.Diagnostic
+		if diagnostic == nil {
+			diagnostic = os.Stderr
+		}
+		run = func(ctx context.Context, directory, executable string, arguments ...string) error {
+			return runCommand(diagnostic, ctx, directory, executable, arguments...)
+		}
 	}
 	return &Runner{
 		path:           options.Path,
@@ -71,10 +91,15 @@ func New(options Options) *Runner {
 	}
 }
 
-// Run loads and executes every declared gate. The config file is an explicit
-// trust boundary: invoking project tooling may execute arbitrary project code,
-// so the runner neither guesses commands nor interprets shell syntax.
-func (runner *Runner) Run(ctx context.Context, repository port.RepositoryIdentity) (port.QualityResult, error) {
+// Run loads and executes gates selected by the request's branch families. The
+// config file is an explicit trust boundary: invoking project tooling may
+// execute arbitrary project code, so the runner neither guesses commands nor
+// interprets shell syntax.
+func (runner *Runner) Run(
+	ctx context.Context,
+	repository port.RepositoryIdentity,
+	request port.QualityRequest,
+) (port.QualityResult, error) {
 	if repository.Root == "" {
 		return port.QualityResult{}, problem.New(problem.Details{
 			Code:        problem.CodeRepositoryNotFound,
@@ -90,6 +115,10 @@ func (runner *Runner) Run(ctx context.Context, repository port.RepositoryIdentit
 	}
 	if err := ctx.Err(); err != nil {
 		return port.QualityResult{}, cancelled(err)
+	}
+	requestedFamilies, err := normalizeRequestedFamilies(request.Families)
+	if err != nil {
+		return port.QualityResult{}, err
 	}
 
 	path := runner.configPath(repository.Root)
@@ -113,10 +142,13 @@ func (runner *Runner) Run(ctx context.Context, repository port.RepositoryIdentit
 	}
 	result := port.QualityResult{
 		Status: port.QualityPassed,
-		Detail: "all configured repository-local quality gates passed",
+		Detail: "all applicable repository-local quality gates passed",
 		Gates:  make([]port.QualityGateResult, 0, len(config.Gates)),
 	}
 	for _, gate := range config.Gates {
+		if !gateApplies(config.Defaults, gate, requestedFamilies) {
+			continue
+		}
 		directory, err := resolveWorkingDirectory(repository.Root, gate.WorkingDirectory)
 		if err != nil {
 			return port.QualityResult{}, err
@@ -142,6 +174,12 @@ func (runner *Runner) Run(ctx context.Context, repository port.RepositoryIdentit
 		}
 		result.Gates = append(result.Gates, port.QualityGateResult{Name: gate.Name})
 	}
+	if len(result.Gates) == 0 {
+		return port.QualityResult{
+			Status: port.QualitySkipped,
+			Detail: "no configured quality gates apply to the selected branch families",
+		}, nil
+	}
 	return result, nil
 }
 
@@ -156,16 +194,24 @@ func (runner *Runner) configPath(root string) string {
 }
 
 type config struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	Gates         []gate `json:"gates"`
+	SchemaVersion int         `json:"schemaVersion"`
+	Defaults      familyScope `json:"defaults,omitempty"`
+	Gates         []gate      `json:"gates"`
+}
+
+type familyScope struct {
+	IncludeFamilies []branch.Family `json:"includeFamilies,omitempty"`
+	ExcludeFamilies []branch.Family `json:"excludeFamilies,omitempty"`
 }
 
 type gate struct {
-	Name             string   `json:"name"`
-	Command          string   `json:"command"`
-	Args             []string `json:"args"`
-	Timeout          string   `json:"timeout"`
-	WorkingDirectory string   `json:"workingDirectory,omitempty"`
+	Name             string          `json:"name"`
+	Command          string          `json:"command"`
+	Args             []string        `json:"args"`
+	Timeout          string          `json:"timeout"`
+	WorkingDirectory string          `json:"workingDirectory,omitempty"`
+	IncludeFamilies  []branch.Family `json:"includeFamilies,omitempty"`
+	ExcludeFamilies  []branch.Family `json:"excludeFamilies,omitempty"`
 }
 
 func decode(path string, contents []byte) (config, error) {
@@ -180,10 +226,13 @@ func decode(path string, contents []byte) (config, error) {
 		return config{}, invalid(path, "quality configuration must contain exactly one JSON document", nil)
 	}
 	if value.SchemaVersion != currentSchema {
-		return config{}, invalid(path, "schemaVersion must equal 1", nil)
+		return config{}, invalid(path, "schemaVersion must equal 2", nil)
 	}
 	if len(value.Gates) == 0 || len(value.Gates) > maxGateCount {
 		return config{}, invalid(path, "gates must contain between 1 and 32 entries", nil)
+	}
+	if err := validateScope(path, "defaults", value.Defaults); err != nil {
+		return config{}, err
 	}
 	seen := make(map[string]struct{}, len(value.Gates))
 	for _, gate := range value.Gates {
@@ -211,8 +260,112 @@ func decode(path string, contents []byte) (config, error) {
 		if _, err := gateTimeout(gate.Timeout, defaultTimeout); err != nil {
 			return config{}, invalid(path, "gate "+gate.Name+" has an invalid timeout", err)
 		}
+		if err := validateScope(path, "gate "+gate.Name, gate.scope()); err != nil {
+			return config{}, err
+		}
 	}
 	return value, nil
+}
+
+func (gate gate) scope() familyScope {
+	return familyScope{
+		IncludeFamilies: gate.IncludeFamilies,
+		ExcludeFamilies: gate.ExcludeFamilies,
+	}
+}
+
+func validateScope(path, label string, scope familyScope) error {
+	included := make(map[branch.Family]struct{}, len(scope.IncludeFamilies))
+	for _, family := range scope.IncludeFamilies {
+		if !family.IsKnown() {
+			return invalid(path, label+" includes an unknown branch family "+family.String(), nil)
+		}
+		if _, found := included[family]; found {
+			return invalid(path, label+" cannot include the same branch family more than once", nil)
+		}
+		included[family] = struct{}{}
+	}
+
+	excluded := make(map[branch.Family]struct{}, len(scope.ExcludeFamilies))
+	for _, family := range scope.ExcludeFamilies {
+		if !family.IsKnown() {
+			return invalid(path, label+" excludes an unknown branch family "+family.String(), nil)
+		}
+		if _, found := excluded[family]; found {
+			return invalid(path, label+" cannot exclude the same branch family more than once", nil)
+		}
+		if _, found := included[family]; found {
+			return invalid(path, label+" cannot both include and exclude "+family.String(), nil)
+		}
+		excluded[family] = struct{}{}
+	}
+	return nil
+}
+
+func normalizeRequestedFamilies(families []branch.Family) ([]branch.Family, error) {
+	result := make([]branch.Family, 0, len(families))
+	seen := make(map[branch.Family]struct{}, len(families))
+	for _, family := range families {
+		if !family.IsKnown() {
+			return nil, problem.New(problem.Details{
+				Code:        problem.CodeInvalidInput,
+				Category:    problem.CategoryGovernance,
+				Field:       "quality branch family",
+				Actual:      family.String(),
+				Expected:    "a supported branch family",
+				Rule:        "quality-gate selection uses canonical branch families",
+				Example:     "feature",
+				Remediation: "pass branch families parsed from a governed branch name",
+			})
+		}
+		if _, found := seen[family]; found {
+			continue
+		}
+		seen[family] = struct{}{}
+		result = append(result, family)
+	}
+	return result, nil
+}
+
+func gateApplies(defaults familyScope, gate gate, requested []branch.Family) bool {
+	if len(requested) == 0 {
+		return false
+	}
+	eligible := effectiveFamilies(defaults, gate.scope())
+	for _, requestedFamily := range requested {
+		for _, eligibleFamily := range eligible {
+			if requestedFamily == eligibleFamily {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func effectiveFamilies(defaults, override familyScope) []branch.Family {
+	included := defaults.IncludeFamilies
+	if len(included) == 0 {
+		included = defaultFamilies
+	}
+	if len(override.IncludeFamilies) > 0 {
+		included = override.IncludeFamilies
+	}
+
+	excluded := make(map[branch.Family]struct{}, len(defaults.ExcludeFamilies)+len(override.ExcludeFamilies))
+	for _, family := range defaults.ExcludeFamilies {
+		excluded[family] = struct{}{}
+	}
+	for _, family := range override.ExcludeFamilies {
+		excluded[family] = struct{}{}
+	}
+
+	result := make([]branch.Family, 0, len(included))
+	for _, family := range included {
+		if _, found := excluded[family]; !found {
+			result = append(result, family)
+		}
+	}
+	return result
 }
 
 func resolveWorkingDirectory(root, relative string) (string, error) {
@@ -256,11 +409,11 @@ func gateTimeout(raw string, fallback time.Duration) (time.Duration, error) {
 	return timeout, nil
 }
 
-func runCommand(ctx context.Context, directory, executable string, arguments ...string) error {
+func runCommand(diagnostic io.Writer, ctx context.Context, directory, executable string, arguments ...string) error {
 	command := exec.CommandContext(ctx, executable, arguments...)
 	command.Dir = directory
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
+	command.Stdout = diagnostic
+	command.Stderr = diagnostic
 	return command.Run()
 }
 
@@ -295,7 +448,7 @@ func invalid(path, rule string, cause error) error {
 		Actual:      path,
 		Expected:    "a valid git-governance.quality.json document",
 		Rule:        rule,
-		Example:     `{"schemaVersion":1,"gates":[{"name":"unit-tests","command":"go","args":["test","./..."],"timeout":"2m"}]}`,
+		Example:     `{"schemaVersion":2,"defaults":{"includeFamilies":["feature","fix"]},"gates":[{"name":"unit-tests","command":"go","args":["test","./..."],"timeout":"2m"}]}`,
 		Remediation: "correct the repository-local quality configuration",
 	}, cause)
 }

@@ -25,7 +25,6 @@ jobs:
       github.event.pull_request.merge_commit_sha != ''
     runs-on: ubuntu-latest
     permissions:
-      actions: write
       contents: write
     steps:
       - name: Check out main with complete history
@@ -79,19 +78,3 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag --annotate "${TAG}" "${MERGE_SHA}" --message "Release ${VERSION}"
           git push origin "refs/tags/${TAG}"
-
-      - name: Dispatch the artifact workflow for the immutable tag
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.release.outputs.tag }}
-        run: |
-          set -euo pipefail
-          payload="$(printf '{"ref":"%s","inputs":{"tag":"%s"}}' "${TAG}" "${TAG}")"
-          curl --fail-with-body --silent --show-error \
-            --request POST \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer ${GH_TOKEN}" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
-            --url "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/dispatches" \
-            --data "${payload}"

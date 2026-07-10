@@ -104,29 +104,45 @@ func (service *ReleaseService) StartHotfix(ctx context.Context, request StartHot
 type CutReleaseRequest struct {
 	Repository port.RepositoryIdentity
 	Version    branch.SemanticVersion
-	Switch     *bool
 	DryRun     bool
 }
 
-// CreateLineResult describes a release or support line creation.
-type CreateLineResult struct {
-	Name     branch.BranchName
-	Base     branch.TargetBase
-	Switched bool
-	DryRun   bool
-	Plan     []branchapp.PlanStep
+// SharedLineIntent describes a privileged CI operation that creates a remote
+// protected release or support line. The local CLI never pushes shared lines.
+type SharedLineIntent struct {
+	Workflow string            `json:"workflow"`
+	Kind     string            `json:"kind"`
+	Branch   branch.BranchName `json:"branch"`
+	Source   branch.TargetBase `json:"source"`
+	Inputs   map[string]string `json:"inputs"`
+}
+
+// SharedLineIntentResult contains the prepared CI/hosting operation and the
+// read-only validation plan that produced it.
+type SharedLineIntentResult struct {
+	Intent SharedLineIntent     `json:"intent"`
+	DryRun bool                 `json:"dryRun"`
+	Plan   []branchapp.PlanStep `json:"plan"`
 }
 
 // CutRelease creates release/<semver> directly from origin/develop. It does
 // not tag, publish artifacts, or merge into main; those are separate release
 // approval and pipeline responsibilities.
-func (service *ReleaseService) CutRelease(ctx context.Context, request CutReleaseRequest) (CreateLineResult, error) {
+func (service *ReleaseService) CutRelease(ctx context.Context, request CutReleaseRequest) (SharedLineIntentResult, error) {
 	name, err := branch.NewReleaseBranch(request.Version)
 	if err != nil {
-		return CreateLineResult{}, err
+		return SharedLineIntentResult{}, err
 	}
 	develop := mustDevelop()
-	return service.createSharedLine(ctx, request.Repository, name, develop, request.Switch, request.DryRun, "release")
+	return service.prepareSharedLine(
+		ctx,
+		request.Repository,
+		name,
+		develop,
+		"release",
+		request.Version.String(),
+		request.DryRun,
+	)
 }
 
 // PrepareSupportRequest describes a support-line creation from a released
@@ -134,41 +150,48 @@ func (service *ReleaseService) CutRelease(ctx context.Context, request CutReleas
 type PrepareSupportRequest struct {
 	Repository port.RepositoryIdentity
 	Version    branch.SupportVersion
-	Switch     *bool
 	DryRun     bool
 }
 
 // PrepareSupport creates support/<major.minor> directly from origin/main only
 // when that main revision carries a matching released version tag.
-func (service *ReleaseService) PrepareSupport(ctx context.Context, request PrepareSupportRequest) (CreateLineResult, error) {
+func (service *ReleaseService) PrepareSupport(ctx context.Context, request PrepareSupportRequest) (SharedLineIntentResult, error) {
 	name, err := branch.NewSupportBranch(request.Version)
 	if err != nil {
-		return CreateLineResult{}, err
+		return SharedLineIntentResult{}, err
 	}
 	repository, err := normalizeWorkflowRepository(request.Repository)
 	if err != nil {
-		return CreateLineResult{}, err
+		return SharedLineIntentResult{}, err
 	}
 	main := mustMain()
 	if !request.DryRun {
 		if service.git == nil {
-			return CreateLineResult{}, internalDependencyError("Git repository")
+			return SharedLineIntentResult{}, internalDependencyError("Git repository")
 		}
 		if err := service.git.Fetch(ctx, repository); err != nil {
-			return CreateLineResult{}, err
+			return SharedLineIntentResult{}, err
 		}
 		tags, err := service.git.ReleaseTagsAt(ctx, repository, repository.Remote+"/"+main.String())
 		if err != nil {
-			return CreateLineResult{}, err
+			return SharedLineIntentResult{}, err
 		}
 		if !hasMatchingSupportReleaseTag(tags, request.Version) {
-			return CreateLineResult{}, invalidWorkflowInput(
+			return SharedLineIntentResult{}, invalidWorkflowInput(
 				"support lines can be created only from a released main revision with a matching v<major.minor.patch> tag",
 				"release and tag the matching version on main before creating its support line",
 			)
 		}
 	}
-	return service.createSharedLine(ctx, repository, name, main, request.Switch, request.DryRun, "support")
+	return service.prepareSharedLine(
+		ctx,
+		repository,
+		name,
+		main,
+		"support",
+		request.Version.String(),
+		request.DryRun,
+	)
 }
 
 // ReleaseStabilizationKind constrains change categories allowed after a release
@@ -461,37 +484,34 @@ func (service *ReleaseService) PropagateHotfix(ctx context.Context, request Prop
 	return result, nil
 }
 
-// CleanupBranchRequest describes an explicit cleanup after the caller has
-// confirmed that merge, forward-port, and retention obligations are complete.
+// CleanupBranchRequest describes a local cleanup. Remote branch retention and
+// deletion remain hosting or CI responsibilities.
 type CleanupBranchRequest struct {
-	Repository   port.RepositoryIdentity
-	Branch       branch.BranchName
-	DeleteRemote bool
-	DryRun       bool
+	Repository port.RepositoryIdentity
+	Branch     branch.BranchName
+	DryRun     bool
 }
 
-// CleanupBranchResult records the planned or executed local and remote cleanup.
+// CleanupBranchResult records the local cleanup and metadata removal outcome.
 type CleanupBranchResult struct {
-	Branch        branch.BranchName
-	DeletedLocal  bool
-	DeletedRemote bool
-	DryRun        bool
+	Branch          branch.BranchName
+	DeletedLocal    bool
+	MetadataCleared bool
+	DryRun          bool
 }
 
-// CleanupBranch removes completed ticket, scratch, hotfix, or release branches.
-// Shared main, develop, and active support lines are intentionally excluded.
+// CleanupBranch removes a local private scratch branch. It never deletes remote
+// branches or official working branches because their lifecycle belongs to
+// hosting and CI automation.
 func (service *ReleaseService) CleanupBranch(ctx context.Context, request CleanupBranchRequest) (CleanupBranchResult, error) {
 	if service.git == nil {
 		return CleanupBranchResult{}, internalDependencyError("Git repository")
 	}
-	switch request.Branch.Family() {
-	case branch.FamilyFeature, branch.FamilyFix, branch.FamilyDocs, branch.FamilyRefactor,
-		branch.FamilyChore, branch.FamilyTest, branch.FamilyPerf, branch.FamilyHotfix,
-		branch.FamilyScratch, branch.FamilyRelease:
-	default:
+	family := request.Branch.Family()
+	if family != branch.FamilyScratch {
 		return CleanupBranchResult{}, invalidWorkflowInput(
-			"only completed ticket, hotfix, scratch, or release branches can be cleaned up",
-			"never delete main, develop, or an active support line through this workflow",
+			"cleanup accepts only a private scratch branch",
+			"let GitHub, GitLab, or CI own every official branch lifecycle; use the CLI only to delete a local scratch branch",
 		)
 	}
 	repository, err := normalizeWorkflowRepository(request.Repository)
@@ -499,22 +519,20 @@ func (service *ReleaseService) CleanupBranch(ctx context.Context, request Cleanu
 		return CleanupBranchResult{}, err
 	}
 	result := CleanupBranchResult{
-		Branch:        request.Branch,
-		DeletedLocal:  !request.DryRun,
-		DeletedRemote: !request.DryRun && request.DeleteRemote,
-		DryRun:        request.DryRun,
+		Branch: request.Branch,
+		DryRun: request.DryRun,
 	}
 	if request.DryRun {
 		return result, nil
 	}
-	if err := service.git.DeleteLocalBranch(ctx, repository, request.Branch, request.Branch.Family() == branch.FamilyScratch); err != nil {
+	if err := service.git.DeleteLocalBranch(ctx, repository, request.Branch, true); err != nil {
 		return CleanupBranchResult{}, err
 	}
-	if request.DeleteRemote {
-		if err := service.git.DeleteRemoteBranch(ctx, repository, request.Branch); err != nil {
-			return CleanupBranchResult{}, err
-		}
+	result.DeletedLocal = true
+	if err := service.git.ClearWorkflowBase(ctx, repository, request.Branch); err != nil {
+		return CleanupBranchResult{}, err
 	}
+	result.MetadataCleared = true
 	return result, nil
 }
 
@@ -545,98 +563,65 @@ func hasMatchingSupportReleaseTag(tags []string, version branch.SupportVersion) 
 	return false
 }
 
-func (service *ReleaseService) createSharedLine(
+func (service *ReleaseService) prepareSharedLine(
 	ctx context.Context,
 	identity port.RepositoryIdentity,
 	name branch.BranchName,
 	baseName branch.BranchName,
-	switchValue *bool,
-	dryRun bool,
 	lineKind string,
-) (CreateLineResult, error) {
+	version string,
+	dryRun bool,
+) (SharedLineIntentResult, error) {
 	if service.git == nil {
-		return CreateLineResult{}, internalDependencyError("Git repository")
+		return SharedLineIntentResult{}, internalDependencyError("Git repository")
 	}
 	repository, err := normalizeWorkflowRepository(identity)
 	if err != nil {
-		return CreateLineResult{}, err
+		return SharedLineIntentResult{}, err
 	}
 	if err := service.git.ValidateBranchRef(ctx, repository, name); err != nil {
-		return CreateLineResult{}, err
-	}
-	hasCommits, err := service.git.HasCommits(ctx, repository)
-	if err != nil {
-		return CreateLineResult{}, err
-	}
-	if !hasCommits {
-		return CreateLineResult{}, problem.New(problem.Details{
-			Code:        problem.CodeRepositoryHasNoCommits,
-			Category:    problem.CategoryRepository,
-			Field:       "repository",
-			Expected:    "at least one commit before creating a " + lineKind + " line",
-			Rule:        "release and support lines do not implicitly bootstrap repositories",
-			Remediation: "create an explicit initial commit before cutting the line",
-		})
-	}
-	exists, err := service.git.BranchExists(ctx, repository, name)
-	if err != nil {
-		return CreateLineResult{}, err
-	}
-	if exists {
-		return CreateLineResult{}, problem.New(problem.Details{
-			Code:        problem.CodeBranchAlreadyExists,
-			Category:    problem.CategoryRepository,
-			Field:       "branch",
-			Actual:      name.String(),
-			Expected:    "a line name not already present locally",
-			Rule:        "release and support creation must not overwrite existing lines",
-			Remediation: "select an unreleased version or use the existing line",
-		})
-	}
-
-	switched := true
-	if switchValue != nil {
-		switched = *switchValue
+		return SharedLineIntentResult{}, err
 	}
 	base, err := branch.NewTargetBase(repository.Remote, baseName)
 	if err != nil {
-		return CreateLineResult{}, err
+		return SharedLineIntentResult{}, err
 	}
-	result := CreateLineResult{
-		Name:     name,
-		Base:     base,
-		Switched: switched,
-		DryRun:   dryRun,
+	result := SharedLineIntentResult{
+		Intent: SharedLineIntent{
+			Workflow: "create-protected-line.yml",
+			Kind:     lineKind,
+			Branch:   name,
+			Source:   base,
+			Inputs: map[string]string{
+				"kind":    lineKind,
+				"version": version,
+			},
+		},
+		DryRun: dryRun,
 		Plan: []branchapp.PlanStep{
 			{Action: "fetch", Detail: "git fetch --prune " + repository.Remote},
-			{Action: "create", Detail: name.String() + " from " + base.String()},
+			{Action: "dispatch", Detail: "authorized CI creates " + name.String() + " from " + base.String()},
 		},
-	}
-	if switched {
-		result.Plan = append(result.Plan, branchapp.PlanStep{Action: "switch", Detail: "switch to " + name.String()})
 	}
 	if dryRun {
 		return result, nil
 	}
-	clean, err := service.git.IsWorktreeClean(ctx, repository)
-	if err != nil {
-		return CreateLineResult{}, err
-	}
-	if !clean {
-		return CreateLineResult{}, problem.New(problem.Details{
-			Code:        problem.CodeWorktreeNotClean,
-			Category:    problem.CategoryRepository,
-			Field:       "worktree",
-			Expected:    "a clean worktree before creating a shared line",
-			Rule:        "line creation must not risk uncommitted changes",
-			Remediation: "commit, stash, or discard local changes before continuing",
-		})
-	}
 	if err := service.git.Fetch(ctx, repository); err != nil {
-		return CreateLineResult{}, err
+		return SharedLineIntentResult{}, err
 	}
-	if err := service.git.CreateBranch(ctx, repository, name, base, switched); err != nil {
-		return CreateLineResult{}, err
+	hasCommits, err := service.git.HasCommits(ctx, repository)
+	if err != nil {
+		return SharedLineIntentResult{}, err
+	}
+	if !hasCommits {
+		return SharedLineIntentResult{}, problem.New(problem.Details{
+			Code:        problem.CodeRepositoryHasNoCommits,
+			Category:    problem.CategoryRepository,
+			Field:       "repository",
+			Expected:    "at least one commit before preparing a protected shared line",
+			Rule:        "release and support lines do not implicitly bootstrap repositories",
+			Remediation: "create an explicit initial commit before requesting the protected line",
+		})
 	}
 	return result, nil
 }

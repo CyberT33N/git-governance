@@ -74,7 +74,7 @@ Eine dauerhafte `PATH`-Änderung wird von neuen Prozessen übernommen. Der Insta
 
 - klar melden, ob das aktuelle Terminal den neuen Pfad bereits kennt
 - bei Bedarf zum Start eines neuen Terminals auffordern
-- mit `git governance version` und `git governance doctor` verifizieren
+- mit `git governance --version` und `git governance doctor` verifizieren
 
 ## 6. Benutzerkonfiguration
 
@@ -92,7 +92,8 @@ Konfiguration wird:
 
 - versioniert
 - typisiert validiert
-- atomar ersetzt
+- mit einer absturzsicheren Write-/Recovery-Strategie ersetzt; die genaue
+  Atomizitätsgarantie folgt der jeweiligen Plattform
 - mit restriktiven Benutzerrechten angelegt
 - nie als Secret Store verwendet
 
@@ -108,6 +109,19 @@ repository-relative Working Directory und einen Timeout je Gate. Shell-Strings
 und Pfade außerhalb des Repository-Roots sind unzulässig. Ohne Datei bleibt
 das Ergebnis explizit `unconfigured`; die CLI behauptet keine bestandene
 projektspezifische Quality Suite.
+
+Ist eine gültige Datei vorhanden, sind ihre Gates lokal verpflichtend für
+jeden `pre-push` mit mindestens einem offiziellen Arbeitsbranch. Die
+Konfiguration definiert dafür einen Default-Scope und optionale Scopes je
+Gate: `includeFamilies` wählt Familien aus, `excludeFamilies` entfernt sie
+anschließend. Ein Gate ohne Scope erbt den Repository-Default. Die
+Standardmenge enthält alle offiziellen Arbeitsfamilien; private `scratch/*`
+ist nicht enthalten, kann aber gezielt für ein einzelnes Gate gewählt werden.
+
+Die Suite führt bei einem Multi-Ref-Push jedes berechtigte Gate einmal nach
+erfolgreicher Ref-Policy-Prüfung aus. Damit bleibt das Tool projekt- und
+sprachenagnostisch: Es kennt keine vorgegebenen Build- oder Lint-Kommandos,
+setzt aber einen vorhandenen expliziten Repository-Vertrag zuverlässig durch.
 
 Quelle: [Go `os.UserConfigDir`](https://pkg.go.dev/os#UserConfigDir)
 
@@ -155,6 +169,9 @@ Die Release-Pipeline trennt strikt:
 Aktueller Artefaktvertrag:
 
 - Archive enthalten `README.md`, `CONTRIBUTING.md`, `LICENSE` und `NOTICE`.
+- Der vor dem Release ausgeführte Generator erstellt Bash-, Zsh-, Fish- und
+  PowerShell-Completions sowie Cobra-Manpages unter `dist/generated/`; diese
+  Dateien werden in jedes Archiv aufgenommen.
 - GoReleaser erzeugt Linux-Pakete in `deb`, `rpm` und `apk`.
 - Windows-, Homebrew-, Scoop- und WinGet-Publikation benötigen weiterhin
   konkrete Publisher-, Bucket- oder Tap-Identitäten; diese werden nicht
@@ -189,12 +206,24 @@ SemVer-Tag gebaut.
 Der normale automatisierte Pfad lautet:
 
 ```text
+git-governance workflow release cut
+-> maschinenlesbarer Intent für create-protected-line.yml
+-> autorisierter CI-Workflow erzeugt release/<semver> aus origin/develop
+-> kontrollierte Stabilisierung und PR nach main
 release/<semver> -> geschützter Merge nach main
 -> CI prüft den Merge-Commit
 -> CI erstellt den annotierten Tag v<semver> genau auf diesem Commit
 -> CI startet den Artefaktworkflow für diesen Tag
 -> GoReleaser baut, signiert, attestiert und veröffentlicht
 ```
+
+`create-protected-line.yml` ist ausschließlich manuell über GitHub Actions
+oder über eine später explizit konfigurierte, privilegierte Dispatch-Integration
+auszuführen. Es prüft Version, Quelllinie, Release-Tag bei Support-Linien und
+die Nichtexistenz der Zielbranche. Eine GitHub-Ruleset- oder
+Branch-Protection-Regel muss den Workflow als erlaubten Erzeuger von
+`release/*` und `support/*` festlegen; die lokale CLI erhält dafür keine
+Push-Berechtigung.
 
 Ein mit `GITHUB_TOKEN` erzeugter Tag löst keinen weiteren Push-Workflow aus.
 Der Tag-Workflow startet deshalb den vorhandenen `workflow_dispatch`-Pfad des

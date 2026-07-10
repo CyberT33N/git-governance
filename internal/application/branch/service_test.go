@@ -2,6 +2,7 @@ package branchapp
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -13,21 +14,28 @@ import (
 )
 
 type fakeGitRepository struct {
-	hasCommits    bool
-	clean         bool
-	exists        bool
-	publication   domainbranch.PublicationState
-	missingBase   bool
-	err           error
-	inspectionErr error
-	inspections   []port.PushUpdateInspection
-	official      []domainbranch.BranchName
-	workflowBase  *domainbranch.TargetBase
-	calls         []string
-	createdName   domainbranch.BranchName
-	createdBase   domainbranch.TargetBase
-	createdSwitch bool
-	mergedMessage commitmsg.Message
+	hasCommits          bool
+	clean               bool
+	exists              bool
+	publication         domainbranch.PublicationState
+	missingBase         bool
+	err                 error
+	hasCommitsErr       error
+	worktreeCleanErr    error
+	validateRefErr      error
+	branchExistsErr     error
+	officialBranchesErr error
+	fetchErr            error
+	createBranchErr     error
+	inspectionErr       error
+	inspections         []port.PushUpdateInspection
+	official            []domainbranch.BranchName
+	workflowBase        *domainbranch.TargetBase
+	calls               []string
+	createdName         domainbranch.BranchName
+	createdBase         domainbranch.TargetBase
+	createdSwitch       bool
+	mergedMessage       commitmsg.Message
 }
 
 func (fake *fakeGitRepository) Discover(context.Context, string) (port.RepositoryIdentity, error) {
@@ -52,12 +60,12 @@ func (fake *fakeGitRepository) ActiveOperation(context.Context, port.RepositoryI
 
 func (fake *fakeGitRepository) HasCommits(context.Context, port.RepositoryIdentity) (bool, error) {
 	fake.calls = append(fake.calls, "has-commits")
-	return fake.hasCommits, fake.err
+	return fake.hasCommits, fake.methodError(fake.hasCommitsErr)
 }
 
 func (fake *fakeGitRepository) IsWorktreeClean(context.Context, port.RepositoryIdentity) (bool, error) {
 	fake.calls = append(fake.calls, "worktree-clean")
-	return fake.clean, fake.err
+	return fake.clean, fake.methodError(fake.worktreeCleanErr)
 }
 
 func (fake *fakeGitRepository) CurrentBranch(context.Context, port.RepositoryIdentity) (domainbranch.BranchName, error) {
@@ -67,22 +75,22 @@ func (fake *fakeGitRepository) CurrentBranch(context.Context, port.RepositoryIde
 
 func (fake *fakeGitRepository) ValidateBranchRef(context.Context, port.RepositoryIdentity, domainbranch.BranchName) error {
 	fake.calls = append(fake.calls, "validate-ref")
-	return fake.err
+	return fake.methodError(fake.validateRefErr)
 }
 
 func (fake *fakeGitRepository) BranchExists(context.Context, port.RepositoryIdentity, domainbranch.BranchName) (bool, error) {
 	fake.calls = append(fake.calls, "branch-exists")
-	return fake.exists, fake.err
+	return fake.exists, fake.methodError(fake.branchExistsErr)
 }
 
 func (fake *fakeGitRepository) OfficialBranchesForTicket(_ context.Context, _ port.RepositoryIdentity, _ ticket.ID) ([]domainbranch.BranchName, error) {
 	fake.calls = append(fake.calls, "official-branches-for-ticket")
-	return append([]domainbranch.BranchName(nil), fake.official...), fake.err
+	return append([]domainbranch.BranchName(nil), fake.official...), fake.methodError(fake.officialBranchesErr)
 }
 
 func (fake *fakeGitRepository) Fetch(context.Context, port.RepositoryIdentity) error {
 	fake.calls = append(fake.calls, "fetch")
-	return fake.err
+	return fake.methodError(fake.fetchErr)
 }
 
 func (fake *fakeGitRepository) CreateBranch(_ context.Context, _ port.RepositoryIdentity, name domainbranch.BranchName, base domainbranch.TargetBase, switchTo bool) error {
@@ -90,6 +98,13 @@ func (fake *fakeGitRepository) CreateBranch(_ context.Context, _ port.Repository
 	fake.createdName = name
 	fake.createdBase = base
 	fake.createdSwitch = switchTo
+	return fake.methodError(fake.createBranchErr)
+}
+
+func (fake *fakeGitRepository) methodError(specific error) error {
+	if specific != nil {
+		return specific
+	}
 	return fake.err
 }
 
@@ -97,6 +112,12 @@ func (fake *fakeGitRepository) StoreWorkflowBase(_ context.Context, _ port.Repos
 	fake.calls = append(fake.calls, "store-workflow-base")
 	copy := base
 	fake.workflowBase = &copy
+	return fake.err
+}
+
+func (fake *fakeGitRepository) ClearWorkflowBase(context.Context, port.RepositoryIdentity, domainbranch.BranchName) error {
+	fake.calls = append(fake.calls, "clear-workflow-base")
+	fake.workflowBase = nil
 	return fake.err
 }
 
@@ -149,11 +170,6 @@ func (fake *fakeGitRepository) DeleteLocalBranch(context.Context, port.Repositor
 	return fake.err
 }
 
-func (fake *fakeGitRepository) DeleteRemoteBranch(context.Context, port.RepositoryIdentity, domainbranch.BranchName) error {
-	fake.calls = append(fake.calls, "delete-remote-branch")
-	return fake.err
-}
-
 func (fake *fakeGitRepository) ReleaseTagsAt(context.Context, port.RepositoryIdentity, string) ([]string, error) {
 	fake.calls = append(fake.calls, "release-tags")
 	return nil, fake.err
@@ -203,12 +219,16 @@ func (fake *fakeKeyPolicy) ValidateKey(_ context.Context, _ port.RepositoryIdent
 }
 
 type fakeQualityRunner struct {
-	calls int
-	err   error
+	calls    int
+	err      error
+	requests []port.QualityRequest
 }
 
-func (fake *fakeQualityRunner) Run(context.Context, port.RepositoryIdentity) (port.QualityResult, error) {
+func (fake *fakeQualityRunner) Run(_ context.Context, _ port.RepositoryIdentity, request port.QualityRequest) (port.QualityResult, error) {
 	fake.calls++
+	fake.requests = append(fake.requests, port.QualityRequest{
+		Families: append([]domainbranch.Family(nil), request.Families...),
+	})
 	return port.QualityResult{Status: port.QualityPassed}, fake.err
 }
 
@@ -256,6 +276,63 @@ func TestValidateAllowsSharedLinesButChecksRefAndPolicy(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInvalidStateAndPropagatesDependencies(t *testing.T) {
+	t.Parallel()
+
+	feature := mustBranch("feature/ABC-123-add-export")
+	t.Run("repository root is required", func(t *testing.T) {
+		_, err := NewService(&fakeGitRepository{}, &fakeKeyPolicy{}).Validate(
+			context.Background(),
+			ValidateRequest{Name: feature},
+		)
+		assertProblemCode(t, err, problem.CodeRepositoryNotFound)
+	})
+	t.Run("branch name is required", func(t *testing.T) {
+		_, err := NewService(&fakeGitRepository{}, &fakeKeyPolicy{}).Validate(
+			context.Background(),
+			ValidateRequest{Repository: testRepository()},
+		)
+		assertProblemCode(t, err, problem.CodeBranchNameInvalid)
+	})
+	t.Run("cancelled context stops validation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := NewService(&fakeGitRepository{}, &fakeKeyPolicy{}).Validate(
+			ctx,
+			ValidateRequest{Repository: testRepository(), Name: feature},
+		)
+		assertProblemCode(t, err, problem.CodeOperationCancelled)
+	})
+	t.Run("key policy failure is preserved", func(t *testing.T) {
+		expected := errors.New("policy denied")
+		_, err := NewService(&fakeGitRepository{}, &fakeKeyPolicy{err: expected}).Validate(
+			context.Background(),
+			ValidateRequest{Repository: testRepository(), Name: feature},
+		)
+		if !errors.Is(err, expected) {
+			t.Fatalf("Validate() error = %v, want %v", err, expected)
+		}
+	})
+	t.Run("git ref failure is preserved", func(t *testing.T) {
+		expected := errors.New("invalid ref")
+		_, err := NewService(&fakeGitRepository{validateRefErr: expected}, &fakeKeyPolicy{}).Validate(
+			context.Background(),
+			ValidateRequest{Repository: testRepository(), Name: feature},
+		)
+		if !errors.Is(err, expected) {
+			t.Fatalf("Validate() error = %v, want %v", err, expected)
+		}
+	})
+	t.Run("nil key policy remains optional", func(t *testing.T) {
+		if _, err := NewService(&fakeGitRepository{}, nil).Validate(
+			context.Background(),
+			ValidateRequest{Repository: testRepository(), Name: feature},
+		); err != nil {
+			t.Fatalf("Validate() error = %v", err)
+		}
+	})
+}
+
 func TestCreateRegularBranch(t *testing.T) {
 	t.Parallel()
 
@@ -299,6 +376,28 @@ func TestCreateDryRunNeverMutates(t *testing.T) {
 	}
 	if got := strings.Join(git.calls, ","); got != "validate-ref,has-commits,branch-exists,official-branches-for-ticket" {
 		t.Fatalf("dry-run calls = %q", got)
+	}
+}
+
+func TestCreateHonorsSkipFetchAndExplicitNoSwitch(t *testing.T) {
+	t.Parallel()
+
+	git := &fakeGitRepository{hasCommits: true, clean: true}
+	service := NewService(git, &fakeKeyPolicy{})
+	request := regularRequest()
+	request.SkipFetch = true
+	switchTo := false
+	request.Switch = &switchTo
+
+	result, err := service.Create(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Switched || len(result.Plan) != 1 || result.Plan[0].Action != "create" {
+		t.Fatalf("Create() = %#v", result)
+	}
+	if strings.Contains(strings.Join(git.calls, ","), "fetch") || git.createdSwitch {
+		t.Fatalf("Create() did not honor skip fetch/no switch: %v", git.calls)
 	}
 }
 
@@ -354,6 +453,45 @@ func TestCreateStopsBeforeMutationOnInvalidState(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCreatePropagatesEveryGitDependencyFailure(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name string
+		git  *fakeGitRepository
+	}{
+		{name: "has commits", git: &fakeGitRepository{hasCommitsErr: errors.New("head failed")}},
+		{name: "worktree", git: &fakeGitRepository{hasCommits: true, worktreeCleanErr: errors.New("status failed")}},
+		{name: "fetch", git: &fakeGitRepository{hasCommits: true, clean: true, fetchErr: errors.New("fetch failed")}},
+		{name: "branch exists", git: &fakeGitRepository{hasCommits: true, clean: true, branchExistsErr: errors.New("exists failed")}},
+		{name: "ticket lookup", git: &fakeGitRepository{hasCommits: true, clean: true, officialBranchesErr: errors.New("lookup failed")}},
+		{name: "create", git: &fakeGitRepository{hasCommits: true, clean: true, createBranchErr: errors.New("create failed")}},
+	}
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := NewService(testCase.git, &fakeKeyPolicy{}).Create(context.Background(), regularRequest())
+			if err == nil {
+				t.Fatal("Create() error = nil")
+			}
+		})
+	}
+
+	t.Run("dry run propagates availability failure without mutation", func(t *testing.T) {
+		git := &fakeGitRepository{hasCommits: true, branchExistsErr: errors.New("exists failed")}
+		request := regularRequest()
+		request.DryRun = true
+		_, err := NewService(git, &fakeKeyPolicy{}).Create(context.Background(), request)
+		if err == nil {
+			t.Fatal("Create() error = nil")
+		}
+		if strings.Contains(strings.Join(git.calls, ","), "fetch") || strings.Contains(strings.Join(git.calls, ","), "create-branch") {
+			t.Fatalf("dry run mutated through calls %v", git.calls)
+		}
+	})
 }
 
 func TestCreateSpecialBranchesRequireCorrectBases(t *testing.T) {
@@ -476,6 +614,145 @@ func TestCreateAllowsWorkflowManagedBranchesToReuseTicketAcrossActiveLines(t *te
 	if strings.Contains(strings.Join(git.calls, ","), "official-branches-for-ticket") {
 		t.Fatalf("workflow-managed branch must not apply regular-ticket exclusivity: %v", git.calls)
 	}
+}
+
+func TestBranchCreationHelperContracts(t *testing.T) {
+	t.Parallel()
+
+	t.Run("exclusive ticket branch applies only to regular work", func(t *testing.T) {
+		for _, testCase := range []struct {
+			family          domainbranch.Family
+			workflowManaged bool
+			want            bool
+		}{
+			{domainbranch.FamilyFeature, false, true},
+			{domainbranch.FamilyFix, false, true},
+			{domainbranch.FamilyDocs, false, true},
+			{domainbranch.FamilyRefactor, false, true},
+			{domainbranch.FamilyChore, false, true},
+			{domainbranch.FamilyTest, false, true},
+			{domainbranch.FamilyPerf, false, true},
+			{domainbranch.FamilyHotfix, false, false},
+			{domainbranch.FamilyScratch, false, false},
+			{domainbranch.FamilyFeature, true, false},
+		} {
+			if got := requiresExclusiveTicketBranch(testCase.family, testCase.workflowManaged); got != testCase.want {
+				t.Fatalf("requiresExclusiveTicketBranch(%q, %t) = %t, want %t", testCase.family, testCase.workflowManaged, got, testCase.want)
+			}
+		}
+	})
+
+	t.Run("normalization defaults remote and rejects missing root", func(t *testing.T) {
+		if _, err := normalizeRepository(port.RepositoryIdentity{}); err == nil {
+			t.Fatal("normalizeRepository accepted empty root")
+		}
+		repository, err := normalizeRepository(port.RepositoryIdentity{Root: "C:/repo"})
+		if err != nil || repository.Remote != "origin" {
+			t.Fatalf("normalizeRepository() = (%#v, %v)", repository, err)
+		}
+	})
+
+	t.Run("resolver rejects invalid workflow families and inputs", func(t *testing.T) {
+		for _, request := range []CreateRequest{
+			{Family: domainbranch.Family("unknown")},
+			{Family: domainbranch.FamilyRelease},
+			{Family: domainbranch.FamilySupport},
+			{Family: domainbranch.FamilyMain},
+			hotfixRequest(false),
+			{Family: domainbranch.FamilyFeature, Ticket: ticket.ID{}},
+		} {
+			if _, _, err := resolveCreation(request, testRepository()); err == nil {
+				t.Fatalf("resolveCreation(%#v) error = nil", request)
+			}
+		}
+	})
+
+	t.Run("regular base cannot be overridden outside workflow", func(t *testing.T) {
+		request := regularRequest()
+		base := mustBase("origin", "main")
+		request.Base = &base
+		if _, _, err := resolveCreation(request, testRepository()); err == nil {
+			t.Fatal("resolveCreation accepted main base for regular feature branch")
+		}
+	})
+
+	t.Run("workflow managed release stabilization bases are accepted", func(t *testing.T) {
+		for _, family := range []domainbranch.Family{domainbranch.FamilyFix, domainbranch.FamilyDocs, domainbranch.FamilyChore} {
+			request := regularRequest()
+			request.Family = family
+			request.WorkflowManaged = true
+			base := mustBase("origin", "release/2.8.0")
+			request.Base = &base
+			_, resolved, err := resolveCreation(request, testRepository())
+			if err != nil || resolved.String() != "origin/release/2.8.0" {
+				t.Fatalf("resolveCreation(%q) = (%q, %v)", family, resolved, err)
+			}
+		}
+	})
+
+	t.Run("hotfix accepts every real affected shared line", func(t *testing.T) {
+		for _, raw := range []string{"main", "release/2.8.0", "support/2.7"} {
+			request := hotfixRequest(true)
+			base := mustBase("origin", raw)
+			request.Base = &base
+			_, resolved, err := resolveCreation(request, testRepository())
+			if err != nil || resolved.String() != "origin/"+raw {
+				t.Fatalf("resolveCreation(%q) = (%q, %v)", raw, resolved, err)
+			}
+		}
+	})
+
+	t.Run("workflow managed feature cannot override develop", func(t *testing.T) {
+		request := regularRequest()
+		request.WorkflowManaged = true
+		base := mustBase("origin", "main")
+		request.Base = &base
+		if _, _, err := resolveCreation(request, testRepository()); err == nil {
+			t.Fatal("resolveCreation accepted a non-develop feature base")
+		}
+	})
+
+	t.Run("special base rules reject incorrect lines", func(t *testing.T) {
+		testCases := []struct {
+			family domainbranch.Family
+			base   domainbranch.TargetBase
+		}{
+			{domainbranch.FamilyHotfix, mustBase("origin", "develop")},
+			{domainbranch.FamilyScratch, mustBase("origin", "main")},
+			{domainbranch.FamilyFix, mustBase("origin", "feature/ABC-123-add-export")},
+			{domainbranch.FamilyDocs, mustBase("origin", "develop")},
+			{domainbranch.FamilyChore, mustBase("origin", "develop")},
+		}
+		for _, testCase := range testCases {
+			if err := validateSpecialBase(testCase.family, testCase.base); err == nil {
+				t.Fatalf("validateSpecialBase(%q, %q) error = nil", testCase.family, testCase.base)
+			}
+		}
+		if err := validateSpecialBase(domainbranch.FamilyFeature, mustBase("origin", "develop")); err != nil {
+			t.Fatalf("validateSpecialBase(feature) error = %v", err)
+		}
+	})
+
+	t.Run("problem helpers and plans remain actionable", func(t *testing.T) {
+		for _, err := range []error{
+			specialWorkflowRequired(domainbranch.FamilyRelease),
+			invalidBranchInput("missing branch"),
+			invalidBase("origin/main", "wrong base", "origin/develop"),
+		} {
+			if _, ok := problem.As(err); !ok {
+				t.Fatalf("helper error %T is not a problem", err)
+			}
+		}
+		if got := (PlanStep{Action: "fetch", Detail: "origin"}).String(); got != "fetch: origin" {
+			t.Fatalf("PlanStep.String() = %q", got)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		assertProblemCode(t, contextError(ctx), problem.CodeOperationCancelled)
+		if err := contextError(nil); err != nil {
+			t.Fatalf("contextError(nil) = %v", err)
+		}
+	})
 }
 
 func TestSyncPolicy(t *testing.T) {

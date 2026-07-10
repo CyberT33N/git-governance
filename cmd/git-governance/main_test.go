@@ -2,8 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/CyberT33N/git-governance/internal/domain/problem"
+	"github.com/spf13/cobra"
 )
 
 func TestNewCommandUsesBuildMetadata(t *testing.T) {
@@ -25,5 +30,55 @@ func TestNewCommandUsesBuildMetadata(t *testing.T) {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("version output missing %q: %q", expected, output.String())
 		}
+	}
+}
+
+func TestExecuteAndMainExitContract(t *testing.T) {
+	command := &cobra.Command{
+		Use: "test",
+		RunE: func(*cobra.Command, []string) error {
+			return problem.New(problem.Details{
+				Code:     problem.CodeInvalidInput,
+				Category: problem.CategoryUsage,
+			})
+		},
+	}
+	output := &bytes.Buffer{}
+	command.SetOut(output)
+	command.SetErr(output)
+	if code := execute(context.Background(), command); code != problem.ExitUsage {
+		t.Fatalf("execute() = %d, want %d", code, problem.ExitUsage)
+	}
+
+	previousExit, previousBuilder := exitProcess, buildCommand
+	t.Cleanup(func() {
+		exitProcess, buildCommand = previousExit, previousBuilder
+	})
+	exitCode := -1
+	exitProcess = func(code int) {
+		exitCode = code
+	}
+	buildCommand = func() *cobra.Command {
+		return &cobra.Command{
+			Use: "test",
+			RunE: func(*cobra.Command, []string) error {
+				return nil
+			},
+		}
+	}
+	main()
+	if exitCode != problem.ExitSuccess {
+		t.Fatalf("main exit code = %d", exitCode)
+	}
+
+	failing := &cobra.Command{
+		Use: "test",
+		RunE: func(*cobra.Command, []string) error {
+			return errors.New("unexpected")
+		},
+	}
+	failing.SetErr(&bytes.Buffer{})
+	if code := execute(context.Background(), failing); code != problem.ExitInternal {
+		t.Fatalf("untyped execute() = %d", code)
 	}
 }

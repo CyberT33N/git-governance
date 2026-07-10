@@ -103,6 +103,37 @@ func TestValidatePrePushUpdatesValidatesEveryBranchUpdate(t *testing.T) {
 	}
 }
 
+func TestValidatePrePushUpdatesRunsQualityOnceForAllGovernedFamilies(t *testing.T) {
+	t.Parallel()
+
+	git := &fakeGitRepository{
+		inspections: []port.PushUpdateInspection{
+			{FastForward: true, CommitMessages: []string{"feat(ABC-123): add export"}},
+			{FastForward: true, CommitMessages: []string{"docs(ABC-124): update guide"}},
+		},
+	}
+	quality := &fakeQualityRunner{}
+	synchronizer := NewSynchronizer(git, NewService(git, &fakeKeyPolicy{}), quality)
+
+	result, err := synchronizer.ValidatePrePushUpdates(context.Background(), testRepository(), []PushUpdate{
+		pushUpdate(t, "refs/heads/feature/ABC-123-add-export", "feature/ABC-123-add-export", PushActionCreate),
+		pushUpdate(t, "refs/heads/docs/ABC-124-update-guide", "docs/ABC-124-update-guide", PushActionCreate),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quality.calls != 1 || len(quality.requests) != 1 {
+		t.Fatalf("quality calls = %d, requests = %#v", quality.calls, quality.requests)
+	}
+	families := quality.requests[0].Families
+	if len(families) != 2 || families[0] != branch.FamilyFeature || families[1] != branch.FamilyDocs {
+		t.Fatalf("quality families = %v", families)
+	}
+	if result.Quality.Status != port.QualityPassed {
+		t.Fatalf("quality result = %#v", result.Quality)
+	}
+}
+
 func TestValidatePrePushUpdatesEnforcesFirstPushAndForcePushPolicy(t *testing.T) {
 	t.Parallel()
 
@@ -145,8 +176,11 @@ func TestValidatePrePushUpdatesHandlesDeletionAndNonBranchRefs(t *testing.T) {
 		result, err := synchronizer.ValidatePrePushUpdates(context.Background(), testRepository(), []PushUpdate{
 			pushUpdate(t, "(delete)", "feature/ABC-123-add-export", PushActionDelete),
 		}, nil)
-		if err != nil || len(result) != 1 || result[0].Update.Action != PushActionDelete {
+		if err != nil || len(result.Updates) != 1 || result.Updates[0].Update.Action != PushActionDelete {
 			t.Fatalf("ValidatePrePushUpdates() = (%#v, %v)", result, err)
+		}
+		if result.Quality.Status != port.QualitySkipped {
+			t.Fatalf("deletion quality = %#v", result.Quality)
 		}
 	})
 
@@ -169,8 +203,11 @@ func TestValidatePrePushUpdatesHandlesDeletionAndNonBranchRefs(t *testing.T) {
 			RemoteObjectID: strings.Repeat("0", 40),
 			Action:         PushActionOther,
 		}}, nil)
-		if err != nil || len(result) != 1 || !result[0].Skipped {
+		if err != nil || len(result.Updates) != 1 || !result.Updates[0].Skipped {
 			t.Fatalf("ValidatePrePushUpdates() = (%#v, %v)", result, err)
+		}
+		if result.Quality.Status != port.QualitySkipped {
+			t.Fatalf("tag quality = %#v", result.Quality)
 		}
 	})
 }
@@ -211,7 +248,7 @@ func TestValidatePrePushUpdatesUsesExplicitHotfixBase(t *testing.T) {
 	result, err := synchronizer.ValidatePrePushUpdates(context.Background(), testRepository(), []PushUpdate{
 		pushUpdate(t, "refs/heads/hotfix/ABC-999-payment-timeout", "hotfix/ABC-999-payment-timeout", PushActionCreate),
 	}, &base)
-	if err != nil || len(result) != 1 || result[0].Base == nil || result[0].Base.String() != "origin/main" {
+	if err != nil || len(result.Updates) != 1 || result.Updates[0].Base == nil || result.Updates[0].Base.String() != "origin/main" {
 		t.Fatalf("ValidatePrePushUpdates() = (%#v, %v)", result, err)
 	}
 }
@@ -231,7 +268,7 @@ func TestValidatePrePushUpdatesUsesStoredWorkflowBase(t *testing.T) {
 	result, err := synchronizer.ValidatePrePushUpdates(context.Background(), testRepository(), []PushUpdate{
 		pushUpdate(t, "refs/heads/hotfix/ABC-999-payment-timeout", "hotfix/ABC-999-payment-timeout", PushActionCreate),
 	}, nil)
-	if err != nil || len(result) != 1 || result[0].Base == nil || result[0].Base.String() != "origin/main" {
+	if err != nil || len(result.Updates) != 1 || result.Updates[0].Base == nil || result.Updates[0].Base.String() != "origin/main" {
 		t.Fatalf("ValidatePrePushUpdates() = (%#v, %v)", result, err)
 	}
 }

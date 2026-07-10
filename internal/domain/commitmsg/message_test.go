@@ -1,6 +1,7 @@
 package commitmsg
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -221,6 +222,149 @@ func TestNewHeaderMessageAndFooter(t *testing.T) {
 	}
 }
 
+func TestMessageValueObjectErrorAndAccessorPaths(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NewHeader(Type("unknown"), ticket.ID{}, "subject", false); err == nil {
+		t.Fatal("NewHeader accepted an unknown type and zero ticket")
+	}
+	if _, err := NewHeader(TypeFeat, ticket.ID{}, "subject", false); err == nil {
+		t.Fatal("NewHeader accepted a zero ticket")
+	}
+
+	id, err := ticket.ParseID("ABC-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := NewHeader(TypeFeat, id, "add export", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header.Ticket().String() != "ABC-123" || header.Subject() != "add export" {
+		t.Fatalf("header accessors = (%q, %q)", header.Ticket(), header.Subject())
+	}
+	footer, err := NewFooter("Refs", "#123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if footer.Token() != "Refs" || footer.Value() != "#123" {
+		t.Fatalf("footer accessors = (%q, %q)", footer.Token(), footer.Value())
+	}
+	if _, err := newFooter("invalid token!", ": ", "value"); err == nil {
+		t.Fatal("newFooter accepted invalid token")
+	}
+	if _, err := newFooter("Refs", "=", "value"); err == nil {
+		t.Fatal("newFooter accepted invalid separator")
+	}
+	if _, err := newFooter("BREAKING CHANGE", " #", "value"); err == nil {
+		t.Fatal("newFooter accepted invalid breaking separator")
+	}
+	if _, err := newFooter("Refs", ": ", " padded "); err == nil {
+		t.Fatal("newFooter accepted padded value")
+	}
+	if _, err := NewMessage(Header{}, "", nil); err == nil {
+		t.Fatal("NewMessage accepted a zero header")
+	}
+	if _, err := NewMessage(header, "\x00", nil); err == nil {
+		t.Fatal("NewMessage accepted a control character in the body")
+	}
+	if _, err := NewMessage(header, "", []Footer{{}}); err == nil {
+		t.Fatal("NewMessage accepted an invalid footer value object")
+	}
+	message, err := NewMessage(header, "", []Footer{footer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.Header().String() != header.String() {
+		t.Fatalf("Message.Header() = %q", message.Header())
+	}
+	breakingFooter, err := NewFooter("BREAKING CHANGE", "migration required")
+	if err != nil {
+		t.Fatal(err)
+	}
+	breakingMessage, err := NewMessage(header, "", []Footer{breakingFooter})
+	if err != nil || !breakingMessage.IsBreaking() {
+		t.Fatalf("footer breaking message = (%#v, %v)", breakingMessage, err)
+	}
+	revertHeader, err := NewHeader(TypeRevert, id, "revert export", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewMessage(revertHeader, "Refs: no commit here", nil); err == nil {
+		t.Fatal("revert message without SHA reference was accepted")
+	}
+}
+
+func TestParseHeaderDefensiveComponentFailures(t *testing.T) {
+	original := headerPattern
+	t.Cleanup(func() {
+		headerPattern = original
+	})
+
+	testCases := []struct {
+		name    string
+		pattern string
+		raw     string
+		code    problem.Code
+	}{
+		{
+			name:    "unknown type",
+			pattern: `^(unknown)\((ABC-123)\)(!)?: (subject)$`,
+			raw:     "unknown(ABC-123): subject",
+			code:    problem.CodeCommitTypeInvalid,
+		},
+		{
+			name:    "invalid ticket",
+			pattern: `^(feat)\((abc-123)\)(!)?: (subject)$`,
+			raw:     "feat(abc-123): subject",
+			code:    problem.CodeTicketKeyInvalid,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			headerPattern = regexp.MustCompile(testCase.pattern)
+			_, err := ParseHeader(testCase.raw)
+			assertProblemCode(t, err, testCase.code)
+		})
+	}
+}
+
+func TestParseMessageDefensiveSectionPaths(t *testing.T) {
+	original := headerPattern
+	t.Cleanup(func() {
+		headerPattern = original
+	})
+
+	headerPattern = regexp.MustCompile(`^(unknown)\((ABC-123)\)(!)?: (subject)$`)
+	if _, err := Parse("unknown(ABC-123): subject"); err == nil {
+		t.Fatal("Parse accepted a header with an injected unknown type")
+	}
+	headerPattern = original
+
+	id, err := ticket.ParseID("ABC-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revertHeader, err := NewHeader(TypeRevert, id, "revert export", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revertMessage, err := NewMessage(revertHeader, "Restores 0123456789abcdef.", nil)
+	if err != nil || !revertMessage.hasCommitReference() {
+		t.Fatalf("revert body reference = (%#v, %v)", revertMessage, err)
+	}
+	if _, _, err := parseSections([]string{"body\x00"}); err == nil {
+		t.Fatal("parseSections accepted a control character in body text")
+	}
+	if _, _, err := parseSections([]string{"body\x00", "", "Refs: #123"}); err == nil {
+		t.Fatal("parseSections accepted an invalid body before a footer block")
+	}
+	if _, _, err := parseSections([]string{"body", "", "Refs: #123", "\x00"}); err == nil {
+		t.Fatal("parseSections accepted an invalid footer continuation")
+	}
+}
+
 func TestInternalSectionAndFooterHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -240,6 +384,18 @@ func TestInternalSectionAndFooterHelpers(t *testing.T) {
 	}
 	if _, err := parseFooters([]string{"invalid"}); err == nil {
 		t.Fatal("parseFooters accepted invalid line")
+	}
+	if body, footers, err := parseSections(nil); err != nil || body != "" || len(footers) != 0 {
+		t.Fatalf("parseSections(nil) = (%q, %#v, %v)", body, footers, err)
+	}
+	if body, footers, err := parseSections([]string{"body", "", "still body"}); err != nil || body != "body\n\nstill body" || len(footers) != 0 {
+		t.Fatalf("parseSections(body only) = (%q, %#v, %v)", body, footers, err)
+	}
+	if got := findFooterStart([]string{}); got != -1 {
+		t.Fatalf("findFooterStart(empty) = %d", got)
+	}
+	if !isFooterLine("Refs: #123") || isFooterLine("not a footer") {
+		t.Fatal("isFooterLine classification is incorrect")
 	}
 
 	if _, err := normalizeInput("\n"); err == nil {

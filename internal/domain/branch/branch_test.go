@@ -1,6 +1,7 @@
 package branch
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -319,6 +320,111 @@ func TestNewTicketBranch(t *testing.T) {
 	}
 	if _, err := NewTicketBranch(FamilyRelease, id, slug); err == nil {
 		t.Fatal("NewTicketBranch accepted release")
+	}
+}
+
+func TestBranchValueObjectErrorAndAccessorPaths(t *testing.T) {
+	t.Parallel()
+
+	if _, err := ParseFamily("unknown"); err == nil {
+		t.Fatal("ParseFamily accepted an unknown family")
+	}
+	if (Family("unknown")).IsKnown() {
+		t.Fatal("unknown family reported known")
+	}
+
+	var zeroName BranchName
+	if !zeroName.IsZero() {
+		t.Fatal("zero branch name must report IsZero")
+	}
+	if _, ok := zeroName.Slug(); ok {
+		t.Fatal("zero branch name unexpectedly has a slug")
+	}
+	if _, ok := zeroName.ReleaseVersion(); ok {
+		t.Fatal("zero branch name unexpectedly has a release version")
+	}
+	if _, ok := zeroName.SupportVersion(); ok {
+		t.Fatal("zero branch name unexpectedly has a support version")
+	}
+	if _, err := NewTicketBranch(FamilyFeature, ticket.ID{}, Slug{}); err == nil {
+		t.Fatal("NewTicketBranch accepted a zero ticket and slug")
+	}
+	validTicket, err := ticket.ParseID("ABC-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewTicketBranch(FamilyFeature, validTicket, Slug{}); err == nil {
+		t.Fatal("NewTicketBranch accepted a zero slug")
+	}
+	if _, err := NewReleaseBranch(SemanticVersion{}); err == nil {
+		t.Fatal("NewReleaseBranch accepted a zero version")
+	}
+	if _, err := NewSupportBranch(SupportVersion{}); err == nil {
+		t.Fatal("NewSupportBranch accepted a zero version")
+	}
+	if _, err := NewTargetBase("origin", BranchName{}); err == nil {
+		t.Fatal("NewTargetBase accepted a zero branch")
+	}
+	if _, err := NewLocalBase(BranchName{}); err == nil {
+		t.Fatal("NewLocalBase accepted a zero branch")
+	}
+
+	name := mustParseBranch(t, "feature/ABC-123-add-export")
+	base, err := NewTargetBase("origin", name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.Remote() != "origin" || base.Branch().String() != name.String() {
+		t.Fatalf("base accessors = (%q, %q)", base.Remote(), base.Branch())
+	}
+	if (TargetBase{}).String() != "" {
+		t.Fatal("zero target base must render as empty")
+	}
+	for _, raw := range []string{"release/", "support/", "feature/ABC-123-", "feature/ABC-123-add-export/extra"} {
+		if _, err := ParseName(raw); err == nil {
+			t.Fatalf("ParseName(%q) unexpectedly succeeded", raw)
+		}
+	}
+}
+
+func TestParseNameDefensiveComponentFailures(t *testing.T) {
+	original := ticketBranchPattern
+	t.Cleanup(func() {
+		ticketBranchPattern = original
+	})
+
+	testCases := []struct {
+		name    string
+		pattern string
+		raw     string
+		code    problem.Code
+	}{
+		{
+			name:    "unknown family",
+			pattern: `^(unknown)/(ABC-123)-(valid)$`,
+			raw:     "unknown/ABC-123-valid",
+			code:    problem.CodeBranchFamilyInvalid,
+		},
+		{
+			name:    "invalid ticket",
+			pattern: `^(feature)/(abc-123)-(valid)$`,
+			raw:     "feature/abc-123-valid",
+			code:    problem.CodeTicketKeyInvalid,
+		},
+		{
+			name:    "invalid slug",
+			pattern: `^(feature)/(ABC-123)-(bad--slug)$`,
+			raw:     "feature/ABC-123-bad--slug",
+			code:    problem.CodeBranchSlugInvalid,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			ticketBranchPattern = regexp.MustCompile(testCase.pattern)
+			_, err := ParseName(testCase.raw)
+			assertProblemCode(t, err, testCase.code)
+		})
 	}
 }
 

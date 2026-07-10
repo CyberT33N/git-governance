@@ -49,6 +49,13 @@ type PrePushUpdateResult struct {
 	Skipped            bool
 }
 
+// PrePushBatchResult contains the per-ref governance decisions and the
+// quality-gate outcome shared by the complete Git pre-push invocation.
+type PrePushBatchResult struct {
+	Updates []PrePushUpdateResult
+	Quality port.QualityResult
+}
+
 // ParsePrePushUpdates parses Git's four-field, line-delimited pre-push input:
 //
 //	<local-ref> <local-object-id> <remote-ref> <remote-object-id>
@@ -170,33 +177,40 @@ func (synchronizer *Synchronizer) ValidatePrePushUpdates(
 	repository port.RepositoryIdentity,
 	updates []PushUpdate,
 	explicitBase *branch.TargetBase,
-) ([]PrePushUpdateResult, error) {
+) (PrePushBatchResult, error) {
 	repository, err := normalizeRepository(repository)
 	if err != nil {
-		return nil, err
+		return PrePushBatchResult{}, err
 	}
 	if synchronizer.validator == nil || synchronizer.git == nil {
-		return nil, internalDependencyError("pre-push validation dependencies")
+		return PrePushBatchResult{}, internalDependencyError("pre-push validation dependencies")
 	}
 	if len(updates) == 0 {
-		return nil, invalidPushInput(
+		return PrePushBatchResult{}, invalidPushInput(
 			"at least one Git pre-push update is required",
 			"run this mode from a Git pre-push hook or provide --branch for manual validation",
 		)
 	}
 	if err := synchronizer.git.Fetch(ctx, repository); err != nil {
-		return nil, err
+		return PrePushBatchResult{}, err
 	}
 
 	results := make([]PrePushUpdateResult, 0, len(updates))
 	for _, update := range updates {
 		result, err := synchronizer.validatePrePushUpdate(ctx, repository, update, explicitBase)
 		if err != nil {
-			return nil, err
+			return PrePushBatchResult{}, err
 		}
 		results = append(results, result)
 	}
-	return results, nil
+	quality, err := synchronizer.runQualityForUpdates(ctx, repository, results)
+	if err != nil {
+		return PrePushBatchResult{}, err
+	}
+	return PrePushBatchResult{
+		Updates: results,
+		Quality: quality,
+	}, nil
 }
 
 func (synchronizer *Synchronizer) validatePrePushUpdate(
@@ -267,6 +281,27 @@ func (synchronizer *Synchronizer) validatePrePushUpdate(
 		return PrePushUpdateResult{}, err
 	}
 	return result, nil
+}
+
+func (synchronizer *Synchronizer) runQualityForUpdates(
+	ctx context.Context,
+	repository port.RepositoryIdentity,
+	results []PrePushUpdateResult,
+) (port.QualityResult, error) {
+	families := make([]branch.Family, 0, len(results))
+	for _, result := range results {
+		if !result.Update.GovernedBranch || result.Update.Action == PushActionDelete {
+			continue
+		}
+		families = append(families, result.Update.Target.Family())
+	}
+	if len(families) == 0 {
+		return port.QualityResult{
+			Status: port.QualitySkipped,
+			Detail: "no outgoing governed branch update requires quality gates",
+		}, nil
+	}
+	return synchronizer.runQuality(ctx, repository, families...)
 }
 
 // ValidateCommitSeries confirms that every outgoing commit belongs to the

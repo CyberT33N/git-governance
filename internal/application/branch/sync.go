@@ -239,6 +239,7 @@ type PrePushResult struct {
 	Base               *branch.TargetBase
 	Publication        branch.PublicationState
 	MissingBaseCommits bool
+	Quality            port.QualityResult
 }
 
 // ValidatePrePush validates an outgoing branch but never rewrites, merges, or
@@ -266,9 +267,14 @@ func (synchronizer *Synchronizer) ValidatePrePush(ctx context.Context, request P
 		})
 	}
 	if request.Name.Family() == branch.FamilyScratch {
+		quality, err := synchronizer.runQuality(ctx, repository, request.Name.Family())
+		if err != nil {
+			return PrePushResult{}, err
+		}
 		return PrePushResult{
 			Name:        request.Name,
 			Publication: branch.PublicationUnknown,
+			Quality:     quality,
 		}, nil
 	}
 	if !request.Name.Family().IsOfficialWorkingBranch() {
@@ -323,6 +329,11 @@ func (synchronizer *Synchronizer) ValidatePrePush(ctx context.Context, request P
 			Remediation: "run branch sync-base --strategy rebase, rerun quality checks, then push again",
 		})
 	}
+	quality, err := synchronizer.runQuality(ctx, repository, request.Name.Family())
+	if err != nil {
+		return PrePushResult{}, err
+	}
+	result.Quality = quality
 	return result, nil
 }
 
@@ -337,14 +348,18 @@ func (synchronizer *Synchronizer) ValidatePush(ctx context.Context, repository p
 	return err
 }
 
-func (synchronizer *Synchronizer) runQuality(ctx context.Context, repository port.RepositoryIdentity) (port.QualityResult, error) {
+func (synchronizer *Synchronizer) runQuality(
+	ctx context.Context,
+	repository port.RepositoryIdentity,
+	families ...branch.Family,
+) (port.QualityResult, error) {
 	if synchronizer.quality == nil {
 		return port.QualityResult{
 			Status: port.QualityUnconfigured,
 			Detail: "no quality runner is configured",
 		}, nil
 	}
-	return synchronizer.quality.Run(ctx, repository)
+	return synchronizer.quality.Run(ctx, repository, port.QualityRequest{Families: families})
 }
 
 func (synchronizer *Synchronizer) workflowBase(
@@ -380,7 +395,7 @@ func (synchronizer *Synchronizer) validateAfterMutation(
 	}); err != nil {
 		return port.QualityResult{}, err
 	}
-	return synchronizer.runQuality(ctx, repository)
+	return synchronizer.runQuality(ctx, repository, name.Family())
 }
 
 func recommendedAction(publication branch.PublicationState) string {

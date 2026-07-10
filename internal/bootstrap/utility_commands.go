@@ -46,7 +46,7 @@ func newPrePushCommand(application *application) *cobra.Command {
 				if branchRaw != "" {
 					return invalidOption("branch", branchRaw, "--branch is only supported when no Git pre-push updates are supplied")
 				}
-				results, err := services.sync.ValidatePrePushUpdates(command.Context(), repository, updates, base)
+				result, err := services.sync.ValidatePrePushUpdates(command.Context(), repository, updates, base)
 				if err != nil {
 					return err
 				}
@@ -54,9 +54,11 @@ func newPrePushCommand(application *application) *cobra.Command {
 					Operation: "validate.pre-push",
 					Summary:   "Pre-push validation passed for every supplied update.",
 					Fields: map[string]string{
-						"updates": strconv.Itoa(len(results)),
+						"updates":       strconv.Itoa(len(result.Updates)),
+						"qualityStatus": string(result.Quality.Status),
+						"qualityDetail": result.Quality.Detail,
 					},
-					Data: results,
+					Data: result,
 				})
 			}
 
@@ -80,6 +82,8 @@ func newPrePushCommand(application *application) *cobra.Command {
 				fields["base"] = result.Base.String()
 				fields["missingBaseCommits"] = boolString(result.MissingBaseCommits)
 			}
+			fields["qualityStatus"] = string(result.Quality.Status)
+			fields["qualityDetail"] = result.Quality.Detail
 			return application.report(command, port.Report{
 				Operation: "validate.pre-push",
 				Summary:   "Pre-push validation passed.",

@@ -1,0 +1,92 @@
+name: Create Protected Shared Line
+
+on:
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: "Protected line kind"
+        required: true
+        type: choice
+        options:
+          - release
+          - support
+      version:
+        description: "Release: major.minor.patch; support: major.minor"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: protected-line-${{ inputs.kind }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  create:
+    if: github.repository == 'CyberT33N/git-governance'
+    name: Create ${{ inputs.kind }} line
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Check out complete repository history
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: true
+
+      - name: Validate request and select protected source
+        id: line
+        shell: bash
+        env:
+          KIND: ${{ inputs.kind }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          case "${KIND}" in
+            release)
+              if ! [[ "${VERSION}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+                echo "release version must be a SemVer value without a leading v" >&2
+                exit 1
+              fi
+              source="origin/develop"
+              target="release/${VERSION}"
+              ;;
+            support)
+              if ! [[ "${VERSION}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+                echo "support version must be major.minor without leading zeroes" >&2
+                exit 1
+              fi
+              source="origin/main"
+              target="support/${VERSION}"
+              matching_tag="$(git tag --points-at "${source}" --list "v${VERSION}.*" | grep -E "^v${VERSION//./\\.}\.[0-9]+([-.+].*)?$" || true)"
+              if [[ -z "${matching_tag}" ]]; then
+                echo "origin/main must carry a matching v${VERSION}.<patch> release tag before a support line can be created" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "unsupported protected line kind: ${KIND}" >&2
+              exit 1
+              ;;
+          esac
+
+          git rev-parse --verify "${source}^{commit}" >/dev/null
+          if git ls-remote --exit-code --heads origin "refs/heads/${target}" >/dev/null 2>&1; then
+            echo "protected line ${target} already exists on origin" >&2
+            exit 1
+          fi
+
+          echo "source=${source}" >> "${GITHUB_OUTPUT}"
+          echo "target=${target}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create protected remote line from selected source
+        shell: bash
+        env:
+          SOURCE: ${{ steps.line.outputs.source }}
+          TARGET: ${{ steps.line.outputs.target }}
+        run: |
+          set -euo pipefail
+          git push origin "${SOURCE}:refs/heads/${TARGET}"
