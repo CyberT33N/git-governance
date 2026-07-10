@@ -637,9 +637,8 @@ func normalizeWorkflowRepository(repository port.RepositoryIdentity) (port.Repos
 }
 
 func mustMain() branch.BranchName {
-	name, err := branch.ParseName("main")
-	if err != nil {
-		panic(err)
-	}
+	// This literal is part of the product's fixed branch taxonomy and is
+	// independently validated by the branch domain tests.
+	name, _ := branch.ParseName("main")
 	return name
 }

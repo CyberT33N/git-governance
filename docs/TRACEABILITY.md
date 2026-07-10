@@ -15,7 +15,7 @@ does not rely on any external governance repository or unpublished rule set.
 
 | Item | Status | Evidence |
 |---|---|---|
-| Local repository | VERIFIED | unborn `main` branch with `origin` set to `https://github.com/CyberT33N/git-governance.git`; all project files are currently untracked |
+| Local repository | VERIFIED | `main` and `origin/main` are initialized; the audit baseline was commit `1da3f72` (`added unit tests`) |
 | Go toolchain | VERIFIED | Go 1.26.5, Windows amd64 |
 | Git client | VERIFIED | Git 2.53.0.windows.2 |
 | Legacy scripts and copied hooks | VERIFIED | not present in this repository |

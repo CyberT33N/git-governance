@@ -84,6 +84,24 @@ func TestValidatePrePushUpdatesBlocksActualSharedLineTargets(t *testing.T) {
 	}
 }
 
+func TestValidatePrePushUpdatesPropagatesSharedLineReferenceValidationFailure(t *testing.T) {
+	t.Parallel()
+
+	validateErr := errors.New("shared line ref is invalid")
+	git := &fakeGitRepository{validateRefErr: validateErr}
+	synchronizer := NewSynchronizer(git, NewService(git, &fakeKeyPolicy{}), nil)
+
+	_, err := synchronizer.ValidatePrePushUpdates(
+		context.Background(),
+		testRepository(),
+		[]PushUpdate{pushUpdate(t, "HEAD", "main", PushActionUpdate)},
+		nil,
+	)
+	if !errors.Is(err, validateErr) {
+		t.Fatalf("ValidatePrePushUpdates() error = %v, want %v", err, validateErr)
+	}
+}
+
 func TestValidatePrePushUpdatesValidatesEveryBranchUpdate(t *testing.T) {
 	t.Parallel()
 

@@ -291,12 +291,11 @@ Eine fehlende Datei lautet stets `unconfigured`, nie `passed`.
 
 Remote-Löschung ist keine CLI-Aufgabe. Hosting-Plattform und CI steuern die
 Löschung gemergter Ticket- und Hotfix-Branches sowie den zeitlich späteren
-Release-Cleanup nach Promotion und Backmerge. Die CLI löscht:
+Release-Cleanup nach Promotion und Backmerge. Die CLI löscht ausschließlich:
 
-- `scratch/*` lokal,
-- einen lokalen offiziellen Arbeitsbranch nur mit explizitem
-  `--local-official`,
-- niemals `main`, `develop`, `release/*` oder `support/*`,
+- lokale `scratch/*`-Branches,
+- niemals offizielle Ticket-, Hotfix-, Release- oder Support-Branches,
+- niemals `main` oder `develop`,
 - niemals einen Remote-Branch.
 
 Beim lokalen Löschen entfernt die CLI die zugehörige lokale

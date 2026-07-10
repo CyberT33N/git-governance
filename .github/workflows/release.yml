@@ -67,6 +67,14 @@ jobs:
             exit 1
           }
           go test ./...
+          coverage="$(go test -cover ./...)"
+          printf '%s\n' "${coverage}"
+          incomplete="$(printf '%s\n' "${coverage}" | awk '/coverage:/ { for (i = 1; i <= NF; i++) if ($i == "coverage:" && $(i + 1) != "100.0%") print }')"
+          test -z "${incomplete}" || {
+            echo "Every package with executable statements must reach 100.0% coverage." >&2
+            echo "${incomplete}" >&2
+            exit 1
+          }
           CGO_ENABLED=1 go test -race ./...
           go vet ./...
           go install golang.org/x/vuln/cmd/govulncheck@v1.5.0

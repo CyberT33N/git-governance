@@ -515,11 +515,11 @@ Lifecycle-Nachweise gehören zu GitHub, GitLab oder CI:
 - `main`, `develop`, `release/*` und `support/*` sind nie lokale
   CLI-Cleanup-Ziele.
 
-Die CLI erlaubt standardmäßig nur lokale `scratch/*`-Bereinigung. Ein lokaler
-offizieller Arbeitsbranch kann erst mit dem expliziten Flag
-`--local-official` entfernt werden. Das Kommando entfernt anschließend auch
-seine lokale Workflow-Basis-Metadaten. Es behauptet nicht, einen Hosting-Merge
-oder Forward-/Backport-Abschluss beweisen zu können.
+Die CLI erlaubt ausschließlich lokale `scratch/*`-Bereinigung und entfernt
+deren lokale Workflow-Basis-Metadaten. Offizielle Ticket-, Hotfix-, Release-
+und Support-Branches sind keine lokalen CLI-Cleanup-Ziele. Das Kommando
+behauptet nicht, einen Hosting-Merge oder Forward-/Backport-Abschluss beweisen
+zu können.
 
 ## 14. `validate pre-push`
 

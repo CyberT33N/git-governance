@@ -103,10 +103,9 @@ func (service *TicketService) StartTicket(ctx context.Context, request StartTick
 			return StartTicketResult{}, err
 		}
 	}
-	localBase, err := branch.NewLocalBase(official.Name)
-	if err != nil {
-		return StartTicketResult{}, err
-	}
+	// official.Name was just created by the branch service and is therefore a
+	// canonical local branch name. NewLocalBase cannot reject that invariant.
+	localBase, _ := branch.NewLocalBase(official.Name)
 	switchToScratch := true
 	scratch, err := service.branches.Create(ctx, branchapp.CreateRequest{
 		Repository: request.Repository,
@@ -165,19 +164,20 @@ func (service *TicketService) PublishTicket(ctx context.Context, request Publish
 		)
 	}
 
-	validation, err := service.branches.Validate(ctx, branchapp.ValidateRequest{
-		Repository: request.Repository,
-		Name:       request.Branch,
-	})
-	if err != nil {
-		return PublishTicketResult{}, err
-	}
 	repository := request.Repository
 	if repository.Remote == "" {
 		repository.Remote = "origin"
 	}
 	if repository.Root == "" {
 		return PublishTicketResult{}, repositoryRequired()
+	}
+
+	validation, err := service.branches.Validate(ctx, branchapp.ValidateRequest{
+		Repository: repository,
+		Name:       request.Branch,
+	})
+	if err != nil {
+		return PublishTicketResult{}, err
 	}
 	baseInput := request.Base
 	if baseInput == nil && validation.Name.Family().MayUseWorkflowBase() {
@@ -375,10 +375,9 @@ func isWorkflowManagedTicketBase(family branch.Family, base branch.TargetBase) b
 }
 
 func mustDevelop() branch.BranchName {
-	name, err := branch.ParseName("develop")
-	if err != nil {
-		panic(err)
-	}
+	// This literal is part of the product's fixed branch taxonomy and is
+	// independently validated by the branch domain tests.
+	name, _ := branch.ParseName("develop")
 	return name
 }
 

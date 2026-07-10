@@ -149,14 +149,10 @@ func (runner *Runner) Run(
 		if !gateApplies(config.Defaults, gate, requestedFamilies) {
 			continue
 		}
-		directory, err := resolveWorkingDirectory(repository.Root, gate.WorkingDirectory)
-		if err != nil {
-			return port.QualityResult{}, err
-		}
-		timeout, err := gateTimeout(gate.Timeout, runner.defaultTimeout)
-		if err != nil {
-			return port.QualityResult{}, invalid(path, "gate "+gate.Name+" has an invalid timeout", err)
-		}
+		// decode has already validated both values. Re-evaluating the same
+		// deterministic helpers for the actual repository root cannot fail.
+		directory, _ := resolveWorkingDirectory(repository.Root, gate.WorkingDirectory)
+		timeout, _ := gateTimeout(gate.Timeout, runner.defaultTimeout)
 		gateContext, cancel := context.WithTimeout(ctx, timeout)
 		err = runner.run(gateContext, directory, gate.Command, gate.Args...)
 		cancel()

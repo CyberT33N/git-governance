@@ -92,7 +92,9 @@ func (synchronizer *Synchronizer) Sync(ctx context.Context, request SyncRequest)
 	if strategy == "" {
 		strategy = SyncCheck
 	}
-	if strategy != SyncCheck && strategy != SyncAuto && strategy != SyncRebase && strategy != SyncMerge {
+	switch strategy {
+	case SyncCheck, SyncAuto, SyncRebase, SyncMerge:
+	default:
 		return SyncResult{}, invalidSyncStrategy(strategy)
 	}
 
@@ -151,11 +153,12 @@ func (synchronizer *Synchronizer) Sync(ctx context.Context, request SyncRequest)
 		return result, nil
 	}
 
-	switch strategy {
-	case SyncCheck:
+	if strategy == SyncCheck {
 		result.RecommendedAction = recommendedAction(publication)
 		return result, nil
-	case SyncAuto:
+	}
+
+	if strategy == SyncAuto {
 		if publication == branch.PublicationPublished {
 			result.RecommendedAction = "merge"
 			return result, nil
@@ -175,7 +178,9 @@ func (synchronizer *Synchronizer) Sync(ctx context.Context, request SyncRequest)
 		result.Mutated = true
 		result.RecommendedAction = "rebased"
 		return result, nil
-	case SyncRebase:
+	}
+
+	if strategy == SyncRebase {
 		if publication != branch.PublicationUnpublished {
 			return SyncResult{}, rebaseAfterPublishForbidden(request.Name, base)
 		}
@@ -194,39 +199,38 @@ func (synchronizer *Synchronizer) Sync(ctx context.Context, request SyncRequest)
 		result.Mutated = true
 		result.RecommendedAction = "rebased"
 		return result, nil
-	case SyncMerge:
-		if publication != branch.PublicationPublished {
-			return SyncResult{}, invalidMergeBeforePublish(request.Name)
-		}
-		if request.MergeMessage == nil {
-			return SyncResult{}, problem.New(problem.Details{
-				Code:        problem.CodeCommitHeaderInvalid,
-				Category:    problem.CategoryGovernance,
-				Field:       "merge message",
-				Expected:    "a validated Conventional Commit message",
-				Rule:        "published branch synchronization creates an explicit governed merge commit",
-				Example:     "chore(ABC-123): merge origin/develop",
-				Remediation: "supply a validated merge message matching the branch ticket",
-			})
-		}
-		if request.DryRun {
-			result.RecommendedAction = "merge"
-			return result, nil
-		}
-		if err := synchronizer.git.Merge(ctx, repository, base, *request.MergeMessage); err != nil {
-			return SyncResult{}, err
-		}
-		quality, err := synchronizer.validateAfterMutation(ctx, repository, request.Name)
-		if err != nil {
-			return SyncResult{}, err
-		}
-		result.Quality = &quality
-		result.Mutated = true
-		result.RecommendedAction = "merged"
-		return result, nil
-	default:
-		return SyncResult{}, invalidSyncStrategy(strategy)
 	}
+
+	// The strategy was validated above; reaching this point means SyncMerge.
+	if publication != branch.PublicationPublished {
+		return SyncResult{}, invalidMergeBeforePublish(request.Name)
+	}
+	if request.MergeMessage == nil {
+		return SyncResult{}, problem.New(problem.Details{
+			Code:        problem.CodeCommitHeaderInvalid,
+			Category:    problem.CategoryGovernance,
+			Field:       "merge message",
+			Expected:    "a validated Conventional Commit message",
+			Rule:        "published branch synchronization creates an explicit governed merge commit",
+			Example:     "chore(ABC-123): merge origin/develop",
+			Remediation: "supply a validated merge message matching the branch ticket",
+		})
+	}
+	if request.DryRun {
+		result.RecommendedAction = "merge"
+		return result, nil
+	}
+	if err := synchronizer.git.Merge(ctx, repository, base, *request.MergeMessage); err != nil {
+		return SyncResult{}, err
+	}
+	quality, err := synchronizer.validateAfterMutation(ctx, repository, request.Name)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	result.Quality = &quality
+	result.Mutated = true
+	result.RecommendedAction = "merged"
+	return result, nil
 }
 
 // PrePushRequest describes the local governance data checked before a push.

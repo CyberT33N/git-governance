@@ -777,6 +777,10 @@ func TestPropagateHotfixRejectsInvalidRequestsBeforeMutation(t *testing.T) {
 }
 
 func newTicketService(git *fakeGitRepository, quality port.QualityRunner, publisher port.PullRequestPublisher) *TicketService {
+	return newTicketServiceWithGit(git, quality, publisher)
+}
+
+func newTicketServiceWithGit(git port.GitRepository, quality port.QualityRunner, publisher port.PullRequestPublisher) *TicketService {
 	keys := &fakeKeyPolicy{}
 	branches := branchapp.NewService(git, keys)
 	sync := branchapp.NewSynchronizer(git, branches, quality)

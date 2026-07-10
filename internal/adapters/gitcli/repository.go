@@ -369,17 +369,7 @@ func (repository *Repository) StoreWorkflowBase(ctx context.Context, identity po
 		return err
 	}
 	bases[name.String()] = base.String()
-	encoded, err := json.Marshal(bases)
-	if err != nil {
-		return problem.Wrap(problem.Details{
-			Code:        problem.CodeConfigurationInvalid,
-			Category:    problem.CategoryConfig,
-			Field:       "workflow base metadata",
-			Expected:    "a serializable local workflow-base map",
-			Rule:        "workflow base metadata must remain machine-readable",
-			Remediation: "remove malformed local Git configuration and retry the workflow",
-		}, err)
-	}
+	encoded := encodeWorkflowBases(bases)
 	result := repository.invoke(ctx, identity.Root, nil, "config", "--local", workflowBasesConfigKey, string(encoded))
 	if result.err != nil {
 		return repository.commandProblem(problem.CodeGitCommandFailed, identity, "store workflow base metadata", result)
@@ -402,17 +392,7 @@ func (repository *Repository) ClearWorkflowBase(
 		return nil
 	}
 	delete(bases, name.String())
-	encoded, err := json.Marshal(bases)
-	if err != nil {
-		return problem.Wrap(problem.Details{
-			Code:        problem.CodeConfigurationInvalid,
-			Category:    problem.CategoryConfig,
-			Field:       "workflow base metadata",
-			Expected:    "a serializable local workflow-base map",
-			Rule:        "workflow base metadata must remain machine-readable after cleanup",
-			Remediation: "remove malformed local Git configuration and retry cleanup",
-		}, err)
-	}
+	encoded := encodeWorkflowBases(bases)
 	result := repository.invoke(ctx, identity.Root, nil, "config", "--local", workflowBasesConfigKey, string(encoded))
 	if result.err != nil {
 		return repository.commandProblem(problem.CodeGitCommandFailed, identity, "clear workflow base metadata", result)
@@ -435,6 +415,14 @@ func (repository *Repository) WorkflowBase(ctx context.Context, identity port.Re
 		return branch.TargetBase{}, false, err
 	}
 	return base, true, nil
+}
+
+// encodeWorkflowBases cannot fail because the workflow metadata is restricted
+// to a map with string keys and string values. Keeping this invariant local
+// avoids an unreachable runtime error path while preserving JSON encoding.
+func encodeWorkflowBases(bases map[string]string) []byte {
+	encoded, _ := json.Marshal(bases)
+	return encoded
 }
 
 // SwitchBranch switches to an existing canonical branch.

@@ -388,6 +388,17 @@ func TestDoctorIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestDoctorStopsBeforeInspectionWhenContextIsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := NewDoctorService(nil, nil).Run(ctx, "C:/repo")
+	assertProblemCode(t, err, problem.CodeOperationCancelled)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Doctor.Run() error = %v, want context cancellation", err)
+	}
+}
+
 func TestDoctorWhiteboxDiagnostics(t *testing.T) {
 	t.Parallel()
 
