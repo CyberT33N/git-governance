@@ -53,17 +53,7 @@ jobs:
         run: go test ./...
 
       - name: Enforce complete statement coverage
-        shell: bash
-        run: |
-          set -euo pipefail
-          coverage="$(go test -cover ./...)"
-          printf '%s\n' "${coverage}"
-          incomplete="$(printf '%s\n' "${coverage}" | awk '/coverage:/ { for (i = 1; i <= NF; i++) if ($i == "coverage:" && $(i + 1) != "100.0%") print }')"
-          test -z "${incomplete}" || {
-            echo "Every package with executable statements must reach 100.0% coverage." >&2
-            echo "${incomplete}" >&2
-            exit 1
-          }
+        run: go run ./cmd/check-coverage
 
       - name: Run race detector
         run: CGO_ENABLED=1 go test -race ./...

@@ -21,6 +21,11 @@ Die Konfigurationsdatei selbst ist das Opt-in. Ohne Datei wird keine
 projekt- oder sprachspezifische Build-, Test- oder Lint-Annahme getroffen; der
 Status lautet dann `unconfigured`, nie `passed`.
 
+Dieses Repository verwendet zusätzlich den plattformneutralen
+`go run ./cmd/check-coverage`-Gate. Er führt `go test -cover ./...` aus und
+bricht ab, wenn ein Package mit ausführbaren Statements nicht exakt
+`100.0 %` erreicht. Derselbe Gate läuft lokal, im Pre-Push-Pfad und in CI.
+
 Die CLI löscht standardmäßig nur lokale `scratch/*`-Branches und entfernt dabei
 deren lokale Workflow-Basis-Metadaten. Sie löscht nie Remote-Branches und
 löscht keine Shared Lines. Die Remote-Löschung von Ticket- und Hotfix-Branches

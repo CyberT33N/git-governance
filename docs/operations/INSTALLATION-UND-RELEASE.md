@@ -153,6 +153,7 @@ Die Release-Pipeline trennt strikt:
 - Go-Toolchain pinnen
 - Dependencies mit Checksums auflösen
 - `go test ./...`
+- `go run ./cmd/check-coverage`
 - `go test -race ./...` auf nativen Testplattformen
 - `go vet ./...`
 - statische Analyse und Vulnerability Scan

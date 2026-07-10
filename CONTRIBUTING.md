@@ -18,8 +18,9 @@ CI; released artifacts are native binaries.
 
 ```powershell
 go test ./...
+go run .\cmd\check-coverage
 go vet ./...
-go run .\cmd\git-governance -- --help
+go run .\cmd\git-governance --help
 ```
 
 Format changed Go files:
@@ -63,6 +64,7 @@ Run the full local gate:
 
 ```powershell
 go test ./...
+go run .\cmd\check-coverage
 go test -race ./...
 go vet ./...
 go test ./internal/integration -count=1
@@ -100,6 +102,12 @@ gate:
       "command": "go",
       "args": ["test", "./..."],
       "timeout": "2m"
+    },
+    {
+      "name": "complete-statement-coverage",
+      "command": "go",
+      "args": ["run", "./cmd/check-coverage"],
+      "timeout": "5m"
     }
   ]
 }

@@ -88,14 +88,15 @@ does not rely on any external governance repository or unpublished rule set.
 | Gate | Status | Latest local result |
 |---|---|---|
 | `go test ./...` | VERIFIED | passed after final remediation |
+| `go run ./cmd/check-coverage` | VERIFIED | every package with executable statements reached 100.0 % |
 | `go vet ./...` | VERIFIED | passed after final remediation |
-| Domain whitebox coverage | VERIFIED | 83.8–100 % by domain package |
-| Git adapter whitebox coverage | VERIFIED | 78.5 % |
-| Preferences whitebox coverage | VERIFIED | 80.9 % |
-| Quality adapter whitebox coverage | VERIFIED | 78.0 % |
-| Workflow whitebox coverage | VERIFIED | 73.3 % |
-| Bootstrap CLI whitebox coverage | VERIFIED | 60.9 % |
-| Terminal adapter whitebox coverage | VERIFIED | 78.8 % |
+| Domain whitebox coverage | VERIFIED | 100.0 % in every domain package |
+| Git adapter whitebox coverage | VERIFIED | 100.0 % |
+| Preferences whitebox coverage | VERIFIED | 100.0 % |
+| Quality adapter whitebox coverage | VERIFIED | 100.0 % |
+| Workflow whitebox coverage | VERIFIED | 100.0 % |
+| Bootstrap CLI whitebox coverage | VERIFIED | 100.0 % |
+| Terminal adapter whitebox coverage | VERIFIED | 100.0 % |
 | Real Git integration | VERIFIED | passed against temporary local bare remotes |
 | Bounded fuzzing | VERIFIED | ticket, branch, commit, and configuration targets passed |
 | Race detection | VERIFIED | `CGO_ENABLED=1 go test -race ./...` passed locally with GCC 16.1.0 |
@@ -111,7 +112,7 @@ does not rely on any external governance repository or unpublished rule set.
 |---|---|---|
 | Lefthook configuration | IMPLEMENTED | thin `commit-msg` and `pre-push` runners; no duplicated regex |
 | Local Lefthook validation | VERIFIED | Lefthook v2.1.10 returned `All good` |
-| Reproducible release configuration | VERIFIED | GoReleaser v2.16.0 validated `.goreleaser.yaml` locally |
+| Reproducible release configuration | VERIFIED | GoReleaser v2.16.0 installed locally and validated `.goreleaser.yaml` |
 | GitHub Actions CI | IMPLEMENTED | immutable action commits, pinned tool versions, race, fuzz, vulnerability, Lefthook, native-smoke, and release-config gates are configured |
 | GitHub release artifacts | IMPLEMENTED | tag/manual-tag validation, checksums, SBOM, Cosign, provenance attestation, and Linux package formats are configured |
 | CI-owned release tag lifecycle | IMPLEMENTED | merged same-repository `release/<semver> -> main` creates an immutable annotated tag and dispatches the artifact workflow |

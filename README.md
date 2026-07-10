@@ -70,6 +70,7 @@ Clone or open the repository, then run:
 ```powershell
 go mod download
 go test ./...
+go run .\cmd\check-coverage
 go build -o .\dist\git-governance.exe .\cmd\git-governance
 .\dist\git-governance.exe --version
 ```
@@ -79,6 +80,7 @@ On macOS or Linux:
 ```bash
 go mod download
 go test ./...
+go run ./cmd/check-coverage
 go build -o ./dist/git-governance ./cmd/git-governance
 ./dist/git-governance --version
 ```
@@ -86,7 +88,7 @@ go build -o ./dist/git-governance ./cmd/git-governance
 For a local development run without producing a binary:
 
 ```powershell
-go run .\cmd\git-governance -- --help
+go run .\cmd\git-governance --help
 ```
 
 To use the Git subcommand form locally, put the built binary in a directory
@@ -665,6 +667,7 @@ Exit codes:
 
 ```powershell
 go test ./...
+go run .\cmd\check-coverage
 CGO_ENABLED=1 go test -race ./...
 go vet ./...
 go test ./internal/integration -count=1

@@ -30,6 +30,15 @@
         "./..."
       ],
       "timeout": "1m"
+    },
+    {
+      "name": "complete-statement-coverage",
+      "command": "go",
+      "args": [
+        "run",
+        "./cmd/check-coverage"
+      ],
+      "timeout": "5m"
     }
   ]
 }
