@@ -309,13 +309,17 @@ func TestRepositoryCoverageMutationFailureBranches(t *testing.T) {
 			arguments: []string{"fetch", "--prune", "origin"},
 		},
 		{
-			name:      "create branch",
-			call:      func(repository *Repository) error { return repository.CreateBranch(context.Background(), identity, name, base, false) },
+			name: "create branch",
+			call: func(repository *Repository) error {
+				return repository.CreateBranch(context.Background(), identity, name, base, false)
+			},
 			arguments: []string{"branch", name.String(), base.String()},
 		},
 		{
-			name:      "switch branch",
-			call:      func(repository *Repository) error { return repository.SwitchBranch(context.Background(), identity, name) },
+			name: "switch branch",
+			call: func(repository *Repository) error {
+				return repository.SwitchBranch(context.Background(), identity, name)
+			},
 			arguments: []string{"switch", name.String()},
 		},
 		{
@@ -324,23 +328,31 @@ func TestRepositoryCoverageMutationFailureBranches(t *testing.T) {
 			arguments: []string{"rebase", base.String()},
 		},
 		{
-			name:      "merge",
-			call:      func(repository *Repository) error { return repository.Merge(context.Background(), identity, base, message) },
+			name: "merge",
+			call: func(repository *Repository) error {
+				return repository.Merge(context.Background(), identity, base, message)
+			},
 			arguments: []string{"merge", "--no-ff", "--no-edit", "-m", message.String(), base.String()},
 		},
 		{
-			name:      "cherry-pick",
-			call:      func(repository *Repository) error { return repository.CherryPick(context.Background(), identity, commitID) },
+			name: "cherry-pick",
+			call: func(repository *Repository) error {
+				return repository.CherryPick(context.Background(), identity, commitID)
+			},
 			arguments: []string{"cherry-pick", "-x", commitID},
 		},
 		{
-			name:      "force delete local branch",
-			call:      func(repository *Repository) error { return repository.DeleteLocalBranch(context.Background(), identity, name, true) },
+			name: "force delete local branch",
+			call: func(repository *Repository) error {
+				return repository.DeleteLocalBranch(context.Background(), identity, name, true)
+			},
 			arguments: []string{"branch", "-D", name.String()},
 		},
 		{
-			name:      "stage explicit paths",
-			call:      func(repository *Repository) error { return repository.Stage(context.Background(), identity, []string{"--looks-like-an-argument"}) },
+			name: "stage explicit paths",
+			call: func(repository *Repository) error {
+				return repository.Stage(context.Background(), identity, []string{"--looks-like-an-argument"})
+			},
 			arguments: []string{"add", "--", "--looks-like-an-argument"},
 		},
 		{
@@ -350,13 +362,18 @@ func TestRepositoryCoverageMutationFailureBranches(t *testing.T) {
 			arguments: []string{"commit", "--file=-"},
 		},
 		{
-			name:      "push without upstream",
-			call:      func(repository *Repository) error { return repository.Push(context.Background(), identity, name, false) },
+			name: "push without upstream",
+			call: func(repository *Repository) error {
+				return repository.Push(context.Background(), identity, name, false)
+			},
 			arguments: []string{"push", "origin", name.String()},
 		},
 		{
-			name:      "release tags",
-			call:      func(repository *Repository) error { _, err := repository.ReleaseTagsAt(context.Background(), identity, "origin/main"); return err },
+			name: "release tags",
+			call: func(repository *Repository) error {
+				_, err := repository.ReleaseTagsAt(context.Background(), identity, "origin/main")
+				return err
+			},
 			arguments: []string{"tag", "--points-at", "origin/main"},
 		},
 	}

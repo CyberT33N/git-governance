@@ -15,7 +15,7 @@ does not rely on any external governance repository or unpublished rule set.
 
 | Item | Status | Evidence |
 |---|---|---|
-| Local repository | VERIFIED | `main` and `origin/main` are initialized; the audit baseline was commit `1da3f72` (`added unit tests`) |
+| Local repository | VERIFIED | `main` and `origin/main` are initialized; every audit and release gate begins by checking the current Git status |
 | Go toolchain | VERIFIED | Go 1.26.5, Windows amd64 |
 | Git client | VERIFIED | Git 2.53.0.windows.2 |
 | Legacy scripts and copied hooks | VERIFIED | not present in this repository |
@@ -113,7 +113,7 @@ does not rely on any external governance repository or unpublished rule set.
 | Lefthook configuration | IMPLEMENTED | thin `commit-msg` and `pre-push` runners; no duplicated regex |
 | Local Lefthook validation | VERIFIED | Lefthook v2.1.10 returned `All good` |
 | Reproducible release configuration | VERIFIED | GoReleaser v2.16.0 installed locally and validated `.goreleaser.yaml` |
-| GitHub Actions CI | IMPLEMENTED | immutable action commits, pinned tool versions, race, fuzz, vulnerability, Lefthook, native-smoke, and release-config gates are configured |
+| GitHub Actions CI | IMPLEMENTED | immutable action commits, pinned tool versions, complete-coverage, race, fuzz, vulnerability, Lefthook, native-smoke, and release-config gates are configured |
 | GitHub release artifacts | IMPLEMENTED | tag/manual-tag validation, checksums, SBOM, Cosign, provenance attestation, and Linux package formats are configured |
 | CI-owned release tag lifecycle | IMPLEMENTED | merged same-repository `release/<semver> -> main` creates an immutable annotated tag and dispatches the artifact workflow |
 | Package-manager manifest templates | IMPLEMENTED | Homebrew, Scoop, and WinGet templates are version/checksum-driven under `packaging/` |

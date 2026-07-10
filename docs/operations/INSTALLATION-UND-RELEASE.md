@@ -159,6 +159,19 @@ Die Release-Pipeline trennt strikt:
 - statische Analyse und Vulnerability Scan
 - Cross-Platform-Binaries bauen
 
+#### 8.1.1 Lokale GoReleaser-Validierung
+
+Die Release-Konfiguration wird mit derselben GoReleaser-Version wie CI geprüft:
+
+```powershell
+go install github.com/goreleaser/goreleaser/v2@v2.16.0
+$goreleaser = Join-Path (go env GOPATH) "bin\goreleaser.exe"
+& $goreleaser check
+```
+
+Der Check validiert ausschließlich die Konfiguration. Er veröffentlicht keine
+Artefakte und benötigt keine Release-Credentials.
+
 ### 8.2 Package
 
 - Windows-, macOS- und Linux-Artefakte erzeugen
