@@ -35,6 +35,58 @@ func (systemConfigDirectory) UserConfigDir() (string, error) {
 	return os.UserConfigDir()
 }
 
+// configurationFilesystem isolates the complete durable-write boundary. The
+// production implementation delegates to the OS and platform replacement
+// helpers; the narrow interface keeps failure handling deterministic to test.
+type configurationFilesystem interface {
+	ReadFile(string) ([]byte, error)
+	MkdirAll(string, os.FileMode) error
+	CreateTemp(string, string) (configurationFile, error)
+	Remove(string) error
+	Recover(string) error
+	Replace(string, string) error
+}
+
+type configurationFile interface {
+	Name() string
+	Chmod(os.FileMode) error
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+type systemConfigurationFilesystem struct{}
+
+func (systemConfigurationFilesystem) ReadFile(path string) ([]byte, error) {
+	return os.ReadFile(path)
+}
+
+func (systemConfigurationFilesystem) MkdirAll(path string, mode os.FileMode) error {
+	return os.MkdirAll(path, mode)
+}
+
+func (systemConfigurationFilesystem) CreateTemp(directory, pattern string) (configurationFile, error) {
+	return os.CreateTemp(directory, pattern)
+}
+
+func (systemConfigurationFilesystem) Remove(path string) error {
+	return os.Remove(path)
+}
+
+func (systemConfigurationFilesystem) Recover(path string) error {
+	return recoverConfiguration(path)
+}
+
+func (systemConfigurationFilesystem) Replace(path, temporaryPath string) error {
+	return replaceConfiguration(path, temporaryPath)
+}
+
+type preferenceEncoder func(diskPreferences) ([]byte, error)
+
+func encodePreferences(preferences diskPreferences) ([]byte, error) {
+	return json.MarshalIndent(preferences, "", "  ")
+}
+
 // Options configures a preference store. Path overrides the OS default only
 // when explicitly supplied by the caller.
 type Options struct {
@@ -44,8 +96,10 @@ type Options struct {
 
 // Store is a recoverable JSON implementation of port.PreferencesStore.
 type Store struct {
-	path      string
-	directory ConfigDirectory
+	path       string
+	directory  ConfigDirectory
+	filesystem configurationFilesystem
+	encode     preferenceEncoder
 }
 
 // New creates a preference store.
@@ -55,8 +109,10 @@ func New(options Options) *Store {
 		directory = systemConfigDirectory{}
 	}
 	return &Store{
-		path:      options.Path,
-		directory: directory,
+		path:       options.Path,
+		directory:  directory,
+		filesystem: systemConfigurationFilesystem{},
+		encode:     encodePreferences,
 	}
 }
 
@@ -70,11 +126,11 @@ func (store *Store) Load(ctx context.Context) (port.Preferences, error) {
 	if err != nil {
 		return port.Preferences{}, err
 	}
-	if err := recoverConfiguration(path); err != nil {
+	if err := store.filesystem.Recover(path); err != nil {
 		return port.Preferences{}, unavailable(path, "recover an interrupted configuration replacement", err)
 	}
 
-	bytes, err := os.ReadFile(path)
+	bytes, err := store.filesystem.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return defaultPreferences(), nil
 	}
@@ -101,7 +157,7 @@ func (store *Store) Save(ctx context.Context, preferences port.Preferences) erro
 	if err != nil {
 		return err
 	}
-	if err := recoverConfiguration(path); err != nil {
+	if err := store.filesystem.Recover(path); err != nil {
 		return unavailable(path, "recover an interrupted configuration replacement", err)
 	}
 
@@ -109,7 +165,7 @@ func (store *Store) Save(ctx context.Context, preferences port.Preferences) erro
 	if err != nil {
 		return err
 	}
-	encoded, err := json.MarshalIndent(disk, "", "  ")
+	encoded, err := store.encode(disk)
 	if err != nil {
 		return invalid(path, "configuration must be serializable", err)
 	}
@@ -118,10 +174,10 @@ func (store *Store) Save(ctx context.Context, preferences port.Preferences) erro
 	if err := contextError(ctx); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), defaultDirectoryMode); err != nil {
+	if err := store.filesystem.MkdirAll(filepath.Dir(path), defaultDirectoryMode); err != nil {
 		return unavailable(path, "create the configuration directory", err)
 	}
-	return writeConfiguration(path, encoded)
+	return writeConfiguration(store.filesystem, path, encoded)
 }
 
 // Path returns the effective configuration file path.
@@ -264,16 +320,16 @@ func keyStrings(keys []ticket.Key) []string {
 	return result
 }
 
-func writeConfiguration(path string, contents []byte) (returnErr error) {
+func writeConfiguration(filesystem configurationFilesystem, path string, contents []byte) (returnErr error) {
 	directory := filepath.Dir(path)
-	file, err := os.CreateTemp(directory, ".config-*.tmp")
+	file, err := filesystem.CreateTemp(directory, ".config-*.tmp")
 	if err != nil {
 		return unavailable(path, "create a temporary configuration file", err)
 	}
 	temporaryPath := file.Name()
 	defer func() {
 		if returnErr != nil {
-			_ = os.Remove(temporaryPath)
+			_ = filesystem.Remove(temporaryPath)
 		}
 	}()
 
@@ -292,7 +348,7 @@ func writeConfiguration(path string, contents []byte) (returnErr error) {
 	if err := file.Close(); err != nil {
 		return unavailable(path, "close the temporary configuration file", err)
 	}
-	if err := replaceConfiguration(path, temporaryPath); err != nil {
+	if err := filesystem.Replace(path, temporaryPath); err != nil {
 		return unavailable(path, "replace the configuration file", err)
 	}
 	return nil

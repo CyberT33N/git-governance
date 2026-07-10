@@ -75,6 +75,9 @@ func (service *ReleaseService) StartHotfix(ctx context.Context, request StartHot
 	if err != nil {
 		return branchapp.CreateResult{}, err
 	}
+	if !request.DryRun && service.git == nil {
+		return branchapp.CreateResult{}, internalDependencyError("Git repository")
+	}
 	switchToBranch := true
 	result, err := service.branches.Create(ctx, branchapp.CreateRequest{
 		Repository:      repository,
@@ -90,9 +93,6 @@ func (service *ReleaseService) StartHotfix(ctx context.Context, request StartHot
 		return branchapp.CreateResult{}, err
 	}
 	if !request.DryRun {
-		if service.git == nil {
-			return branchapp.CreateResult{}, internalDependencyError("Git repository")
-		}
 		if err := service.git.StoreWorkflowBase(ctx, repository, result.Name, base); err != nil {
 			return branchapp.CreateResult{}, err
 		}
@@ -241,6 +241,9 @@ func (service *ReleaseService) CreateReleaseStabilization(ctx context.Context, r
 	if err != nil {
 		return branchapp.CreateResult{}, err
 	}
+	if !request.DryRun && service.git == nil {
+		return branchapp.CreateResult{}, internalDependencyError("Git repository")
+	}
 	result, err := service.branches.Create(ctx, branchapp.CreateRequest{
 		Repository:      repository,
 		Family:          family,
@@ -255,9 +258,6 @@ func (service *ReleaseService) CreateReleaseStabilization(ctx context.Context, r
 		return branchapp.CreateResult{}, err
 	}
 	if !request.DryRun {
-		if service.git == nil {
-			return branchapp.CreateResult{}, internalDependencyError("Git repository")
-		}
 		if err := service.git.StoreWorkflowBase(ctx, repository, result.Name, base); err != nil {
 			return branchapp.CreateResult{}, err
 		}

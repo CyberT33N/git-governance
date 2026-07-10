@@ -229,10 +229,11 @@ func TestInternalNormalizationAndConfigurationWrite(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), defaultDirectoryMode); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeConfiguration(path, []byte("first")); err != nil {
+	filesystem := systemConfigurationFilesystem{}
+	if err := writeConfiguration(filesystem, path, []byte("first")); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeConfiguration(path, []byte("second")); err != nil {
+	if err := writeConfiguration(filesystem, path, []byte("second")); err != nil {
 		t.Fatal(err)
 	}
 	actual, err := os.ReadFile(path)

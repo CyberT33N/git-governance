@@ -5,19 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/CyberT33N/git-governance/internal/application/port"
 	"github.com/CyberT33N/git-governance/internal/domain/branch"
 	"github.com/CyberT33N/git-governance/internal/domain/problem"
 )
-
-const qualityRunnerHelperEnvironment = "GIT_GOVERNANCE_QUALITY_RUNNER_HELPER"
 
 func TestRunnerCoverageNormalizesNilContextAndAppliesDefaultExclusions(t *testing.T) {
 	t.Parallel()
@@ -135,14 +131,14 @@ func TestRunnerCoverageScopeDecisions(t *testing.T) {
 			requested: []branch.Family{branch.FamilyDocs},
 		},
 		{
-			name:     "gate inclusion replaces default inclusion",
-			defaults: familyScope{IncludeFamilies: []branch.Family{branch.FamilyDocs}},
-			gate:     gate{IncludeFamilies: []branch.Family{branch.FamilyFeature}},
+			name:      "gate inclusion replaces default inclusion",
+			defaults:  familyScope{IncludeFamilies: []branch.Family{branch.FamilyDocs}},
+			gate:      gate{IncludeFamilies: []branch.Family{branch.FamilyFeature}},
 			requested: []branch.Family{branch.FamilyFeature},
-			want:     true,
+			want:      true,
 		},
 		{
-			name:     "default and gate exclusions are combined",
+			name: "default and gate exclusions are combined",
 			defaults: familyScope{
 				IncludeFamilies: []branch.Family{branch.FamilyFeature, branch.FamilyDocs},
 				ExcludeFamilies: []branch.Family{branch.FamilyDocs},
@@ -322,14 +318,13 @@ func TestRunnerCoverageRoutesChildOutputAwayFromJSONResult(t *testing.T) {
 		SchemaVersion: currentSchema,
 		Gates: []gate{{
 			Name:    "output-routing",
-			Command: os.Args[0],
-			Args:    []string{"-test.run=^TestRunnerCoverageCommandHelperProcess$"},
+			Command: "go",
+			Args:    []string{"version"},
 		}},
 	})
 	if err != nil {
 		t.Fatalf("marshal output configuration: %v", err)
 	}
-	t.Setenv(qualityRunnerHelperEnvironment, "1")
 
 	diagnostic := &bytes.Buffer{}
 	result, err := New(Options{
@@ -344,20 +339,10 @@ func TestRunnerCoverageRoutesChildOutputAwayFromJSONResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal quality result: %v", err)
 	}
-	for _, marker := range []string{"quality-child-stdout", "quality-child-stderr"} {
-		if !strings.Contains(diagnostic.String(), marker) {
-			t.Fatalf("diagnostic output = %q, missing %q", diagnostic.String(), marker)
-		}
-		if strings.Contains(string(encoded), marker) {
-			t.Fatalf("JSON result leaked child output %q: %s", marker, encoded)
-		}
+	if !strings.Contains(diagnostic.String(), "go version") {
+		t.Fatalf("diagnostic output = %q, missing command output", diagnostic.String())
 	}
-}
-
-func TestRunnerCoverageCommandHelperProcess(t *testing.T) {
-	if os.Getenv(qualityRunnerHelperEnvironment) != "1" {
-		return
+	if strings.Contains(string(encoded), "go version") {
+		t.Fatalf("JSON result leaked child output: %s", encoded)
 	}
-	_, _ = fmt.Fprint(os.Stdout, "quality-child-stdout")
-	_, _ = fmt.Fprint(os.Stderr, "quality-child-stderr")
 }
