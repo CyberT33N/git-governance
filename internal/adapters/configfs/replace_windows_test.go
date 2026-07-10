@@ -3,53 +3,421 @@
 package configfs
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/CyberT33N/git-governance/internal/application/port"
+	"github.com/CyberT33N/git-governance/internal/domain/problem"
+	"golang.org/x/sys/windows"
 )
 
-func TestWindowsConfigurationReplacementRecovery(t *testing.T) {
-	t.Parallel()
+const fsctlRequestOplockLevel1 = 0x00090000
 
+func TestWindowsConfigurationReplacementRecovery(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	backup := path + ".bak"
-	if err := os.WriteFile(backup, []byte("recovered"), defaultFileMode); err != nil {
-		t.Fatal(err)
-	}
+	writeTestConfiguration(t, backup, "recovered")
 	if err := recoverConfiguration(path); err != nil {
 		t.Fatal(err)
 	}
 	assertFileContent(t, path, "recovered")
 	assertNotExists(t, backup)
 
-	if err := os.WriteFile(path, []byte("current"), defaultFileMode); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(backup, []byte("stale"), defaultFileMode); err != nil {
-		t.Fatal(err)
-	}
+	writeTestConfiguration(t, path, "current")
+	writeTestConfiguration(t, backup, "stale")
 	if err := recoverConfiguration(path); err != nil {
 		t.Fatal(err)
 	}
 	assertFileContent(t, path, "current")
 	assertNotExists(t, backup)
 
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".config-*.tmp")
+	temporaryPath := createTemporaryConfiguration(t, filepath.Dir(path), "replacement")
+	if err := replaceConfiguration(path, temporaryPath); err != nil {
+		t.Fatal(err)
+	}
+	assertFileContent(t, path, "replacement")
+	assertNotExists(t, backup)
+}
+
+func TestWindowsRecoverConfigurationMissingPathsIsIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := recoverConfiguration(path); err != nil {
+			t.Fatalf("recovery attempt %d: %v", attempt+1, err)
+		}
+	}
+
+	assertNotExists(t, path)
+	assertNotExists(t, path+".bak")
+}
+
+func TestWindowsRecoverConfigurationReportsInspectionErrors(t *testing.T) {
+	t.Run("target path", func(t *testing.T) {
+		err := recoverConfiguration(filepath.Join(t.TempDir(), "config\x00.json"))
+		assertNonNotExistError(t, err)
+	})
+
+	t.Run("backup path", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.json")
+		backup := path + ".bak"
+		if err := os.Symlink(filepath.Base(backup), backup); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_ = os.Remove(backup)
+		})
+
+		err := recoverConfiguration(path)
+		assertNonNotExistError(t, err)
+
+		if _, err := os.Lstat(backup); err != nil {
+			t.Fatalf("backup link disappeared after failed recovery: %v", err)
+		}
+	})
+}
+
+func TestWindowsRecoverConfigurationLockedBackupsAreRecoverable(t *testing.T) {
+	t.Run("stale backup cleanup", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.json")
+		backup := path + ".bak"
+		writeTestConfiguration(t, path, "current")
+		writeTestConfiguration(t, backup, "stale")
+
+		handle := lockFileWithoutDeleteShare(t, backup)
+		locked := true
+		defer func() {
+			if locked {
+				_ = windows.CloseHandle(handle)
+			}
+		}()
+
+		err := recoverConfiguration(path)
+		assertNonNotExistError(t, err)
+		assertFileContent(t, path, "current")
+		assertFileContent(t, backup, "stale")
+
+		closeWindowsHandle(t, handle)
+		locked = false
+		if err := recoverConfiguration(path); err != nil {
+			t.Fatal(err)
+		}
+		assertFileContent(t, path, "current")
+		assertNotExists(t, backup)
+	})
+
+	t.Run("backup restore", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.json")
+		backup := path + ".bak"
+		writeTestConfiguration(t, backup, "recovered")
+
+		handle := lockFileWithoutDeleteShare(t, backup)
+		locked := true
+		defer func() {
+			if locked {
+				_ = windows.CloseHandle(handle)
+			}
+		}()
+
+		err := recoverConfiguration(path)
+		assertNonNotExistError(t, err)
+		assertNotExists(t, path)
+		assertFileContent(t, backup, "recovered")
+
+		closeWindowsHandle(t, handle)
+		locked = false
+		if err := recoverConfiguration(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := recoverConfiguration(path); err != nil {
+			t.Fatal(err)
+		}
+		assertFileContent(t, path, "recovered")
+		assertNotExists(t, backup)
+	})
+}
+
+func TestWindowsReplaceConfigurationPropagatesRecoveryFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	backup := path + ".bak"
+	writeTestConfiguration(t, path, "current")
+	writeTestConfiguration(t, backup, "stale")
+	temporaryPath := createTemporaryConfiguration(t, filepath.Dir(path), "replacement")
+
+	handle := lockFileWithoutDeleteShare(t, backup)
+	locked := true
+	defer func() {
+		if locked {
+			_ = windows.CloseHandle(handle)
+		}
+	}()
+
+	err := replaceConfiguration(path, temporaryPath)
+	assertNonNotExistError(t, err)
+	assertFileContent(t, path, "current")
+	assertFileContent(t, backup, "stale")
+	assertFileContent(t, temporaryPath, "replacement")
+
+	closeWindowsHandle(t, handle)
+	locked = false
+	if err := replaceConfiguration(path, temporaryPath); err != nil {
+		t.Fatal(err)
+	}
+	assertFileContent(t, path, "replacement")
+	assertNotExists(t, backup)
+	assertNotExists(t, temporaryPath)
+}
+
+func TestWindowsReplaceConfigurationRecoversAfterRenameFailures(t *testing.T) {
+	t.Run("target rename", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.json")
+		writeTestConfiguration(t, path, "current")
+		temporaryPath := createTemporaryConfiguration(t, filepath.Dir(path), "replacement")
+
+		handle := lockFileWithoutDeleteShare(t, path)
+		locked := true
+		defer func() {
+			if locked {
+				_ = windows.CloseHandle(handle)
+			}
+		}()
+
+		err := replaceConfiguration(path, temporaryPath)
+		assertNonNotExistError(t, err)
+		assertFileContent(t, path, "current")
+		assertNotExists(t, path+".bak")
+		assertFileContent(t, temporaryPath, "replacement")
+
+		closeWindowsHandle(t, handle)
+		locked = false
+		if err := replaceConfiguration(path, temporaryPath); err != nil {
+			t.Fatal(err)
+		}
+		assertFileContent(t, path, "replacement")
+		assertNotExists(t, path+".bak")
+	})
+
+	t.Run("temporary rename with target", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.json")
+		writeTestConfiguration(t, path, "current")
+		temporaryPath := createTemporaryConfiguration(t, filepath.Dir(path), "replacement")
+
+		handle := lockFileWithoutDeleteShare(t, temporaryPath)
+		locked := true
+		defer func() {
+			if locked {
+				_ = windows.CloseHandle(handle)
+			}
+		}()
+
+		err := replaceConfiguration(path, temporaryPath)
+		assertNonNotExistError(t, err)
+		assertFileContent(t, path, "current")
+		assertNotExists(t, path+".bak")
+		assertFileContent(t, temporaryPath, "replacement")
+
+		closeWindowsHandle(t, handle)
+		locked = false
+		if err := replaceConfiguration(path, temporaryPath); err != nil {
+			t.Fatal(err)
+		}
+		assertFileContent(t, path, "replacement")
+		assertNotExists(t, path+".bak")
+	})
+
+	t.Run("temporary rename without target", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.json")
+		temporaryPath := createTemporaryConfiguration(t, filepath.Dir(path), "replacement")
+
+		handle := lockFileWithoutDeleteShare(t, temporaryPath)
+		locked := true
+		defer func() {
+			if locked {
+				_ = windows.CloseHandle(handle)
+			}
+		}()
+
+		err := replaceConfiguration(path, temporaryPath)
+		assertNonNotExistError(t, err)
+		assertNotExists(t, path)
+		assertNotExists(t, path+".bak")
+		assertFileContent(t, temporaryPath, "replacement")
+
+		closeWindowsHandle(t, handle)
+		locked = false
+		if err := replaceConfiguration(path, temporaryPath); err != nil {
+			t.Fatal(err)
+		}
+		assertFileContent(t, path, "replacement")
+		assertNotExists(t, path+".bak")
+	})
+}
+
+func TestWindowsReplaceConfigurationReportsPostRecoveryTargetStatError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	backup := path + ".bak"
+	writeTestConfiguration(t, path, "current")
+	writeTestConfiguration(t, backup, "stale")
+	temporaryPath := createTemporaryConfiguration(t, filepath.Dir(path), "replacement")
+
+	handle, event := requestLevel1Oplock(t, backup)
+	defer func() {
+		_ = windows.CloseHandle(event)
+		_ = windows.CloseHandle(handle)
+	}()
+
+	replaced := make(chan error, 1)
+	go func() {
+		defer windows.CloseHandle(handle)
+
+		status, err := windows.WaitForSingleObject(event, 5_000)
+		if err != nil {
+			replaced <- err
+			return
+		}
+		if status != windows.WAIT_OBJECT_0 {
+			replaced <- fmt.Errorf("oplock wait status = %#x", status)
+			return
+		}
+		if err := os.Remove(path); err != nil {
+			replaced <- err
+			return
+		}
+		if err := os.Symlink(filepath.Base(path), path); err != nil {
+			replaced <- err
+			return
+		}
+		replaced <- nil
+	}()
+
+	err := replaceConfiguration(path, temporaryPath)
+	if backgroundErr := <-replaced; backgroundErr != nil {
+		t.Fatalf("replace target during oplock break: %v", backgroundErr)
+	}
+	assertNonNotExistError(t, err)
+	assertFileContent(t, temporaryPath, "replacement")
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	assertNotExists(t, backup)
+}
+
+func TestWindowsSaveHonorsCancelledContextWithoutMutation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	writeTestConfiguration(t, path, "current")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := New(Options{Path: path}).Save(ctx, port.Preferences{})
+	assertProblemCode(t, err, problem.CodeOperationCancelled)
+	assertFileContent(t, path, "current")
+	assertNotExists(t, path+".bak")
+
+	temporaryFiles, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".config-*.tmp"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := temporary.WriteString("replacement"); err != nil {
+	if len(temporaryFiles) != 0 {
+		t.Fatalf("temporary files remain after cancelled save: %v", temporaryFiles)
+	}
+}
+
+func writeTestConfiguration(t *testing.T, path, contents string) {
+	t.Helper()
+
+	if err := os.WriteFile(path, []byte(contents), defaultFileMode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func createTemporaryConfiguration(t *testing.T, directory, contents string) string {
+	t.Helper()
+
+	temporary, err := os.CreateTemp(directory, ".config-*.tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := temporary.Name()
+	t.Cleanup(func() {
+		_ = os.Remove(path)
+	})
+	if _, err := temporary.WriteString(contents); err != nil {
+		_ = temporary.Close()
 		t.Fatal(err)
 	}
 	if err := temporary.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := replaceConfiguration(path, temporary.Name()); err != nil {
+	return path
+}
+
+func lockFileWithoutDeleteShare(t *testing.T, path string) windows.Handle {
+	t.Helper()
+
+	pointer, err := windows.UTF16PtrFromString(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	assertFileContent(t, path, "replacement")
-	assertNotExists(t, backup)
+	handle, err := windows.CreateFile(
+		pointer,
+		windows.GENERIC_READ,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_ATTRIBUTE_NORMAL,
+		0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handle
+}
+
+func closeWindowsHandle(t *testing.T, handle windows.Handle) {
+	t.Helper()
+
+	if err := windows.CloseHandle(handle); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func requestLevel1Oplock(t *testing.T, path string) (windows.Handle, windows.Handle) {
+	t.Helper()
+
+	pointer, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := windows.CreateFile(
+		pointer,
+		windows.GENERIC_READ,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OVERLAPPED,
+		0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := windows.CreateEvent(nil, 0, 0, nil)
+	if err != nil {
+		_ = windows.CloseHandle(handle)
+		t.Fatal(err)
+	}
+	overlapped := windows.Overlapped{HEvent: event}
+	err = windows.DeviceIoControl(handle, fsctlRequestOplockLevel1, nil, 0, nil, 0, nil, &overlapped)
+	if !errors.Is(err, windows.ERROR_IO_PENDING) {
+		_ = windows.CloseHandle(event)
+		_ = windows.CloseHandle(handle)
+		t.Fatalf("request oplock = %v, want ERROR_IO_PENDING", err)
+	}
+	return handle, event
 }
 
 func assertFileContent(t *testing.T, path, expected string) {
@@ -67,8 +435,19 @@ func assertFileContent(t *testing.T, path, expected string) {
 func assertNotExists(t *testing.T, path string) {
 	t.Helper()
 
-	_, err := os.Stat(path)
+	_, err := os.Lstat(path)
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("%s still exists or could not be inspected: %v", path, err)
+	}
+}
+
+func assertNonNotExistError(t *testing.T, err error) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("expected a filesystem error, got nil")
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("error = %v, want a non-not-exist filesystem error", err)
 	}
 }
