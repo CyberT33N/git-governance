@@ -5,6 +5,7 @@ package gitcli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -705,7 +706,7 @@ func commandCause(result processResult) error {
 }
 
 func isContextError(err error) bool {
-	return err == context.Canceled || err == context.DeadlineExceeded
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func parseCommitMessages(raw string) ([]string, error) {
