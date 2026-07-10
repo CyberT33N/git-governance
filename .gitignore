@@ -5,7 +5,3 @@
 *.coverprofile
 *.test
 *.out
-
-# Platform-specific local binaries.
-/git-governance
-/git-governance.exe
