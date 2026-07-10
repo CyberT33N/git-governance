@@ -3,8 +3,8 @@
 /coverage/
 /.cache/
 *.coverprofile
-/profile.cov
 *.test
+coverage.out
 
 # Platform-specific local binaries.
 /git-governance

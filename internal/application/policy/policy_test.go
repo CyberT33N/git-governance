@@ -15,13 +15,21 @@ import (
 type memoryStore struct {
 	preferences port.Preferences
 	err         error
+	loadErr     error
+	saveErr     error
 }
 
 func (store *memoryStore) Load(context.Context) (port.Preferences, error) {
+	if store.loadErr != nil {
+		return port.Preferences{}, store.loadErr
+	}
 	return store.preferences, store.err
 }
 
 func (store *memoryStore) Save(_ context.Context, preferences port.Preferences) error {
+	if store.saveErr != nil {
+		return store.saveErr
+	}
 	if store.err != nil {
 		return store.err
 	}
@@ -31,21 +39,45 @@ func (store *memoryStore) Save(_ context.Context, preferences port.Preferences) 
 
 type doctorGit struct {
 	discoverErr error
+	versionErr  error
 	commits     bool
 	commitErr   error
+	remoteErr   error
+	activeName  string
+	active      bool
+	activeErr   error
 }
 
 type doctorTools struct {
-	version string
-	exists  bool
-	err     error
+	operatingSystem string
+	architecture    string
+	version         string
+	exists          bool
+	err             error
+	versionErr      error
+	fileErr         error
 }
 
-func (doctorTools) Platform() (string, string) {
+type doctorPolicy struct {
+	status port.PolicyStatus
+	err    error
+}
+
+func (policy doctorPolicy) Status(context.Context, port.RepositoryIdentity) (port.PolicyStatus, error) {
+	return policy.status, policy.err
+}
+
+func (tools doctorTools) Platform() (string, string) {
+	if tools.operatingSystem != "" || tools.architecture != "" {
+		return tools.operatingSystem, tools.architecture
+	}
 	return "windows", "amd64"
 }
 
 func (tools doctorTools) Version(context.Context, string) (string, error) {
+	if tools.versionErr != nil {
+		return "", tools.versionErr
+	}
 	if tools.err != nil {
 		return "", tools.err
 	}
@@ -53,6 +85,9 @@ func (tools doctorTools) Version(context.Context, string) (string, error) {
 }
 
 func (tools doctorTools) FileExists(string) (bool, error) {
+	if tools.fileErr != nil {
+		return false, tools.fileErr
+	}
 	if tools.err != nil {
 		return false, tools.err
 	}
@@ -66,16 +101,22 @@ func (git doctorGit) Discover(context.Context, string) (port.RepositoryIdentity,
 	return port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"}, nil
 }
 
-func (doctorGit) Version(context.Context) (string, error) {
+func (git doctorGit) Version(context.Context) (string, error) {
+	if git.versionErr != nil {
+		return "", git.versionErr
+	}
 	return "git version test", nil
 }
 
-func (doctorGit) RemoteURL(context.Context, port.RepositoryIdentity) (string, error) {
+func (git doctorGit) RemoteURL(context.Context, port.RepositoryIdentity) (string, error) {
+	if git.remoteErr != nil {
+		return "", git.remoteErr
+	}
 	return "https://example.invalid/repo.git", nil
 }
 
-func (doctorGit) ActiveOperation(context.Context, port.RepositoryIdentity) (string, bool, error) {
-	return "", false, nil
+func (git doctorGit) ActiveOperation(context.Context, port.RepositoryIdentity) (string, bool, error) {
+	return git.activeName, git.active, git.activeErr
 }
 
 func (git doctorGit) HasCommits(context.Context, port.RepositoryIdentity) (bool, error) {
@@ -193,6 +234,14 @@ func TestSyntaxOnlyKeyPolicy(t *testing.T) {
 	cancel()
 	err := (SyntaxOnlyKeyPolicy{}).ValidateKey(ctx, port.RepositoryIdentity{}, key)
 	assertProblemCode(t, err, problem.CodeOperationCancelled)
+
+	_, err = (SyntaxOnlyKeyPolicy{}).Status(ctx, port.RepositoryIdentity{})
+	assertProblemCode(t, err, problem.CodeOperationCancelled)
+
+	status, err := (SyntaxOnlyKeyPolicy{}).Status(context.Background(), port.RepositoryIdentity{})
+	if err != nil || status.Mode != "syntax-only" || status.BundlePresent || status.BundleFresh {
+		t.Fatalf("Status() = (%#v, %v)", status, err)
+	}
 }
 
 func TestDescriptionIsSelfContained(t *testing.T) {
@@ -238,6 +287,80 @@ func TestPreferencesService(t *testing.T) {
 	assertProblemCode(t, err, problem.CodeInvalidInput)
 }
 
+func TestPreferencesServiceWhiteboxErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	key := mustKey(t, "ABC")
+	t.Run("missing store", func(t *testing.T) {
+		_, err := NewPreferencesService(nil).List(context.Background())
+		assertProblemCode(t, err, problem.CodeInternal)
+	})
+
+	t.Run("load errors propagate through every mutation", func(t *testing.T) {
+		expected := errors.New("load failed")
+		store := &memoryStore{loadErr: expected}
+		service := NewPreferencesService(store)
+		for _, operation := range []func() error{
+			func() error {
+				_, err := service.List(context.Background())
+				return err
+			},
+			func() error {
+				_, err := service.AddKey(context.Background(), key)
+				return err
+			},
+			func() error {
+				_, err := service.RemoveKey(context.Background(), key)
+				return err
+			},
+			func() error {
+				_, err := service.SetDefaultKey(context.Background(), key)
+				return err
+			},
+		} {
+			if err := operation(); !errors.Is(err, expected) {
+				t.Fatalf("operation error = %v, want %v", err, expected)
+			}
+		}
+	})
+
+	t.Run("save errors propagate from every mutation", func(t *testing.T) {
+		expected := errors.New("save failed")
+		preferences := port.Preferences{SchemaVersion: schemaVersion, KnownKeys: []ticket.Key{key}}
+		for _, operation := range []func(*PreferencesService) error{
+			func(service *PreferencesService) error {
+				_, err := service.AddKey(context.Background(), key)
+				return err
+			},
+			func(service *PreferencesService) error {
+				_, err := service.RemoveKey(context.Background(), key)
+				return err
+			},
+			func(service *PreferencesService) error {
+				_, err := service.SetDefaultKey(context.Background(), key)
+				return err
+			},
+		} {
+			store := &memoryStore{preferences: preferences, saveErr: expected}
+			if err := operation(NewPreferencesService(store)); !errors.Is(err, expected) {
+				t.Fatalf("operation error = %v, want %v", err, expected)
+			}
+		}
+	})
+
+	t.Run("contains and missing dependency helpers are deterministic", func(t *testing.T) {
+		if contains(nil, key) {
+			t.Fatal("contains reported a key in an empty list")
+		}
+		if !contains([]ticket.Key{key}, key) {
+			t.Fatal("contains did not find key")
+		}
+		if _, ok := problem.As(missingDependency("store")); !ok {
+			t.Fatal("missing dependency is not a problem")
+		}
+	})
+}
+
 func TestDoctorIsReadOnly(t *testing.T) {
 	t.Parallel()
 
@@ -263,6 +386,129 @@ func TestDoctorIsReadOnly(t *testing.T) {
 	if len(result.Checks) == 0 || result.Checks[1].OK {
 		t.Fatalf("failed discovery doctor result = %#v", result)
 	}
+}
+
+func TestDoctorWhiteboxDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	t.Run("minimal constructor reports absent optional dependencies", func(t *testing.T) {
+		result, err := NewDoctorService(nil, nil).Run(context.Background(), "C:/repo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Checks) != 6 {
+			t.Fatalf("minimal doctor checks = %#v", result.Checks)
+		}
+		for _, check := range result.Checks {
+			if check.OK {
+				t.Fatalf("unconfigured dependency unexpectedly passed: %#v", check)
+			}
+		}
+	})
+
+	t.Run("repository check failures are reported without aborting", func(t *testing.T) {
+		store := &memoryStore{loadErr: errors.New("config unavailable")}
+		tools := doctorTools{
+			operatingSystem: "linux",
+			versionErr:      errors.New("lefthook missing"),
+			fileErr:         errors.New("stat failed"),
+		}
+		result, err := NewDoctorServiceWithDependencies(
+			doctorGit{
+				versionErr: errors.New("git unavailable"),
+				commits:    false,
+				remoteErr:  errors.New("remote missing"),
+				activeErr:  errors.New("operation unknown"),
+			},
+			store,
+			doctorPolicy{err: errors.New("policy unavailable")},
+			tools,
+		).Run(context.Background(), "C:/repo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Repository.Root == "" || len(result.Checks) != 10 {
+			t.Fatalf("doctor failure result = %#v", result)
+		}
+		for _, name := range []string{
+			"Git version",
+			"repository history",
+			"selected remote",
+			"Git operation state",
+			"runtime platform",
+			"Lefthook executable",
+			"Lefthook configuration",
+			"local policy",
+			"user configuration",
+		} {
+			if checkByName(t, result.Checks, name).OK {
+				t.Fatalf("failure fixture unexpectedly passed %q: %#v", name, result.Checks)
+			}
+		}
+	})
+
+	t.Run("repository history error is distinct from an empty repository", func(t *testing.T) {
+		historyErr := errors.New("history failed")
+		result, err := NewDoctorServiceWithDependencies(
+			doctorGit{commitErr: historyErr},
+			&memoryStore{preferences: port.Preferences{SchemaVersion: schemaVersion}},
+			nil,
+			nil,
+		).Run(context.Background(), "C:/repo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		check := checkByName(t, result.Checks, "repository history")
+		if check.OK || check.Detail != historyErr.Error() {
+			t.Fatalf("history check = %#v", check)
+		}
+	})
+
+	t.Run("active operation, missing config, and policy status are explicit", func(t *testing.T) {
+		store := &memoryStore{preferences: port.Preferences{SchemaVersion: schemaVersion}}
+		result, err := NewDoctorServiceWithDependencies(
+			doctorGit{commits: true, active: true, activeName: "rebase"},
+			store,
+			doctorPolicy{status: port.PolicyStatus{Mode: "syntax-only", Detail: "syntax-only policy"}},
+			doctorTools{operatingSystem: "linux", architecture: "", version: "lefthook 2", exists: false},
+		).Run(context.Background(), "C:/repo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Checks) != 10 {
+			t.Fatalf("doctor checks = %#v", result.Checks)
+		}
+		if result.Checks[4].OK || result.Checks[5].OK || result.Checks[7].OK {
+			t.Fatalf("expected active operation/platform/configuration failures: %#v", result.Checks)
+		}
+	})
+
+	t.Run("detail helpers cover both values", func(t *testing.T) {
+		key := mustKey(t, "ABC")
+		if got := configurationDetail(port.Preferences{}); got == "" {
+			t.Fatal("empty preference detail")
+		}
+		if got := configurationDetail(port.Preferences{DefaultKey: &key}); got == "" {
+			t.Fatal("default preference detail")
+		}
+		if got := lefthookConfigurationDetail(true); got != "lefthook.yml is present" {
+			t.Fatalf("present detail = %q", got)
+		}
+		if got := lefthookConfigurationDetail(false); got != "lefthook.yml is not present" {
+			t.Fatalf("absent detail = %q", got)
+		}
+	})
+}
+
+func checkByName(t *testing.T, checks []Check, name string) Check {
+	t.Helper()
+	for _, check := range checks {
+		if check.Name == name {
+			return check
+		}
+	}
+	t.Fatalf("missing doctor check %q in %#v", name, checks)
+	return Check{}
 }
 
 func mustKey(t *testing.T, raw string) ticket.Key {

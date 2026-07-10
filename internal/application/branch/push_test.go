@@ -2,6 +2,7 @@ package branchapp
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -296,6 +297,230 @@ func TestPushUpdateParserAcceptsSHA256(t *testing.T) {
 	if err != nil || len(updates) != 1 || updates[0].LocalObjectID != oid {
 		t.Fatalf("ParsePrePushUpdates() = (%#v, %v)", updates, err)
 	}
+}
+
+func TestPrePushParserWhiteboxBoundaries(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil and empty input have no updates", func(t *testing.T) {
+		updates, err := ParsePrePushUpdates(nil)
+		if err != nil || updates != nil {
+			t.Fatalf("ParsePrePushUpdates(nil) = (%#v, %v)", updates, err)
+		}
+		updates, err = ParsePrePushUpdates(strings.NewReader("\n"))
+		if err != nil || updates != nil {
+			t.Fatalf("ParsePrePushUpdates(empty) = (%#v, %v)", updates, err)
+		}
+	})
+
+	t.Run("reader, size, and carriage return errors are classified", func(t *testing.T) {
+		_, err := ParsePrePushUpdates(failingPushReader{err: errors.New("read failed")})
+		assertProblemCode(t, err, problem.CodeExternalCommandFailed)
+
+		_, err = ParsePrePushUpdates(strings.NewReader(strings.Repeat("a", maxPrePushInputBytes+1)))
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+
+		oid := strings.Repeat("a", 40)
+		_, err = ParsePrePushUpdates(strings.NewReader("HEAD " + oid + " refs/heads/main " + oid + "\r"))
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+	})
+
+	t.Run("deletion marker and non-head behavior are validated", func(t *testing.T) {
+		oid := strings.Repeat("a", 40)
+		zero := strings.Repeat("0", 40)
+		for _, raw := range []string{
+			"HEAD " + zero + " refs/heads/feature/ABC-123-add-export " + oid,
+			"(delete) " + oid + " refs/heads/feature/ABC-123-add-export " + oid,
+		} {
+			_, err := ParsePrePushUpdates(strings.NewReader(raw))
+			assertProblemCode(t, err, problem.CodeInvalidInput)
+		}
+
+		updates, err := ParsePrePushUpdates(strings.NewReader("HEAD " + strings.ToUpper(oid) + " refs/tags/v1.0.0 " + zero))
+		if err != nil || len(updates) != 1 || updates[0].Action != PushActionOther || updates[0].LocalObjectID != oid {
+			t.Fatalf("non-head update = (%#v, %v)", updates, err)
+		}
+
+		_, err = parsePrePushUpdate("")
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+	})
+
+	t.Run("all helper forms are covered", func(t *testing.T) {
+		if anyEmpty([]string{"present", "also-present"}) {
+			t.Fatal("anyEmpty reported populated values")
+		}
+		if !anyEmpty([]string{"present", ""}) {
+			t.Fatal("anyEmpty did not find empty value")
+		}
+	})
+}
+
+func TestPrePushValidationWhiteboxFailuresAndOptionalQuality(t *testing.T) {
+	t.Parallel()
+
+	update := pushUpdate(t, "refs/heads/feature/ABC-123-add-export", "feature/ABC-123-add-export", PushActionCreate)
+	t.Run("repository, dependency, and update requirements", func(t *testing.T) {
+		_, err := NewSynchronizer(&fakeGitRepository{}, NewService(&fakeGitRepository{}, &fakeKeyPolicy{}), nil).
+			ValidatePrePushUpdates(context.Background(), port.RepositoryIdentity{}, []PushUpdate{update}, nil)
+		assertProblemCode(t, err, problem.CodeRepositoryNotFound)
+
+		_, err = NewSynchronizer(nil, nil, nil).ValidatePrePushUpdates(context.Background(), testRepository(), []PushUpdate{update}, nil)
+		assertProblemCode(t, err, problem.CodeInternal)
+
+		git := &fakeGitRepository{}
+		_, err = NewSynchronizer(git, NewService(git, &fakeKeyPolicy{}), nil).
+			ValidatePrePushUpdates(context.Background(), testRepository(), nil, nil)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+	})
+
+	t.Run("fetch, ref, inspection, and quality failures propagate", func(t *testing.T) {
+		fetchErr := errors.New("fetch failed")
+		git := &fakeGitRepository{fetchErr: fetchErr}
+		_, err := NewSynchronizer(git, NewService(git, &fakeKeyPolicy{}), nil).
+			ValidatePrePushUpdates(context.Background(), testRepository(), []PushUpdate{update}, nil)
+		if !errors.Is(err, fetchErr) {
+			t.Fatalf("fetch error = %v", err)
+		}
+
+		refErr := errors.New("ref failed")
+		git = &fakeGitRepository{validateRefErr: refErr}
+		_, err = NewSynchronizer(git, NewService(git, &fakeKeyPolicy{}), nil).
+			ValidatePrePushUpdates(context.Background(), testRepository(), []PushUpdate{update}, nil)
+		if !errors.Is(err, refErr) {
+			t.Fatalf("ref error = %v", err)
+		}
+
+		inspectionErr := errors.New("inspection failed")
+		git = &fakeGitRepository{inspectionErr: inspectionErr}
+		_, err = NewSynchronizer(git, NewService(git, &fakeKeyPolicy{}), nil).
+			ValidatePrePushUpdates(context.Background(), testRepository(), []PushUpdate{update}, nil)
+		if !errors.Is(err, inspectionErr) {
+			t.Fatalf("inspection error = %v", err)
+		}
+
+		quality := &fakeQualityRunner{err: errors.New("quality failed")}
+		git = &fakeGitRepository{inspections: []port.PushUpdateInspection{{FastForward: true, CommitMessages: []string{"feat(ABC-123): add export"}}}}
+		_, err = NewSynchronizer(git, NewService(git, &fakeKeyPolicy{}), quality).
+			ValidatePrePushUpdates(context.Background(), testRepository(), []PushUpdate{update}, nil)
+		if err == nil {
+			t.Fatal("quality failure was not returned")
+		}
+
+		workflowErr := errors.New("workflow metadata failed")
+		hotfix := pushUpdate(t, "refs/heads/hotfix/ABC-123-payment-timeout", "hotfix/ABC-123-payment-timeout", PushActionCreate)
+		git = &fakeGitRepository{workflowBaseErr: workflowErr}
+		_, err = NewSynchronizer(git, NewService(git, &fakeKeyPolicy{}), nil).
+			ValidatePrePushUpdates(context.Background(), testRepository(), []PushUpdate{hotfix}, nil)
+		if !errors.Is(err, workflowErr) {
+			t.Fatalf("workflow base error = %v", err)
+		}
+
+		git = &fakeGitRepository{}
+		_, err = NewSynchronizer(git, NewService(git, &fakeKeyPolicy{}), nil).
+			ValidatePrePushUpdates(context.Background(), testRepository(), []PushUpdate{hotfix}, nil)
+		assertProblemCode(t, err, problem.CodeBranchBaseInvalid)
+
+		git = &fakeGitRepository{inspections: []port.PushUpdateInspection{{FastForward: true, CommitMessages: []string{"invalid commit"}}}}
+		_, err = NewSynchronizer(git, NewService(git, &fakeKeyPolicy{}), nil).
+			ValidatePrePushUpdates(context.Background(), testRepository(), []PushUpdate{update}, nil)
+		if err == nil {
+			t.Fatal("invalid commit series was accepted")
+		}
+	})
+
+	t.Run("scratch is optional and no runner reports unconfigured", func(t *testing.T) {
+		git := &fakeGitRepository{}
+		synchronizer := NewSynchronizer(git, NewService(git, &fakeKeyPolicy{}), nil)
+		result, err := synchronizer.ValidatePrePushUpdates(context.Background(), testRepository(), []PushUpdate{
+			pushUpdate(t, "refs/heads/scratch/ABC-123-experiment", "scratch/ABC-123-experiment", PushActionCreate),
+		}, nil)
+		if err != nil || result.Quality.Status != port.QualityUnconfigured {
+			t.Fatalf("scratch validation = (%#v, %v)", result, err)
+		}
+	})
+}
+
+func TestPushHelperContracts(t *testing.T) {
+	t.Parallel()
+
+	t.Run("commit series handles non-official and malformed messages", func(t *testing.T) {
+		if err := ValidateCommitSeries(mustBranch("scratch/ABC-123-experiment"), nil); err != nil {
+			t.Fatalf("scratch commit series error = %v", err)
+		}
+		if err := ValidateCommitSeries(mustBranch("feature/ABC-123-add-export"), []string{"not a conventional commit"}); err == nil {
+			t.Fatal("malformed commit message was accepted")
+		}
+	})
+
+	t.Run("base resolution covers explicit workflow inputs", func(t *testing.T) {
+		feature := mustBranch("feature/ABC-123-add-export")
+		base := mustBase("origin", "develop")
+		resolved, err := resolveSyncBase(feature, testRepository(), &base, false)
+		if err != nil || resolved.String() != base.String() {
+			t.Fatalf("resolveSyncBase explicit = (%q, %v)", resolved, err)
+		}
+
+		hotfix := mustBranch("hotfix/ABC-123-payment-timeout")
+		if _, err := resolveSyncBase(hotfix, testRepository(), nil, false); err == nil {
+			t.Fatal("hotfix base was inferred without explicit or stored workflow base")
+		}
+
+		wrong := mustBase("origin", "develop")
+		if _, err := resolveSyncBase(hotfix, testRepository(), &wrong, false); err == nil {
+			t.Fatal("hotfix accepted develop as its explicit base")
+		}
+
+		release := mustBase("origin", "release/2.8.0")
+		resolved, err = resolveSyncBase(mustBranch("fix/ABC-123-release-blocker"), testRepository(), &release, true)
+		if err != nil || resolved.String() != release.String() {
+			t.Fatalf("workflow fix release base = (%q, %v)", resolved, err)
+		}
+
+		invalid := mustBase("origin", "feature/ABC-123-add-export")
+		if _, err := resolveSyncBase(mustBranch("fix/ABC-123-release-blocker"), testRepository(), &invalid, true); err == nil {
+			t.Fatal("workflow fix accepted an invalid special base")
+		}
+	})
+
+	t.Run("base resolution rejects mismatched and missing bases", func(t *testing.T) {
+		feature := mustBranch("feature/ABC-123-add-export")
+		main := mustBase("origin", "main")
+		if _, err := resolveSyncBase(feature, testRepository(), &main, false); err == nil {
+			t.Fatal("feature accepted main as synchronization base")
+		}
+		if _, err := resolveSyncBase(mustBranch("hotfix/ABC-123-payment-timeout"), testRepository(), nil, false); err == nil {
+			t.Fatal("hotfix accepted a missing explicit base")
+		}
+		if _, err := resolveSyncBase(feature, port.RepositoryIdentity{Root: "C:/repo", Remote: "bad/ref"}, nil, false); err == nil {
+			t.Fatal("feature accepted an invalid remote")
+		}
+	})
+
+	t.Run("unknown programmatic target is rejected before domain validation", func(t *testing.T) {
+		git := &fakeGitRepository{}
+		_, err := NewSynchronizer(git, NewService(git, &fakeKeyPolicy{}), nil).ValidatePrePushUpdates(
+			context.Background(),
+			testRepository(),
+			[]PushUpdate{{
+				LocalRef:       "HEAD",
+				LocalObjectID:  strings.Repeat("a", 40),
+				RemoteRef:      "refs/heads/unknown",
+				RemoteObjectID: strings.Repeat("0", 40),
+				GovernedBranch: true,
+				Action:         PushActionCreate,
+			}},
+			nil,
+		)
+		assertProblemCode(t, err, problem.CodeBranchFamilyInvalid)
+	})
+}
+
+type failingPushReader struct {
+	err error
+}
+
+func (reader failingPushReader) Read([]byte) (int, error) {
+	return 0, reader.err
 }
 
 func TestPushUpdateResultRetainsTargetFamily(t *testing.T) {

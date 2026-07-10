@@ -288,6 +288,21 @@ func TestTargetBaseAndPublicationState(t *testing.T) {
 	}
 }
 
+func TestParseLocalBasePreservesBranchValidation(t *testing.T) {
+	t.Parallel()
+
+	base, err := ParseLocalBase("feature/ABC-123-add-export")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.String() != "feature/ABC-123-add-export" || base.IsRemoteTracking() {
+		t.Fatalf("ParseLocalBase() = (%q, remote=%t)", base.String(), base.IsRemoteTracking())
+	}
+
+	_, err = ParseLocalBase("not-a-branch")
+	assertProblemCode(t, err, problem.CodeBranchNameInvalid)
+}
+
 func TestDefaultTargetBase(t *testing.T) {
 	t.Parallel()
 

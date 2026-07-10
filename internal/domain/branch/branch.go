@@ -383,13 +383,26 @@ func NewTargetBase(remote string, branch BranchName) (TargetBase, error) {
 	return TargetBase{remote: remote, branch: branch}, nil
 }
 
+// ParseLocalBase parses a canonical branch name into a local target base.
+func ParseLocalBase(raw string) (TargetBase, error) {
+	name, err := ParseName(raw)
+	if err != nil {
+		return TargetBase{}, err
+	}
+	return localBase(name), nil
+}
+
 // NewLocalBase identifies an already available local branch. It is used for
 // private scratch branches created from an official branch before first push.
 func NewLocalBase(branch BranchName) (TargetBase, error) {
 	if branch.IsZero() {
 		return TargetBase{}, invalidBranchName("", "a local target base requires a canonical branch name")
 	}
-	return TargetBase{branch: branch}, nil
+	return localBase(branch), nil
+}
+
+func localBase(branch BranchName) TargetBase {
+	return TargetBase{branch: branch}
 }
 
 // Remote returns the remote name.

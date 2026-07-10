@@ -248,10 +248,11 @@ func (application *application) resolveScratchBase(ctx context.Context, raw, rem
 			Remediation: "provide the checked-out official ticket branch without the remote prefix",
 		})
 	}
-	name, err := branch.ParseName(raw)
+	base, err := branch.ParseLocalBase(raw)
 	if err != nil {
 		return nil, err
 	}
+	name := base.Branch()
 	if !name.Family().IsOfficialWorkingBranch() {
 		return nil, problem.New(problem.Details{
 			Code:        problem.CodeBranchBaseInvalid,
@@ -263,10 +264,6 @@ func (application *application) resolveScratchBase(ctx context.Context, raw, rem
 			Example:     "feature/ABC-123-add-export",
 			Remediation: "select the official branch for the same ticket or use workflow ticket start",
 		})
-	}
-	base, err := branch.NewLocalBase(name)
-	if err != nil {
-		return nil, err
 	}
 	return &base, nil
 }

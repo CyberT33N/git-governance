@@ -245,7 +245,17 @@ func (service *Service) validateDomainAndPolicy(ctx context.Context, repository 
 	return service.git.ValidateBranchRef(ctx, repository, name)
 }
 
+type ticketBranchFactory func(branch.Family, ticket.ID, branch.Slug) (branch.BranchName, error)
+
 func resolveCreation(request CreateRequest, repository port.RepositoryIdentity) (branch.BranchName, branch.TargetBase, error) {
+	return resolveCreationWithFactory(request, repository, branch.NewTicketBranch)
+}
+
+func resolveCreationWithFactory(
+	request CreateRequest,
+	repository port.RepositoryIdentity,
+	createTicketBranch ticketBranchFactory,
+) (branch.BranchName, branch.TargetBase, error) {
 	if !request.Family.IsKnown() {
 		return branch.BranchName{}, branch.TargetBase{}, invalidBranchInput("a supported branch family is required")
 	}
@@ -271,7 +281,7 @@ func resolveCreation(request CreateRequest, repository port.RepositoryIdentity) 
 		return branch.BranchName{}, branch.TargetBase{}, invalidBranchInput("ticket-scoped branches require both a ticket and a kebab-case slug")
 	}
 
-	name, err := branch.NewTicketBranch(request.Family, request.Ticket, request.Slug)
+	name, err := createTicketBranch(request.Family, request.Ticket, request.Slug)
 	if err != nil {
 		return branch.BranchName{}, branch.TargetBase{}, err
 	}

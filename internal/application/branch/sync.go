@@ -70,6 +70,9 @@ func (synchronizer *Synchronizer) Sync(ctx context.Context, request SyncRequest)
 	if synchronizer.validator == nil {
 		return SyncResult{}, internalDependencyError("branch validator")
 	}
+	if synchronizer.git == nil {
+		return SyncResult{}, internalDependencyError("Git repository")
+	}
 	if _, err := synchronizer.validator.Validate(ctx, ValidateRequest{Repository: repository, Name: request.Name}); err != nil {
 		return SyncResult{}, err
 	}
@@ -252,8 +255,8 @@ func (synchronizer *Synchronizer) ValidatePrePush(ctx context.Context, request P
 	if synchronizer.validator == nil {
 		return PrePushResult{}, internalDependencyError("branch validator")
 	}
-	if _, err := synchronizer.validator.Validate(ctx, ValidateRequest{Repository: repository, Name: request.Name}); err != nil {
-		return PrePushResult{}, err
+	if synchronizer.git == nil {
+		return PrePushResult{}, internalDependencyError("Git repository")
 	}
 	if request.Name.Family().IsSharedLine() {
 		return PrePushResult{}, problem.New(problem.Details{
@@ -266,6 +269,12 @@ func (synchronizer *Synchronizer) ValidatePrePush(ctx context.Context, request P
 			Remediation: "push an official working branch and open a pull request",
 		})
 	}
+	if request.Name.Family() != branch.FamilyScratch && !request.Name.Family().IsOfficialWorkingBranch() {
+		return PrePushResult{}, unsupportedSyncFamily(request.Name)
+	}
+	if _, err := synchronizer.validator.Validate(ctx, ValidateRequest{Repository: repository, Name: request.Name}); err != nil {
+		return PrePushResult{}, err
+	}
 	if request.Name.Family() == branch.FamilyScratch {
 		quality, err := synchronizer.runQuality(ctx, repository, request.Name.Family())
 		if err != nil {
@@ -277,10 +286,6 @@ func (synchronizer *Synchronizer) ValidatePrePush(ctx context.Context, request P
 			Quality:     quality,
 		}, nil
 	}
-	if !request.Name.Family().IsOfficialWorkingBranch() {
-		return PrePushResult{}, unsupportedSyncFamily(request.Name)
-	}
-
 	baseInput, err := synchronizer.workflowBase(ctx, repository, request.Name, request.Base)
 	if err != nil {
 		return PrePushResult{}, err

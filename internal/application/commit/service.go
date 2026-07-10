@@ -127,9 +127,9 @@ func (service *Service) Create(ctx context.Context, request CreateRequest) (Crea
 	if err != nil {
 		return CreateResult{}, err
 	}
-	repository, err := normalizeRepository(request.Repository)
-	if err != nil {
-		return CreateResult{}, err
+	repository := request.Repository
+	if repository.Remote == "" {
+		repository.Remote = "origin"
 	}
 
 	result := CreateResult{

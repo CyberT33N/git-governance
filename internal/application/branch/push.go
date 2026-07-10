@@ -227,14 +227,23 @@ func (synchronizer *Synchronizer) validatePrePushUpdate(
 		result.Skipped = true
 		return result, nil
 	}
+	if update.Target.Family().IsSharedLine() {
+		if _, err := synchronizer.validator.Validate(ctx, ValidateRequest{
+			Repository: repository,
+			Name:       update.Target,
+		}); err != nil {
+			return PrePushUpdateResult{}, err
+		}
+		return PrePushUpdateResult{}, sharedLinePushForbidden(update)
+	}
+	if update.Target.Family() != branch.FamilyScratch && !update.Target.Family().IsOfficialWorkingBranch() {
+		return PrePushUpdateResult{}, unsupportedSyncFamily(update.Target)
+	}
 	if _, err := synchronizer.validator.Validate(ctx, ValidateRequest{
 		Repository: repository,
 		Name:       update.Target,
 	}); err != nil {
 		return PrePushUpdateResult{}, err
-	}
-	if update.Target.Family().IsSharedLine() {
-		return PrePushUpdateResult{}, sharedLinePushForbidden(update)
 	}
 	if update.Action == PushActionDelete {
 		result.Publication = branch.PublicationPublished
@@ -244,10 +253,6 @@ func (synchronizer *Synchronizer) validatePrePushUpdate(
 		result.Publication = branch.PublicationUnknown
 		return result, nil
 	}
-	if !update.Target.Family().IsOfficialWorkingBranch() {
-		return PrePushUpdateResult{}, unsupportedSyncFamily(update.Target)
-	}
-
 	baseInput, err := synchronizer.workflowBase(ctx, repository, update.Target, explicitBase)
 	if err != nil {
 		return PrePushUpdateResult{}, err

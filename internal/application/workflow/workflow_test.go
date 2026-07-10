@@ -450,6 +450,87 @@ func TestPublishHotfixRejectsIncorrectAffectedLine(t *testing.T) {
 	assertProblemCode(t, err, problem.CodeInvalidInput)
 }
 
+func TestTicketWorkflowHelperContracts(t *testing.T) {
+	t.Parallel()
+
+	feature := mustBranch("feature/ABC-123-add-export")
+	develop := mustBase("origin", "develop")
+	main := mustBase("origin", "main")
+	release := mustBase("origin", "release/2.8.0")
+
+	t.Run("ticket bases distinguish regular, hotfix, and managed stabilization work", func(t *testing.T) {
+		resolved, err := resolveTicketBase(feature, testRepository(), nil, false)
+		if err != nil || resolved.String() != develop.String() {
+			t.Fatalf("regular base = (%q, %v)", resolved, err)
+		}
+		if _, err := resolveTicketBase(feature, testRepository(), &main, false); err == nil {
+			t.Fatal("regular ticket accepted main base")
+		}
+
+		hotfix := mustBranch("hotfix/ABC-123-payment-timeout")
+		resolved, err = resolveTicketBase(hotfix, testRepository(), &main, false)
+		if err != nil || resolved.String() != main.String() {
+			t.Fatalf("hotfix base = (%q, %v)", resolved, err)
+		}
+		if _, err := resolveTicketBase(hotfix, testRepository(), &develop, false); err == nil {
+			t.Fatal("hotfix accepted develop base")
+		}
+		if _, err := resolveTicketBase(hotfix, testRepository(), nil, false); err == nil {
+			t.Fatal("hotfix accepted missing base")
+		}
+
+		resolved, err = resolveTicketBase(mustBranch("docs/ABC-123-release-docs"), testRepository(), &release, true)
+		if err != nil || resolved.String() != release.String() {
+			t.Fatalf("managed docs base = (%q, %v)", resolved, err)
+		}
+	})
+
+	t.Run("pull request targets cannot diverge from workflow targets", func(t *testing.T) {
+		target, err := resolvePullRequestTarget(feature, develop, nil, false)
+		if err != nil || target.String() != "develop" {
+			t.Fatalf("regular target = (%q, %v)", target, err)
+		}
+		target, err = resolvePullRequestTarget(mustBranch("hotfix/ABC-123-payment-timeout"), main, nil, false)
+		if err != nil || target.String() != "main" {
+			t.Fatalf("hotfix target = (%q, %v)", target, err)
+		}
+		target, err = resolvePullRequestTarget(mustBranch("fix/ABC-123-release-blocker"), release, nil, true)
+		if err != nil || target.String() != "release/2.8.0" {
+			t.Fatalf("managed fix target = (%q, %v)", target, err)
+		}
+		wrong := mustBranch("main")
+		if _, err := resolvePullRequestTarget(feature, develop, &wrong, false); err == nil {
+			t.Fatal("regular ticket accepted a mismatched PR target")
+		}
+	})
+
+	t.Run("family and problem helpers cover both outcomes", func(t *testing.T) {
+		for _, base := range []branch.TargetBase{main, develop, release, mustBase("origin", "support/2.7")} {
+			if !isSharedLineBase(base) {
+				t.Fatalf("shared base %q was not recognized", base)
+			}
+		}
+		if isSharedLineBase(mustBase("origin", "feature/ABC-123-add-export")) {
+			t.Fatal("ticket branch was treated as shared")
+		}
+		if !isWorkflowManagedTicketBase(branch.FamilyFix, main) ||
+			!isWorkflowManagedTicketBase(branch.FamilyDocs, release) ||
+			!isWorkflowManagedTicketBase(branch.FamilyChore, release) ||
+			isWorkflowManagedTicketBase(branch.FamilyFeature, release) {
+			t.Fatal("workflow-managed family classification is incorrect")
+		}
+		if _, ok := problem.As(repositoryRequired()); !ok {
+			t.Fatal("repositoryRequired is not a problem")
+		}
+		if _, ok := problem.As(internalDependencyError("workflow")); !ok {
+			t.Fatal("internalDependencyError is not a problem")
+		}
+		if mustDevelop().String() != "develop" {
+			t.Fatal("mustDevelop did not return develop")
+		}
+	})
+}
+
 func TestReleaseWorkflows(t *testing.T) {
 	t.Parallel()
 

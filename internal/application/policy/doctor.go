@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/CyberT33N/git-governance/internal/application/port"
+	"github.com/CyberT33N/git-governance/internal/domain/problem"
 )
 
 // DoctorService performs read-only local diagnostics.
@@ -52,6 +53,16 @@ type DoctorResult struct {
 // Run checks the repository and configuration without installing, repairing,
 // fetching, or otherwise mutating anything.
 func (service *DoctorService) Run(ctx context.Context, directory string) (DoctorResult, error) {
+	if ctx != nil && ctx.Err() != nil {
+		return DoctorResult{}, problem.Wrap(problem.Details{
+			Code:        problem.CodeOperationCancelled,
+			Category:    problem.CategoryCancelled,
+			Field:       "doctor",
+			Expected:    "an active context",
+			Rule:        "doctor diagnostics stop when the caller cancels the command",
+			Remediation: "retry with an active context",
+		}, ctx.Err())
+	}
 	result := DoctorResult{Checks: make([]Check, 0, 9)}
 	if service.git == nil {
 		result.Checks = append(result.Checks, Check{

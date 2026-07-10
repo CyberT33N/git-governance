@@ -2,6 +2,7 @@ package commitapp
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -13,14 +14,20 @@ import (
 )
 
 type fakeGitRepository struct {
-	staged      bool
-	publication branch.PublicationState
-	err         error
-	calls       []string
-	stagedPaths []string
-	committed   commitmsg.Message
-	pushedName  branch.BranchName
-	setUpstream bool
+	staged         bool
+	publication    branch.PublicationState
+	err            error
+	validateRefErr error
+	stageErr       error
+	stagedErr      error
+	commitErr      error
+	publicationErr error
+	pushErr        error
+	calls          []string
+	stagedPaths    []string
+	committed      commitmsg.Message
+	pushedName     branch.BranchName
+	setUpstream    bool
 }
 
 func (fake *fakeGitRepository) Discover(context.Context, string) (port.RepositoryIdentity, error) {
@@ -60,7 +67,7 @@ func (fake *fakeGitRepository) CurrentBranch(context.Context, port.RepositoryIde
 
 func (fake *fakeGitRepository) ValidateBranchRef(context.Context, port.RepositoryIdentity, branch.BranchName) error {
 	fake.calls = append(fake.calls, "validate-ref")
-	return fake.err
+	return fake.methodError(fake.validateRefErr)
 }
 
 func (fake *fakeGitRepository) BranchExists(context.Context, port.RepositoryIdentity, branch.BranchName) (bool, error) {
@@ -105,7 +112,7 @@ func (fake *fakeGitRepository) SwitchBranch(context.Context, port.RepositoryIden
 
 func (fake *fakeGitRepository) PublicationState(context.Context, port.RepositoryIdentity, branch.BranchName) (branch.PublicationState, error) {
 	fake.calls = append(fake.calls, "publication")
-	return fake.publication, fake.err
+	return fake.publication, fake.methodError(fake.publicationErr)
 }
 
 func (fake *fakeGitRepository) HasMissingBaseCommits(context.Context, port.RepositoryIdentity, branch.TargetBase) (bool, error) {
@@ -145,25 +152,32 @@ func (fake *fakeGitRepository) ReleaseTagsAt(context.Context, port.RepositoryIde
 
 func (fake *fakeGitRepository) HasStagedChanges(context.Context, port.RepositoryIdentity) (bool, error) {
 	fake.calls = append(fake.calls, "has-staged")
-	return fake.staged, fake.err
+	return fake.staged, fake.methodError(fake.stagedErr)
 }
 
 func (fake *fakeGitRepository) Stage(_ context.Context, _ port.RepositoryIdentity, paths []string) error {
 	fake.calls = append(fake.calls, "stage")
 	fake.stagedPaths = append([]string(nil), paths...)
-	return fake.err
+	return fake.methodError(fake.stageErr)
 }
 
 func (fake *fakeGitRepository) Commit(_ context.Context, _ port.RepositoryIdentity, message commitmsg.Message) error {
 	fake.calls = append(fake.calls, "commit")
 	fake.committed = message
-	return fake.err
+	return fake.methodError(fake.commitErr)
 }
 
 func (fake *fakeGitRepository) Push(_ context.Context, _ port.RepositoryIdentity, name branch.BranchName, setUpstream bool) error {
 	fake.calls = append(fake.calls, "push")
 	fake.pushedName = name
 	fake.setUpstream = setUpstream
+	return fake.methodError(fake.pushErr)
+}
+
+func (fake *fakeGitRepository) methodError(specific error) error {
+	if specific != nil {
+		return specific
+	}
 	return fake.err
 }
 
@@ -250,6 +264,70 @@ func TestValidateCommitRejectsMismatchesAndSharedLines(t *testing.T) {
 	})
 }
 
+func TestValidateCommitWhiteboxPaths(t *testing.T) {
+	t.Parallel()
+
+	request := validRequest()
+	t.Run("repository, context, branch, and message guards", func(t *testing.T) {
+		_, err := NewService(&fakeGitRepository{}, &fakeKeyPolicy{}, nil).Validate(context.Background(), ValidateRequest{
+			Branch:  request.Branch,
+			Message: request.Message,
+		})
+		assertProblemCode(t, err, problem.CodeRepositoryNotFound)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err = NewService(&fakeGitRepository{}, &fakeKeyPolicy{}, nil).Validate(ctx, ValidateRequest{
+			Repository: request.Repository,
+			Branch:     request.Branch,
+			Message:    request.Message,
+		})
+		assertProblemCode(t, err, problem.CodeOperationCancelled)
+
+		_, err = NewService(&fakeGitRepository{}, &fakeKeyPolicy{}, nil).Validate(context.Background(), ValidateRequest{
+			Repository: request.Repository,
+			Message:    request.Message,
+		})
+		assertProblemCode(t, err, problem.CodeCommitHeaderInvalid)
+
+		_, err = NewService(&fakeGitRepository{}, &fakeKeyPolicy{}, nil).Validate(context.Background(), ValidateRequest{
+			Repository: request.Repository,
+			Branch:     request.Branch,
+		})
+		assertProblemCode(t, err, problem.CodeCommitHeaderInvalid)
+	})
+
+	t.Run("git and policy errors are preserved", func(t *testing.T) {
+		refErr := errors.New("ref failed")
+		_, err := NewService(&fakeGitRepository{validateRefErr: refErr}, &fakeKeyPolicy{}, nil).Validate(context.Background(), ValidateRequest{
+			Repository: request.Repository,
+			Branch:     request.Branch,
+			Message:    request.Message,
+		})
+		if !errors.Is(err, refErr) {
+			t.Fatalf("Validate() error = %v, want %v", err, refErr)
+		}
+
+		policyErr := errors.New("policy failed")
+		_, err = NewService(&fakeGitRepository{}, &fakeKeyPolicy{err: policyErr}, nil).Validate(context.Background(), ValidateRequest{
+			Repository: request.Repository,
+			Branch:     request.Branch,
+			Message:    request.Message,
+		})
+		if !errors.Is(err, policyErr) {
+			t.Fatalf("Validate() error = %v, want %v", err, policyErr)
+		}
+
+		if _, err := NewService(&fakeGitRepository{}, nil, nil).Validate(context.Background(), ValidateRequest{
+			Repository: request.Repository,
+			Branch:     request.Branch,
+			Message:    request.Message,
+		}); err != nil {
+			t.Fatalf("nil policy Validate() error = %v", err)
+		}
+	})
+}
+
 func TestCreateCommitWithExplicitStage(t *testing.T) {
 	t.Parallel()
 
@@ -302,6 +380,118 @@ func TestCreateCommitDryRunAndNoStagedChanges(t *testing.T) {
 		assertProblemCode(t, err, problem.CodeInvalidInput)
 		if got := strings.Join(git.calls, ","); got != "validate-ref,has-staged" {
 			t.Fatalf("calls = %q", got)
+		}
+	})
+}
+
+func TestCreateCommitWhiteboxPaths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("validation failure stops before planning or mutation", func(t *testing.T) {
+		git := &fakeGitRepository{}
+		request := validRequest()
+		request.Branch = branch.BranchName{}
+		_, err := NewService(git, &fakeKeyPolicy{}, nil).Create(context.Background(), request)
+		assertProblemCode(t, err, problem.CodeCommitHeaderInvalid)
+		if len(git.calls) != 0 {
+			t.Fatalf("validation failure must not call Git: %v", git.calls)
+		}
+	})
+
+	t.Run("dry run includes push plan without mutation", func(t *testing.T) {
+		git := &fakeGitRepository{}
+		service := NewService(git, &fakeKeyPolicy{}, &fakePushValidator{})
+		request := validRequest()
+		request.Push = true
+		request.DryRun = true
+		result, err := service.Create(context.Background(), request)
+		if err != nil || len(result.Plan) != 3 || result.Committed || result.Pushed {
+			t.Fatalf("Create() = (%#v, %v)", result, err)
+		}
+		if got := strings.Join(git.calls, ","); got != "validate-ref" {
+			t.Fatalf("dry-run calls = %q", got)
+		}
+	})
+
+	t.Run("create applies the default remote after validation", func(t *testing.T) {
+		git := &fakeGitRepository{staged: true}
+		request := validRequest()
+		request.Repository.Remote = ""
+		result, err := NewService(git, &fakeKeyPolicy{}, nil).Create(context.Background(), request)
+		if err != nil || !result.Committed {
+			t.Fatalf("Create() = (%#v, %v)", result, err)
+		}
+	})
+
+	t.Run("stage, staged, and commit failures are preserved", func(t *testing.T) {
+		testCases := []struct {
+			name string
+			git  *fakeGitRepository
+		}{
+			{name: "stage", git: &fakeGitRepository{stageErr: errors.New("stage failed")}},
+			{name: "staged", git: &fakeGitRepository{stagedErr: errors.New("staged failed")}},
+			{name: "commit", git: &fakeGitRepository{staged: true, commitErr: errors.New("commit failed")}},
+		}
+		for _, testCase := range testCases {
+			testCase := testCase
+			t.Run(testCase.name, func(t *testing.T) {
+				request := validRequest()
+				if testCase.name == "stage" {
+					request.StagePaths = []string{"README.md"}
+				}
+				_, err := NewService(testCase.git, &fakeKeyPolicy{}, nil).Create(context.Background(), request)
+				if err == nil {
+					t.Fatal("Create() error = nil")
+				}
+			})
+		}
+	})
+
+	t.Run("push dependencies and publication paths are enforced", func(t *testing.T) {
+		request := validRequest()
+		request.Push = true
+
+		git := &fakeGitRepository{staged: true}
+		_, err := NewService(git, &fakeKeyPolicy{}, nil).Create(context.Background(), request)
+		assertProblemCode(t, err, problem.CodeInternal)
+
+		publicationErr := errors.New("publication failed")
+		git = &fakeGitRepository{staged: true, publicationErr: publicationErr}
+		_, err = NewService(git, &fakeKeyPolicy{}, &fakePushValidator{}).Create(context.Background(), request)
+		if !errors.Is(err, publicationErr) {
+			t.Fatalf("publication error = %v", err)
+		}
+
+		pushErr := errors.New("push failed")
+		git = &fakeGitRepository{staged: true, publication: branch.PublicationPublished, pushErr: pushErr}
+		_, err = NewService(git, &fakeKeyPolicy{}, &fakePushValidator{}).Create(context.Background(), request)
+		if !errors.Is(err, pushErr) {
+			t.Fatalf("push error = %v", err)
+		}
+		if git.setUpstream {
+			t.Fatal("published branch push must not set upstream")
+		}
+	})
+
+	t.Run("helper contracts are actionable", func(t *testing.T) {
+		repository, err := normalizeRepository(port.RepositoryIdentity{Root: "C:/repo"})
+		if err != nil || repository.Remote != "origin" {
+			t.Fatalf("normalizeRepository() = (%#v, %v)", repository, err)
+		}
+		for _, err := range []error{
+			sharedLineForbidden(mustBranch("main")),
+			invalidCommitInput("invalid input"),
+			internalDependencyError("push validator"),
+		} {
+			if _, ok := problem.As(err); !ok {
+				t.Fatalf("helper error %T is not a problem", err)
+			}
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		assertProblemCode(t, contextError(ctx), problem.CodeOperationCancelled)
+		if err := contextError(nil); err != nil {
+			t.Fatalf("contextError(nil) = %v", err)
 		}
 	})
 }

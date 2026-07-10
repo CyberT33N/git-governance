@@ -7,6 +7,7 @@ import (
 	"github.com/CyberT33N/git-governance/internal/application/port"
 	"github.com/CyberT33N/git-governance/internal/domain/branch"
 	"github.com/CyberT33N/git-governance/internal/domain/commitmsg"
+	"github.com/CyberT33N/git-governance/internal/domain/ticket"
 	"github.com/spf13/cobra"
 )
 
@@ -110,10 +111,7 @@ func newBranchCreateCommand(application *application) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			id, err := parseTicketParts(key.String(), number.String())
-			if err != nil {
-				return err
-			}
+			id := ticket.NewID(key, number)
 			slug, err := application.resolveSlug(command.Context(), slugRaw, "Branch description")
 			if err != nil {
 				return err
