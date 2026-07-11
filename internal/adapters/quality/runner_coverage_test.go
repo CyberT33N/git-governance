@@ -40,13 +40,17 @@ func TestRunnerCoverageNormalizesNilContextAndAppliesDefaultExclusions(t *testin
 		},
 	})
 
-	result, err := runner.Run(nil, port.RepositoryIdentity{Root: root}, qualityRequest(branch.FamilyFeature))
+	result, err := runner.Run(testNilContext(), port.RepositoryIdentity{Root: root}, qualityRequest(branch.FamilyFeature))
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if result.Status != port.QualityPassed || strings.Join(calls, ",") != "default,feature" {
 		t.Fatalf("Run() = (%#v, %v), want passed default and feature gates", result, calls)
 	}
+}
+
+func testNilContext() context.Context {
+	return nil
 }
 
 func TestRunnerCoverageRejectsDuplicateNamesAndTooManyArguments(t *testing.T) {

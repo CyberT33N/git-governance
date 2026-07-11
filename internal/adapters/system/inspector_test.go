@@ -117,7 +117,7 @@ func TestInspectorErrorAndProcessPaths(t *testing.T) {
 			LookPath: func(string) (string, error) { return "tool", nil },
 			Run:      func(context.Context, string, ...string) ([]byte, error) { return []byte("tool 1.0\n"), nil },
 		})
-		version, err := inspector.Version(nil, "tool")
+		version, err := inspector.Version(testNilContext(), "tool")
 		if err != nil || version != "tool 1.0" {
 			t.Fatalf("Version(nil) = (%q, %v)", version, err)
 		}
@@ -138,6 +138,10 @@ func TestInspectorErrorAndProcessPaths(t *testing.T) {
 	if err != nil || len(output) == 0 {
 		t.Fatalf("runCommand() = (%q, %v)", output, err)
 	}
+}
+
+func testNilContext() context.Context {
+	return nil
 }
 
 type fakeFileInfo struct{}

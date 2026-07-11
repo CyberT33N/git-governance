@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +26,12 @@ import (
 const (
 	defaultTimeout         = 30 * time.Second
 	workflowBasesConfigKey = "git-governance.workflow-bases"
+	maxDiagnosticBytes     = 4096
+)
+
+var (
+	urlCredentialsPattern   = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/\s@]+@`)
+	secretAssignmentPattern = regexp.MustCompile(`(?i)\b(token|password|secret|authorization)=\S+`)
 )
 
 // Options configures the Git process adapter.
@@ -331,6 +338,45 @@ func (repository *Repository) Fetch(ctx context.Context, identity port.Repositor
 		return repository.commandProblem(problem.CodeGitCommandFailed, identity, "fetch the selected remote", result)
 	}
 	return nil
+}
+
+// TargetBaseExists checks the fetched remote-tracking reference used to create
+// or synchronize a branch. A missing base is a normal repository state, not a
+// failed Git operation.
+func (repository *Repository) TargetBaseExists(
+	ctx context.Context,
+	identity port.RepositoryIdentity,
+	base branch.TargetBase,
+) (bool, error) {
+	if !base.IsRemoteTracking() {
+		return false, problem.New(problem.Details{
+			Code:        problem.CodeBranchBaseInvalid,
+			Category:    problem.CategoryRepository,
+			Field:       "target base",
+			Actual:      base.String(),
+			Expected:    "a remote-tracking target base",
+			Rule:        "remote branch creation checks the fetched selected remote",
+			Example:     identity.Remote + "/develop",
+			Remediation: "select a canonical remote target base",
+		})
+	}
+	result := repository.invoke(
+		ctx,
+		identity.Root,
+		nil,
+		"show-ref",
+		"--verify",
+		"--quiet",
+		"refs/remotes/"+base.String(),
+	)
+	switch {
+	case result.err == nil:
+		return true, nil
+	case result.exitCode == 1:
+		return false, nil
+	default:
+		return false, repository.commandProblem(problem.CodeGitCommandFailed, identity, "verify the fetched target base", result)
+	}
 }
 
 // CreateBranch creates a branch directly from its remote-tracking target base.
@@ -656,20 +702,35 @@ func (repository *Repository) commandProblem(code problem.Code, identity port.Re
 		code = problem.CodeExternalCommandFailed
 	}
 
-	actual := strings.Join(commandSummary(identity, action), " ")
-	if result.truncated {
-		actual += " (diagnostic output truncated)"
-	}
 	return problem.Wrap(problem.Details{
 		Code:        code,
 		Category:    category,
 		Field:       "git operation",
-		Actual:      actual,
+		Context:     strings.Join(commandSummary(identity, action), " "),
+		Diagnostic:  commandDiagnostic(result),
 		Expected:    "a successful Git operation",
 		Rule:        "Git operations must complete successfully before the workflow can continue",
 		Example:     "git fetch --prune origin",
 		Remediation: "review the Git diagnostic, correct the repository state, and retry",
 	}, commandCause(result))
+}
+
+func commandDiagnostic(result processResult) string {
+	diagnostic := strings.TrimSpace(result.stderr)
+	if diagnostic == "" {
+		diagnostic = strings.TrimSpace(result.stdout)
+	}
+	if diagnostic == "" && result.truncated {
+		return "[Git diagnostic output was truncated]"
+	}
+	diagnostic = urlCredentialsPattern.ReplaceAllString(diagnostic, "${1}[redacted]@")
+	diagnostic = secretAssignmentPattern.ReplaceAllString(diagnostic, "$1=[redacted]")
+	if len(diagnostic) > maxDiagnosticBytes {
+		diagnostic = diagnostic[:maxDiagnosticBytes] + "\n[Git diagnostic output truncated]"
+	} else if result.truncated {
+		diagnostic += "\n[Git diagnostic output truncated]"
+	}
+	return diagnostic
 }
 
 func commandSummary(identity port.RepositoryIdentity, action string) []string {

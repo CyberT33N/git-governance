@@ -158,7 +158,7 @@ func TestStoreCoverageSystemConfigDirectoryDelegates(t *testing.T) {
 }
 
 func TestStoreCoverageContextErrorAcceptsNilContext(t *testing.T) {
-	if err := contextError(nil); err != nil {
+	if err := contextError(testNilContext()); err != nil {
 		t.Fatalf("contextError(nil) = %v, want nil", err)
 	}
 }
@@ -575,5 +575,9 @@ func firstError(errorsToCheck ...error) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func testNilContext() context.Context {
 	return nil
 }

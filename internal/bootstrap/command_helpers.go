@@ -8,6 +8,7 @@ import (
 
 	branchapp "github.com/CyberT33N/git-governance/internal/application/branch"
 	"github.com/CyberT33N/git-governance/internal/application/port"
+	"github.com/CyberT33N/git-governance/internal/application/workflow"
 	"github.com/CyberT33N/git-governance/internal/domain/branch"
 	"github.com/CyberT33N/git-governance/internal/domain/commitmsg"
 	"github.com/CyberT33N/git-governance/internal/domain/problem"
@@ -116,9 +117,10 @@ func (application *application) resolveKey(ctx context.Context, service services
 	}
 	value, err := application.prompt().Input(ctx, port.InputRequest{
 		Label:       "Ticket key",
-		Description: "A ticket key uses uppercase letters and digits and begins with a letter.",
+		Description: "Enter 1 to 32 uppercase ASCII letters or digits, starting with a letter. Lowercase letters, spaces, and hyphens are not allowed. Examples: ABC, PLATFORM2.",
 		Default:     defaultValue,
 		Required:    true,
+		Validate:    inputValidator(ticket.ParseKey),
 	})
 	if err != nil {
 		return ticket.Key{}, err
@@ -127,25 +129,25 @@ func (application *application) resolveKey(ctx context.Context, service services
 }
 
 func (application *application) resolveNumber(ctx context.Context, raw string) (ticket.Number, error) {
-	if raw != "" {
-		return ticket.ParseNumber(raw)
-	}
-	value, err := application.requireInput(ctx, "", "Ticket number", "Enter the positive numeric ticket identifier.")
-	if err != nil {
-		return ticket.Number{}, err
-	}
-	return ticket.ParseNumber(value)
+	return resolveValidatedInput(
+		application,
+		ctx,
+		raw,
+		"Ticket number",
+		"Enter 1 to 18 decimal digits, starting with 1 to 9. Leading zeroes, signs, decimals, and spaces are not allowed. Example: 123.",
+		ticket.ParseNumber,
+	)
 }
 
 func (application *application) resolveSlug(ctx context.Context, raw string, label string) (branch.Slug, error) {
-	if raw != "" {
-		return branch.ParseSlug(raw)
-	}
-	value, err := application.requireInput(ctx, "", label, "Use lowercase words separated by single hyphens.")
-	if err != nil {
-		return branch.Slug{}, err
-	}
-	return branch.ParseSlug(value)
+	return resolveValidatedInput(
+		application,
+		ctx,
+		raw,
+		label,
+		"Enter 1 to 100 lowercase ASCII letters or digits. Separate words with exactly one hyphen; do not use spaces, uppercase letters, or leading, trailing, or repeated hyphens. Example: add-export-button.",
+		branch.ParseSlug,
+	)
 }
 
 func (application *application) resolveFamily(ctx context.Context, raw string, includeSpecial bool) (branch.Family, error) {
@@ -223,21 +225,30 @@ func parseBase(raw, remote string) (*branch.TargetBase, error) {
 	return &base, nil
 }
 
-func (application *application) resolveScratchBase(ctx context.Context, raw, remote string) (*branch.TargetBase, error) {
-	if raw == "" {
-		value, err := application.requireInput(
-			ctx,
-			"",
-			"Official ticket branch base",
-			"Scratch branches are private exploration only. Select the local official ticket branch that owns the same ticket; never use scratch as a pull-request source.",
-		)
-		if err != nil {
-			return nil, err
-		}
-		raw = value
+func (application *application) resolveScratchBase(
+	ctx context.Context,
+	raw, remote string,
+	id ticket.ID,
+) (*branch.TargetBase, error) {
+	base, err := resolveValidatedInput(
+		application,
+		ctx,
+		raw,
+		"Official ticket branch base",
+		"Enter the local official feature, fix, docs, refactor, chore, test, perf, or hotfix branch for the same ticket. Do not use origin/, a shared line, or a scratch branch. Example: feature/ABC-123-add-export.",
+		func(value string) (branch.TargetBase, error) {
+			return parseScratchBase(value, remote, id)
+		},
+	)
+	if err != nil {
+		return nil, err
 	}
+	return &base, nil
+}
+
+func parseScratchBase(raw, remote string, id ticket.ID) (branch.TargetBase, error) {
 	if strings.HasPrefix(raw, remote+"/") {
-		return nil, problem.New(problem.Details{
+		return branch.TargetBase{}, problem.New(problem.Details{
 			Code:        problem.CodeBranchBaseInvalid,
 			Category:    problem.CategoryGovernance,
 			Field:       "scratch base",
@@ -250,11 +261,11 @@ func (application *application) resolveScratchBase(ctx context.Context, raw, rem
 	}
 	base, err := branch.ParseLocalBase(raw)
 	if err != nil {
-		return nil, err
+		return branch.TargetBase{}, err
 	}
 	name := base.Branch()
 	if !name.Family().IsOfficialWorkingBranch() {
-		return nil, problem.New(problem.Details{
+		return branch.TargetBase{}, problem.New(problem.Details{
 			Code:        problem.CodeBranchBaseInvalid,
 			Category:    problem.CategoryGovernance,
 			Field:       "scratch base",
@@ -265,7 +276,215 @@ func (application *application) resolveScratchBase(ctx context.Context, raw, rem
 			Remediation: "select the official branch for the same ticket or use workflow ticket start",
 		})
 	}
-	return &base, nil
+	baseTicket, hasTicket := name.Ticket()
+	if !hasTicket || baseTicket.String() != id.String() {
+		return branch.TargetBase{}, problem.New(problem.Details{
+			Code:        problem.CodeBranchBaseInvalid,
+			Category:    problem.CategoryGovernance,
+			Field:       "scratch base",
+			Actual:      raw,
+			Expected:    "a local official branch for ticket " + id.String(),
+			Rule:        "scratch branches stay attached to the official branch for the same ticket",
+			Example:     "feature/" + id.String() + "-add-export",
+			Remediation: "select the official branch that carries the current ticket",
+		})
+	}
+	return base, nil
+}
+
+func resolveValidatedInput[T any](
+	application *application,
+	ctx context.Context,
+	raw, label, description string,
+	parse func(string) (T, error),
+) (T, error) {
+	if raw != "" {
+		return parse(raw)
+	}
+	value, err := application.requireInput(ctx, "", label, description, inputValidator(parse))
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	return parse(value)
+}
+
+func inputValidator[T any](parse func(string) (T, error)) port.InputValidator {
+	return func(value string) error {
+		_, err := parse(value)
+		return err
+	}
+}
+
+func (application *application) resolveAffectedLine(ctx context.Context, raw string) (branch.BranchName, error) {
+	return resolveAllowedBranchLine(
+		application,
+		ctx,
+		raw,
+		"Affected line",
+		"Enter main, release/<semantic-version>, or support/<major.minor>. A hotfix must start from the active line that contains the defect. Examples: main, release/2.8.0, support/2.7.",
+		"affected line",
+		"main, release/<semver>, or support/<major.minor>",
+		"a hotfix must start from the active line that contains the defect",
+		"main",
+		"select the main, release, or support line that contains the defect",
+		branch.FamilyMain,
+		branch.FamilyRelease,
+		branch.FamilySupport,
+	)
+}
+
+func (application *application) resolvePropagationTarget(ctx context.Context, raw string) (branch.BranchName, error) {
+	return resolveAllowedBranchLine(
+		application,
+		ctx,
+		raw,
+		"Propagation target line",
+		"Enter main, develop, release/<semantic-version>, or support/<major.minor>. The target must be the active line that also needs the reviewed hotfix. Examples: develop, release/2.8.0.",
+		"propagation target line",
+		"main, develop, release/<semver>, or support/<major.minor>",
+		"hotfix propagation targets another active line",
+		"develop",
+		"select the active line that also needs the reviewed hotfix",
+		branch.FamilyMain,
+		branch.FamilyDevelop,
+		branch.FamilyRelease,
+		branch.FamilySupport,
+	)
+}
+
+func (application *application) resolveReleaseLine(
+	ctx context.Context,
+	raw, label, description string,
+) (branch.BranchName, error) {
+	return resolveAllowedBranchLine(
+		application,
+		ctx,
+		raw,
+		label,
+		description,
+		"release line",
+		"release/<semver>",
+		"the selected workflow requires a canonical release line",
+		"release/2.8.0",
+		"enter the release/<semver> line required by this workflow",
+		branch.FamilyRelease,
+	)
+}
+
+func (application *application) resolveReviewedCommit(ctx context.Context, raw string) (string, error) {
+	return resolveValidatedInput(
+		application,
+		ctx,
+		raw,
+		"Reviewed source commit",
+		"Enter the 7 to 64 character hexadecimal SHA of the reviewed hotfix commit. Do not enter a branch name, tag, ref, or spaces. Example: 0123456789abcdef0123456789abcdef01234567.",
+		func(value string) (string, error) {
+			return value, workflow.ValidateCommitID(value)
+		},
+	)
+}
+
+func (application *application) resolveReleaseVersion(ctx context.Context, raw string) (branch.SemanticVersion, error) {
+	return resolveValidatedInput(
+		application,
+		ctx,
+		raw,
+		"Release version",
+		"Enter Semantic Versioning 2.0.0 without a leading v: major.minor.patch, optionally with pre-release or build metadata. Examples: 2.8.0, 2.8.0-rc.1.",
+		branch.ParseSemanticVersion,
+	)
+}
+
+func (application *application) resolveSupportVersion(ctx context.Context, raw string) (branch.SupportVersion, error) {
+	return resolveValidatedInput(
+		application,
+		ctx,
+		raw,
+		"Support version",
+		"Enter exactly major.minor without a leading v or leading zeroes. Examples: 2.7, 0.9. Patch versions are not allowed.",
+		branch.ParseSupportVersion,
+	)
+}
+
+func (application *application) resolveStabilizationKind(ctx context.Context, raw string) (workflow.ReleaseStabilizationKind, error) {
+	return resolveValidatedInput(
+		application,
+		ctx,
+		raw,
+		"Stabilization kind",
+		"Enter blocker, docs, or release-prep. Frozen release lines do not allow new features or general refactors. Example: blocker.",
+		workflow.ParseReleaseStabilizationKind,
+	)
+}
+
+func resolveAllowedBranchLine(
+	application *application,
+	ctx context.Context,
+	raw, label, description, field, expected, rule, example, remediation string,
+	allowed ...branch.Family,
+) (branch.BranchName, error) {
+	return resolveValidatedInput(
+		application,
+		ctx,
+		raw,
+		label,
+		description,
+		func(value string) (branch.BranchName, error) {
+			name, err := branch.ParseName(value)
+			if err != nil {
+				return branch.BranchName{}, err
+			}
+			for _, family := range allowed {
+				if name.Family() == family {
+					return name, nil
+				}
+			}
+			return branch.BranchName{}, problem.New(problem.Details{
+				Code:        problem.CodeInvalidInput,
+				Category:    problem.CategoryGovernance,
+				Field:       field,
+				Actual:      value,
+				Expected:    expected,
+				Rule:        rule,
+				Example:     example,
+				Remediation: remediation,
+			})
+		},
+	)
+}
+
+type workflowInputSummary struct {
+	inputs []problem.WorkflowInput
+}
+
+func (summary *workflowInputSummary) add(field, value string) {
+	if field == "" || value == "" {
+		return
+	}
+	for index := range summary.inputs {
+		if summary.inputs[index].Field == field {
+			summary.inputs[index].Value = value
+			return
+		}
+	}
+	summary.inputs = append(summary.inputs, problem.WorkflowInput{
+		Field: field,
+		Value: value,
+	})
+}
+
+func (summary *workflowInputSummary) attach(err error) error {
+	return problem.WithWorkflowInputs(err, summary.inputs)
+}
+
+func withWorkflowInputs(
+	run func(command *cobra.Command, inputs *workflowInputSummary) error,
+) func(command *cobra.Command, arguments []string) error {
+	return func(command *cobra.Command, _ []string) error {
+		inputs := &workflowInputSummary{}
+		return inputs.attach(run(command, inputs))
+	}
 }
 
 func currentOrSpecified(ctx context.Context, service services, raw string, repository port.RepositoryIdentity) (branch.BranchName, error) {

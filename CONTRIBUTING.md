@@ -63,12 +63,12 @@ Every behavior change requires tests at the lowest meaningful boundary:
 Run the full local gate:
 
 ```powershell
-go test ./...
-go run .\cmd\check-coverage
-go test -race ./...
-go vet ./...
-go test ./internal/integration -count=1
+go run .\cmd\build
 ```
+
+The build runner owns the complete ordered quality sequence and resolves its
+pinned development tools from `tools/go.mod`; do not require globally installed
+linters, vulnerability scanners, or Lefthook binaries.
 
 Run bounded fuzzing before changes to parser or config code:
 

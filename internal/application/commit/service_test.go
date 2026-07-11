@@ -85,6 +85,11 @@ func (fake *fakeGitRepository) Fetch(context.Context, port.RepositoryIdentity) e
 	return fake.err
 }
 
+func (fake *fakeGitRepository) TargetBaseExists(context.Context, port.RepositoryIdentity, branch.TargetBase) (bool, error) {
+	fake.calls = append(fake.calls, "target-base-exists")
+	return true, fake.err
+}
+
 func (fake *fakeGitRepository) CreateBranch(context.Context, port.RepositoryIdentity, branch.BranchName, branch.TargetBase, bool) error {
 	fake.calls = append(fake.calls, "create-branch")
 	return fake.err
@@ -490,7 +495,7 @@ func TestCreateCommitWhiteboxPaths(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		assertProblemCode(t, contextError(ctx), problem.CodeOperationCancelled)
-		if err := contextError(nil); err != nil {
+		if err := contextError(testNilContext()); err != nil {
 			t.Fatalf("contextError(nil) = %v", err)
 		}
 	})
@@ -606,6 +611,10 @@ func assertProblemCode(t *testing.T, err error, expected problem.Code) {
 	if actual.Code != expected {
 		t.Fatalf("problem code = %q, want %q", actual.Code, expected)
 	}
+}
+
+func testNilContext() context.Context {
+	return nil
 }
 
 var _ port.GitRepository = (*fakeGitRepository)(nil)

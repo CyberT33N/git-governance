@@ -49,6 +49,18 @@ Regeln:
 - Im JSON-Modus sind Prompts verboten; bei `--interactive=auto` verhält sich JSON deshalb wie `never`.
 - Secrets werden weder über Flags noch über diese Konfigurationsdatei verwaltet.
 
+Interaktive Textfelder zeigen vor der Eingabe ihren vollständigen kanonischen
+Vertrag. Bei einer fachlich ungültigen Eingabe bleibt die UI auf diesem Feld:
+Sie zeigt den sicheren tatsächlichen Wert, die verletzte Regel, das erwartete
+Format, ein gültiges Beispiel und die Korrektur und fragt denselben Wert erneut
+ab. Es gibt kein Retry-Limit und keine Rückkehr an den Workflow-Anfang.
+
+Schlägt ein Command erst nach akzeptierten Eingaben fehl, enthält die
+Human-/JSON-Fehlerausgabe eine geordnete Eingabeübersicht. Die Übersicht umfasst
+die im Command verwendeten Werte; sicherheitsmarkierte Werte werden redigiert.
+Bei Git-Fehlern stehen `context` und `diagnostic` getrennt vom Feld
+`actual`, damit Operationskontext nicht fälschlich als Benutzereingabe gilt.
+
 `--quality-config` ist keine Spracheinstellung. Es zeigt auf einen
 repository-lokalen, explizit vertrauenswürdigen JSON-Vertrag aus ausführbaren
 Command-/Argumentarrays. Fehlt die Datei, lautet das Ergebnis
@@ -161,6 +173,9 @@ Regeln:
 
 - Fehlt `--family` interaktiv, erscheint eine Auswahl mit Erklärung jeder Familie.
 - Für reguläre Ticket-Familien ist die Standardbasis `<remote>/develop`.
+- Nach `fetch --prune` muss diese Remote-Tracking-Basis existieren. Fehlt etwa
+  `origin/develop`, wird die Erstellung als `BRANCH_BASE_INVALID` mit der
+  fehlenden Basis abgelehnt, bevor Git einen Branch-Wechsel versucht.
 - Vor einer echten Erstellung prüft das Kommando nach `fetch --prune`, ob
   bereits ein lokaler oder ausgewählter Remote-Tracking-Branch für dasselbe
   Ticket existiert. Ein zweiter regulärer offizieller Ticket-Branch wird

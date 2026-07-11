@@ -12,6 +12,7 @@ import (
 
 	"github.com/CyberT33N/git-governance/internal/application/port"
 	"github.com/CyberT33N/git-governance/internal/domain/problem"
+	"github.com/CyberT33N/git-governance/internal/domain/ticket"
 )
 
 func TestLineInputUsesDefaultAndRequiredValidation(t *testing.T) {
@@ -50,10 +51,134 @@ func TestLineInputUsesDefaultAndRequiredValidation(t *testing.T) {
 		if err != nil || actual != "ABC" {
 			t.Fatalf("Input() = (%q, %v)", actual, err)
 		}
-		if !strings.Contains(output.String(), "A value is required.") {
+		if !strings.Contains(output.String(), "a value is required") {
 			t.Fatalf("output = %q", output.String())
 		}
 	})
+}
+
+func TestInputValidationRetriesAndExplainsDomainFailures(t *testing.T) {
+	t.Parallel()
+
+	t.Run("line input", func(t *testing.T) {
+		output := &bytes.Buffer{}
+		prompt := New(Options{
+			Input:  strings.NewReader("001\n1\n"),
+			Output: output,
+		})
+
+		actual, err := prompt.Input(context.Background(), port.InputRequest{
+			Label:       "Ticket number",
+			Description: "Enter a canonical ticket number.",
+			Required:    true,
+			Validate: func(value string) error {
+				_, validationErr := ticket.ParseNumber(value)
+				return validationErr
+			},
+		})
+		if err != nil || actual != "1" {
+			t.Fatalf("Input() = (%q, %v)", actual, err)
+		}
+		for _, expected := range []string{
+			"Invalid value for Ticket number.",
+			"Actual value:\n  001",
+			"What is wrong?",
+			"Expected:\n  1 to 18 decimal digits without a leading zero",
+			"Valid example:\n  123",
+			"How to fix it:",
+			"Enter a new value.",
+		} {
+			if !strings.Contains(output.String(), expected) {
+				t.Fatalf("validation output missing %q: %q", expected, output.String())
+			}
+		}
+	})
+
+	t.Run("accessible form", func(t *testing.T) {
+		output := &bytes.Buffer{}
+		prompt := New(Options{
+			Input:      strings.NewReader("001\n1\n"),
+			Output:     output,
+			Accessible: true,
+			UseForms:   true,
+		})
+
+		actual, err := prompt.Input(context.Background(), port.InputRequest{
+			Label:    "Ticket number",
+			Required: true,
+			Validate: func(value string) error {
+				_, validationErr := ticket.ParseNumber(value)
+				return validationErr
+			},
+		})
+		if err != nil || actual != "1" {
+			t.Fatalf("form Input() = (%q, %v); output=%q", actual, err, output.String())
+		}
+		if !strings.Contains(output.String(), "ticket numbers must match ^[1-9][0-9]*$") {
+			t.Fatalf("form validation output = %q", output.String())
+		}
+	})
+}
+
+func TestInputValidationFormattingProtectsSensitiveValues(t *testing.T) {
+	t.Parallel()
+
+	t.Run("generic validator error uses the prompt description", func(t *testing.T) {
+		err := inputValidationFailure(
+			port.InputRequest{Label: "", Description: "a canonical value"},
+			"bad",
+			errors.New("not accepted"),
+		)
+		for _, expected := range []string{
+			"Invalid value for this value.",
+			"Actual value:\n  bad",
+			"What is wrong?\n  not accepted",
+			"Expected:\n  a canonical value",
+		} {
+			if !strings.Contains(err.Error(), expected) {
+				t.Fatalf("generic validation error missing %q: %q", expected, err)
+			}
+		}
+	})
+
+	t.Run("sensitive request omits the candidate", func(t *testing.T) {
+		err := inputValidationFailure(
+			port.InputRequest{Label: "Secret", Sensitive: true},
+			"top-secret",
+			problem.New(problem.Details{
+				Actual:          "top-secret",
+				Rule:            "the secret is invalid",
+				SensitiveActual: true,
+			}),
+		)
+		if strings.Contains(err.Error(), "top-secret") {
+			t.Fatalf("sensitive validation error leaked value: %q", err)
+		}
+	})
+
+	t.Run("typed problem without actual falls back to the candidate", func(t *testing.T) {
+		err := inputValidationFailure(
+			port.InputRequest{Label: "Value"},
+			"candidate",
+			problem.New(problem.Details{Rule: "the value is invalid"}),
+		)
+		if !strings.Contains(err.Error(), "Actual value:\n  candidate") {
+			t.Fatalf("fallback actual = %q", err)
+		}
+	})
+
+	if actual := displayValue("line\nbreak"); actual != `"line\nbreak"` {
+		t.Fatalf("displayValue(control) = %q", actual)
+	}
+	if actual := displayValue("plain"); actual != "plain" {
+		t.Fatalf("displayValue(plain) = %q", actual)
+	}
+	var message strings.Builder
+	appendDiagnosticSection(&message, "Ignored", "")
+	appendDiagnosticSection(&message, "Included", "value")
+	if actual := message.String(); actual != "\nIncluded:\n  value" {
+		t.Fatalf("diagnostic sections = %q", actual)
+	}
 }
 
 func TestLineSelectAndConfirm(t *testing.T) {

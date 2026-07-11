@@ -116,6 +116,11 @@ func (reporter *Reporter) writeHumanProblem(value *problem.Problem) error {
 			return writeFailure(err)
 		}
 	}
+	if value.Context != "" {
+		if _, err := fmt.Fprintf(reporter.writer, "\n%s:\n  %s\n", reporter.style("36", "Context"), value.Context); err != nil {
+			return writeFailure(err)
+		}
+	}
 	if value.Actual != "" && !value.SensitiveActual {
 		if _, err := fmt.Fprintf(reporter.writer, "\n%s:\n  %s\n", reporter.style("36", "Actual value"), value.Actual); err != nil {
 			return writeFailure(err)
@@ -141,6 +146,25 @@ func (reporter *Reporter) writeHumanProblem(value *problem.Problem) error {
 			return writeFailure(err)
 		}
 	}
+	if value.Diagnostic != "" && !value.SensitiveDiagnostic {
+		if _, err := fmt.Fprintf(reporter.writer, "\n%s:\n  %s\n", reporter.style("36", "Diagnostic"), value.Diagnostic); err != nil {
+			return writeFailure(err)
+		}
+	}
+	if len(value.WorkflowInputs) > 0 {
+		if _, err := fmt.Fprintf(reporter.writer, "\n%s:\n", reporter.style("36", "Workflow inputs")); err != nil {
+			return writeFailure(err)
+		}
+		for _, input := range value.WorkflowInputs {
+			actual := input.Value
+			if input.Sensitive {
+				actual = "[redacted]"
+			}
+			if _, err := fmt.Fprintf(reporter.writer, "  %s: %s\n", input.Field, actual); err != nil {
+				return writeFailure(err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -155,14 +179,22 @@ type jsonOutput struct {
 }
 
 type problemOutput struct {
-	Code        problem.Code     `json:"code"`
-	Category    problem.Category `json:"category"`
-	Field       string           `json:"field,omitempty"`
-	Actual      string           `json:"actual,omitempty"`
-	Expected    string           `json:"expected,omitempty"`
-	Rule        string           `json:"rule,omitempty"`
-	Example     string           `json:"example,omitempty"`
-	Remediation string           `json:"remediation,omitempty"`
+	Code        problem.Code          `json:"code"`
+	Category    problem.Category      `json:"category"`
+	Field       string                `json:"field,omitempty"`
+	Context     string                `json:"context,omitempty"`
+	Actual      string                `json:"actual,omitempty"`
+	Expected    string                `json:"expected,omitempty"`
+	Rule        string                `json:"rule,omitempty"`
+	Example     string                `json:"example,omitempty"`
+	Remediation string                `json:"remediation,omitempty"`
+	Diagnostic  string                `json:"diagnostic,omitempty"`
+	Inputs      []workflowInputOutput `json:"inputs,omitempty"`
+}
+
+type workflowInputOutput struct {
+	Field string `json:"field"`
+	Value string `json:"value"`
 }
 
 func problemOutputFrom(value *problem.Problem) *problemOutput {
@@ -170,15 +202,33 @@ func problemOutputFrom(value *problem.Problem) *problemOutput {
 	if value.SensitiveActual {
 		actual = ""
 	}
+	diagnostic := value.Diagnostic
+	if value.SensitiveDiagnostic {
+		diagnostic = ""
+	}
+	inputs := make([]workflowInputOutput, 0, len(value.WorkflowInputs))
+	for _, input := range value.WorkflowInputs {
+		actual := input.Value
+		if input.Sensitive {
+			actual = ""
+		}
+		inputs = append(inputs, workflowInputOutput{
+			Field: input.Field,
+			Value: actual,
+		})
+	}
 	return &problemOutput{
 		Code:        value.Code,
 		Category:    value.Category,
 		Field:       value.Field,
+		Context:     value.Context,
 		Actual:      actual,
 		Expected:    value.Expected,
 		Rule:        value.Rule,
 		Example:     value.Example,
 		Remediation: value.Remediation,
+		Diagnostic:  diagnostic,
+		Inputs:      inputs,
 	}
 }
 

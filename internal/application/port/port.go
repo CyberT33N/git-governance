@@ -40,6 +40,7 @@ type GitRepository interface {
 	BranchExists(ctx context.Context, repository RepositoryIdentity, name branch.BranchName) (bool, error)
 	OfficialBranchesForTicket(ctx context.Context, repository RepositoryIdentity, id ticket.ID) ([]branch.BranchName, error)
 	Fetch(ctx context.Context, repository RepositoryIdentity) error
+	TargetBaseExists(ctx context.Context, repository RepositoryIdentity, base branch.TargetBase) (bool, error)
 	CreateBranch(ctx context.Context, repository RepositoryIdentity, name branch.BranchName, base branch.TargetBase, switchTo bool) error
 	StoreWorkflowBase(ctx context.Context, repository RepositoryIdentity, name branch.BranchName, base branch.TargetBase) error
 	ClearWorkflowBase(ctx context.Context, repository RepositoryIdentity, name branch.BranchName) error
@@ -117,12 +118,18 @@ type Prompt interface {
 	Confirm(ctx context.Context, request ConfirmRequest) (bool, error)
 }
 
+// InputValidator validates one interactive input candidate. It returns an
+// error that the terminal adapter can render before asking again.
+type InputValidator func(string) error
+
 // InputRequest describes an explanatory text input.
 type InputRequest struct {
 	Label       string
 	Description string
 	Default     string
 	Required    bool
+	Validate    InputValidator
+	Sensitive   bool
 }
 
 // SelectRequest describes an explanatory single-value choice.

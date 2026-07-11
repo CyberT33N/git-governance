@@ -218,17 +218,26 @@ func (application *application) colorEnabled() bool {
 	}
 }
 
-func (application *application) requireInput(ctx context.Context, value, label, description string) (string, error) {
+func (application *application) requireInput(
+	ctx context.Context,
+	value, label, description string,
+	validators ...port.InputValidator,
+) (string, error) {
 	if value != "" {
 		return value, nil
 	}
 	if !application.promptAvailable() {
 		return "", missingInput(label)
 	}
+	var validate port.InputValidator
+	if len(validators) > 0 {
+		validate = validators[0]
+	}
 	return application.prompt().Input(ctx, port.InputRequest{
 		Label:       label,
 		Description: description,
 		Required:    true,
+		Validate:    validate,
 	})
 }
 

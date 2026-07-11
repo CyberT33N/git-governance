@@ -644,11 +644,14 @@ func TestCommandHelpersParseTicketPartsBaseAndFooterSpecs(t *testing.T) {
 }
 
 func TestCommandHelpersResolveScratchBase(t *testing.T) {
+	id := mustCommandHelperTicket(t, "ABC-123")
+
 	t.Run("uses an explicit local official branch", func(t *testing.T) {
 		base, err := newCommandHelperApplication(newCommandHelperOptions(), nil, false, false).resolveScratchBase(
 			context.Background(),
 			"feature/ABC-123-add-export",
 			"origin",
+			id,
 		)
 		if err != nil || base == nil || base.String() != "feature/ABC-123-add-export" || base.IsRemoteTracking() {
 			t.Fatalf("resolveScratchBase() = (%#v, %v)", base, err)
@@ -662,7 +665,7 @@ func TestCommandHelpersResolveScratchBase(t *testing.T) {
 		application := newCommandHelperApplication(newCommandHelperOptions(), prompt, true, true)
 		ctx := context.Background()
 
-		base, err := application.resolveScratchBase(ctx, "", "origin")
+		base, err := application.resolveScratchBase(ctx, "", "origin", id)
 		if err != nil || base == nil || base.String() != "fix/ABC-123-correct-export" {
 			t.Fatalf("interactive resolveScratchBase() = (%#v, %v)", base, err)
 		}
@@ -685,6 +688,7 @@ func TestCommandHelpersResolveScratchBase(t *testing.T) {
 			context.Background(),
 			"",
 			"origin",
+			id,
 		)
 		assertCommandHelperProblem(t, err, problem.CodeInvalidInput, problem.CategoryUsage, "Official ticket branch base")
 
@@ -695,6 +699,7 @@ func TestCommandHelpersResolveScratchBase(t *testing.T) {
 			context.Background(),
 			"",
 			"origin",
+			id,
 		)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("scratch base cancellation = %v, want context cancellation", err)
@@ -704,11 +709,11 @@ func TestCommandHelpersResolveScratchBase(t *testing.T) {
 	t.Run("rejects remote malformed and nonofficial scratch bases", func(t *testing.T) {
 		application := newCommandHelperApplication(newCommandHelperOptions(), nil, false, false)
 
-		_, err := application.resolveScratchBase(context.Background(), "origin/feature/ABC-123-add-export", "origin")
+		_, err := application.resolveScratchBase(context.Background(), "origin/feature/ABC-123-add-export", "origin", id)
 		assertCommandHelperProblem(t, err, problem.CodeBranchBaseInvalid, problem.CategoryGovernance, "scratch base")
-		_, err = application.resolveScratchBase(context.Background(), "not-a-branch", "origin")
+		_, err = application.resolveScratchBase(context.Background(), "not-a-branch", "origin", id)
 		assertCommandHelperProblem(t, err, problem.CodeBranchNameInvalid, problem.CategoryGovernance, "branch")
-		_, err = application.resolveScratchBase(context.Background(), "main", "origin")
+		_, err = application.resolveScratchBase(context.Background(), "main", "origin", id)
 		assertCommandHelperProblem(t, err, problem.CodeBranchBaseInvalid, problem.CategoryGovernance, "scratch base")
 	})
 }
@@ -856,6 +861,15 @@ func mustCommandHelperKey(t *testing.T, raw string) ticket.Key {
 		t.Fatal(err)
 	}
 	return key
+}
+
+func mustCommandHelperTicket(t *testing.T, raw string) ticket.ID {
+	t.Helper()
+	id, err := ticket.ParseID(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 func commandHelperDirectFamilyCount() int {

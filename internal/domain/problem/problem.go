@@ -76,15 +76,27 @@ const (
 // Details describes an actionable product failure. Actual is omitted from
 // delivery output when SensitiveActual is true.
 type Details struct {
-	Code            Code
-	Category        Category
-	Field           string
-	Actual          string
-	Expected        string
-	Rule            string
-	Example         string
-	Remediation     string
-	SensitiveActual bool
+	Code                Code
+	Category            Category
+	Field               string
+	Actual              string
+	Context             string
+	Diagnostic          string
+	Expected            string
+	Rule                string
+	Example             string
+	Remediation         string
+	SensitiveActual     bool
+	SensitiveDiagnostic bool
+	WorkflowInputs      []WorkflowInput
+}
+
+// WorkflowInput records one accepted value used by an interactive workflow
+// failure report. Sensitive values are retained only as a redaction marker.
+type WorkflowInput struct {
+	Field     string
+	Value     string
+	Sensitive bool
 }
 
 // Problem is a typed error that preserves a causal error without exposing it
@@ -173,6 +185,29 @@ func As(err error) (*Problem, bool) {
 		return nil, false
 	}
 	return typed, true
+}
+
+// WithWorkflowInputs adds an ordered, defensive copy of accepted workflow
+// inputs to a classified failure while preserving its causal error chain.
+func WithWorkflowInputs(err error, inputs []WorkflowInput) error {
+	if err == nil || len(inputs) == 0 {
+		return err
+	}
+	typed, ok := As(err)
+	if !ok {
+		return Wrap(Details{
+			Code:           CodeInternal,
+			Category:       CategoryInternal,
+			Field:          "workflow operation",
+			Expected:       "a classified workflow failure",
+			Rule:           "workflow failures must retain their accepted input summary",
+			Remediation:    "review the diagnostic, correct the workflow state, and retry",
+			WorkflowInputs: append([]WorkflowInput(nil), inputs...),
+		}, err)
+	}
+	details := typed.Details
+	details.WorkflowInputs = append([]WorkflowInput(nil), inputs...)
+	return Wrap(details, err)
 }
 
 func normalize(details Details) Details {

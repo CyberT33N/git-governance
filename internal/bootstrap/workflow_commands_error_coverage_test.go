@@ -9,6 +9,7 @@ import (
 	"github.com/CyberT33N/git-governance/internal/application/port"
 	"github.com/CyberT33N/git-governance/internal/application/workflow"
 	"github.com/CyberT33N/git-governance/internal/domain/branch"
+	"github.com/CyberT33N/git-governance/internal/domain/problem"
 )
 
 type workflowCommandCoverageGit struct {
@@ -19,6 +20,32 @@ type workflowCommandCoverageGit struct {
 	exists      bool
 	hasCommits  *bool
 	releaseTags []string
+}
+
+type workflowExecutionFailureGit struct {
+	*workflowCommandCoverageGit
+	createErr error
+}
+
+func (git *workflowExecutionFailureGit) CreateBranch(
+	ctx context.Context,
+	repository port.RepositoryIdentity,
+	name branch.BranchName,
+	base branch.TargetBase,
+	switchTo bool,
+) error {
+	if git.createErr != nil {
+		return git.createErr
+	}
+	return git.workflowCommandCoverageGit.CreateBranch(ctx, repository, name, base, switchTo)
+}
+
+type workflowFailurePublisher struct {
+	err error
+}
+
+func (publisher workflowFailurePublisher) Publish(context.Context, port.PullRequest) (port.PublishedPullRequest, error) {
+	return port.PublishedPullRequest{}, publisher.err
 }
 
 func (git *workflowCommandCoverageGit) Discover(context.Context, string) (port.RepositoryIdentity, error) {
@@ -518,6 +545,109 @@ func TestTicketStartPromptFailureAndQualityFieldCoverage(t *testing.T) {
 			t.Fatalf("quality fields = %#v", fields)
 		}
 	})
+}
+
+func TestWorkflowCommandsAttachInputsToPostValidationFailures(t *testing.T) {
+	createErr := errors.New("branch creation failed")
+	testCases := []struct {
+		name    string
+		current string
+		args    []string
+	}{
+		{
+			name:    "ticket start includes scratch slug",
+			current: "feature/ABC-123-add-export",
+			args: []string{
+				"workflow", "ticket", "start",
+				"--family", "feature", "--key", "ABC", "--ticket", "123", "--slug", "add-export",
+				"--scratch", "--scratch-slug", "exploration", "--yes",
+			},
+		},
+		{
+			name:    "hotfix start",
+			current: "feature/ABC-123-add-export",
+			args: []string{
+				"workflow", "hotfix", "start",
+				"--key", "ABC", "--ticket", "999", "--slug", "payment-timeout", "--affected-line", "main", "--yes",
+			},
+		},
+		{
+			name:    "hotfix propagation",
+			current: "hotfix/ABC-999-payment-timeout",
+			args: []string{
+				"workflow", "hotfix", "propagate",
+				"--target-line", "develop", "--commit", strings.Repeat("a", 40), "--slug", "forward-port-payment-timeout", "--yes",
+			},
+		},
+		{
+			name:    "release stabilization",
+			current: "fix/ABC-999-release-blocker",
+			args: []string{
+				"workflow", "release", "stabilize",
+				"--release", "release/2.8.0", "--kind", "blocker",
+				"--key", "ABC", "--ticket", "999", "--slug", "release-blocker", "--yes",
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			git := &workflowExecutionFailureGit{
+				workflowCommandCoverageGit: newWorkflowCommandCoverageGit(t, testCase.current, nil),
+				createErr:                  createErr,
+			}
+			command := NewWithRuntime(BuildInfo{Version: "test"}, commandRuntime(git))
+			_, err := executeBootstrapCommand(
+				t,
+				command,
+				append([]string{"--interactive", "never", "--output", "json"}, testCase.args...)...,
+			)
+			if !errors.Is(err, createErr) {
+				t.Fatalf("workflow error = %v, want %v", err, createErr)
+			}
+			actual, ok := problem.As(err)
+			if !ok || len(actual.WorkflowInputs) == 0 {
+				t.Fatalf("workflow input summary = %#v", err)
+			}
+		})
+	}
+
+	t.Run("ticket publish records an explicit base", func(t *testing.T) {
+		git := newWorkflowCommandCoverageGit(t, "feature/ABC-123-add-export", []string{"feat(ABC-123): add export"})
+		output, err := executeWorkflowCoverageCommand(
+			t,
+			git,
+			"workflow", "ticket", "publish",
+			"--branch", "feature/ABC-123-add-export", "--base", "origin/develop", "--yes", "--dry-run",
+		)
+		if err != nil || !strings.Contains(output, `"ok":true`) {
+			t.Fatalf("ticket publish = (%q, %v)", output, err)
+		}
+	})
+}
+
+func TestReleasePromotionAndBackmergeAttachInputsToPublisherFailures(t *testing.T) {
+	publishErr := errors.New("publisher unavailable")
+	for _, arguments := range [][]string{
+		{"workflow", "release", "promote", "--release", "release/2.8.0"},
+		{"workflow", "release", "backmerge", "--release", "release/2.8.0"},
+	} {
+		arguments := arguments
+		t.Run(strings.Join(arguments[2:3], "-"), func(t *testing.T) {
+			runtime := commandRuntime(newWorkflowCommandCoverageGit(t, "feature/ABC-123-add-export", nil))
+			runtime.Publisher = workflowFailurePublisher{err: publishErr}
+			command := NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+			_, err := executeBootstrapCommand(t, command, append([]string{"--interactive", "never", "--output", "json"}, arguments...)...)
+			if !errors.Is(err, publishErr) {
+				t.Fatalf("release workflow error = %v, want %v", err, publishErr)
+			}
+			actual, ok := problem.As(err)
+			if !ok || len(actual.WorkflowInputs) != 1 || actual.WorkflowInputs[0].Field != "release branch" {
+				t.Fatalf("release workflow input summary = %#v", err)
+			}
+		})
+	}
 }
 
 func workflowPublishResultWithPostMutationQuality(status port.QualityResult) workflow.PublishTicketResult {

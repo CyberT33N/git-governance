@@ -307,11 +307,15 @@ func TestParseBaseAndFooterSpec(t *testing.T) {
 		repository:  ".",
 		timeout:     1,
 	})
-	scratchBase, err := application.resolveScratchBase(context.Background(), "feature/ABC-123-add-export", "origin")
+	id, err := ticket.ParseID("ABC-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scratchBase, err := application.resolveScratchBase(context.Background(), "feature/ABC-123-add-export", "origin", id)
 	if err != nil || scratchBase == nil || scratchBase.String() != "feature/ABC-123-add-export" || scratchBase.IsRemoteTracking() {
 		t.Fatalf("resolveScratchBase() = (%#v, %v)", scratchBase, err)
 	}
-	_, err = application.resolveScratchBase(context.Background(), "origin/feature/ABC-123-add-export", "origin")
+	_, err = application.resolveScratchBase(context.Background(), "origin/feature/ABC-123-add-export", "origin", id)
 	assertProblemCode(t, err, problem.CodeBranchBaseInvalid)
 }
 
@@ -490,6 +494,10 @@ func (*prePushGit) Fetch(context.Context, port.RepositoryIdentity) error {
 	return nil
 }
 
+func (*prePushGit) TargetBaseExists(context.Context, port.RepositoryIdentity, branch.TargetBase) (bool, error) {
+	return true, nil
+}
+
 func (*prePushGit) CreateBranch(context.Context, port.RepositoryIdentity, branch.BranchName, branch.TargetBase, bool) error {
 	return nil
 }
@@ -624,6 +632,10 @@ func (*commandGit) OfficialBranchesForTicket(context.Context, port.RepositoryIde
 
 func (*commandGit) Fetch(context.Context, port.RepositoryIdentity) error {
 	return nil
+}
+
+func (*commandGit) TargetBaseExists(context.Context, port.RepositoryIdentity, branch.TargetBase) (bool, error) {
+	return true, nil
 }
 
 func (*commandGit) CreateBranch(context.Context, port.RepositoryIdentity, branch.BranchName, branch.TargetBase, bool) error {

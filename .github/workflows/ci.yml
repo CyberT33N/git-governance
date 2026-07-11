@@ -30,55 +30,12 @@ jobs:
           go-version: "1.26.5"
           check-latest: false
           cache: true
-          cache-dependency-path: go.sum
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
 
-      - name: Verify module dependencies
-        run: |
-          go mod download
-          go mod verify
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
-
-      - name: Check Go formatting
-        shell: bash
-        run: |
-          files="$(gofmt -l $(git ls-files '*.go'))"
-          test -z "$files" || {
-            echo "The following files require gofmt:"
-            echo "$files"
-            exit 1
-          }
-
-      - name: Run unit, contract, and integration tests
-        run: go test ./...
-
-      - name: Enforce complete statement coverage
-        run: go run ./cmd/check-coverage
-
-      - name: Run race detector
-        run: CGO_ENABLED=1 go test -race ./...
-
-      - name: Run static analysis
-        run: go vet ./...
-
-      - name: Run vulnerability analysis
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.5.0
-          govulncheck ./...
-
-      - name: Run bounded fuzz smoke tests
-        run: |
-          go test ./internal/domain/ticket -run=^$ -fuzz=FuzzParseTicketValues -fuzztime=2s -parallel=1
-          go test ./internal/domain/branch -run=^$ -fuzz=FuzzParseBranchValues -fuzztime=2s -parallel=1
-          go test ./internal/domain/commitmsg -run=^$ -fuzz=FuzzParseCommitMessage -fuzztime=2s -parallel=1
-          go test ./internal/adapters/configfs -run=^$ -fuzz=FuzzDecodePreferences -fuzztime=2s -parallel=1
-          go test ./internal/adapters/quality -run=^$ -fuzz=FuzzDecodeQualityConfiguration -fuzztime=2s -parallel=1
-
-      - name: Validate Lefthook configuration
-        shell: bash
-        run: |
-          go install github.com/evilmartians/lefthook/v2@v2.1.10
-          "$(go env GOPATH)/bin/lefthook" validate
+      - name: Run full build gate
+        run: go run ./cmd/build
 
   native-smoke:
     name: Native smoke test (${{ matrix.name }})
@@ -130,7 +87,9 @@ jobs:
           go-version: "1.26.5"
           check-latest: false
           cache: true
-          cache-dependency-path: go.sum
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
 
       - name: Build and smoke test native binary
         shell: bash

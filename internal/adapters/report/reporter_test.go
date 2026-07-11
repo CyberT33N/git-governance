@@ -68,11 +68,17 @@ func TestHumanProblemReport(t *testing.T) {
 		Code:        problem.CodeTicketKeyInvalid,
 		Category:    problem.CategoryGovernance,
 		Field:       "ticket key",
+		Context:     "action=create branch",
 		Actual:      "abc",
 		Expected:    "uppercase letters",
 		Rule:        "ticket keys must be uppercase",
 		Example:     "ABC",
 		Remediation: "use uppercase",
+		Diagnostic:  "fatal: key is invalid",
+		WorkflowInputs: []problem.WorkflowInput{
+			{Field: "ticket key", Value: "abc"},
+			{Field: "commit subject", Value: "private", Sensitive: true},
+		},
 	})
 	if err := New(Options{Writer: buffer}).Report(context.Background(), port.Report{Problem: value}); err != nil {
 		t.Fatal(err)
@@ -81,12 +87,17 @@ func TestHumanProblemReport(t *testing.T) {
 	for _, expected := range []string{
 		"Error [TICKET_KEY_INVALID]",
 		"Field: ticket key",
+		"Context:",
 		"Actual value:",
 		"abc",
 		"What is wrong?",
 		"Expected:",
 		"Valid example:",
 		"How to fix it:",
+		"Diagnostic:",
+		"Workflow inputs:",
+		"ticket key: abc",
+		"commit subject: [redacted]",
 	} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("human problem output missing %q: %q", expected, output)
@@ -116,15 +127,20 @@ func TestJSONReportContracts(t *testing.T) {
 	t.Run("sensitive problem omits actual", func(t *testing.T) {
 		buffer := &bytes.Buffer{}
 		value := problem.New(problem.Details{
-			Code:            problem.CodeConfigurationInvalid,
-			Category:        problem.CategoryConfig,
-			Actual:          "secret",
-			SensitiveActual: true,
+			Code:                problem.CodeConfigurationInvalid,
+			Category:            problem.CategoryConfig,
+			Actual:              "secret",
+			SensitiveActual:     true,
+			Diagnostic:          "secret diagnostic",
+			SensitiveDiagnostic: true,
+			WorkflowInputs: []problem.WorkflowInput{
+				{Field: "credential", Value: "secret", Sensitive: true},
+			},
 		})
 		if err := New(Options{Writer: buffer, Format: FormatJSON}).Report(context.Background(), port.Report{Problem: value}); err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(buffer.String(), "secret") || strings.Contains(buffer.String(), `"actual"`) {
+		if strings.Contains(buffer.String(), "secret") || strings.Contains(buffer.String(), `"actual"`) || strings.Contains(buffer.String(), `"diagnostic"`) {
 			t.Fatalf("sensitive JSON output = %q", buffer.String())
 		}
 	})
@@ -132,16 +148,46 @@ func TestJSONReportContracts(t *testing.T) {
 	t.Run("sensitive human problem omits actual", func(t *testing.T) {
 		buffer := &bytes.Buffer{}
 		value := problem.New(problem.Details{
-			Code:            problem.CodeConfigurationInvalid,
-			Category:        problem.CategoryConfig,
-			Actual:          "secret",
-			SensitiveActual: true,
+			Code:                problem.CodeConfigurationInvalid,
+			Category:            problem.CategoryConfig,
+			Actual:              "secret",
+			SensitiveActual:     true,
+			Diagnostic:          "secret diagnostic",
+			SensitiveDiagnostic: true,
+			WorkflowInputs: []problem.WorkflowInput{
+				{Field: "credential", Value: "secret", Sensitive: true},
+			},
 		})
 		if err := New(Options{Writer: buffer, Format: FormatHuman}).Report(context.Background(), port.Report{Problem: value}); err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(buffer.String(), "secret") || strings.Contains(buffer.String(), "Actual value:") {
+		if strings.Contains(buffer.String(), "secret") || strings.Contains(buffer.String(), "Actual value:") || strings.Contains(buffer.String(), "Diagnostic:") {
 			t.Fatalf("sensitive human output = %q", buffer.String())
+		}
+	})
+
+	t.Run("JSON problem includes diagnostic context and non-sensitive inputs", func(t *testing.T) {
+		buffer := &bytes.Buffer{}
+		value := problem.New(problem.Details{
+			Code:       problem.CodeGitCommandFailed,
+			Category:   problem.CategoryGit,
+			Context:    "action=create branch",
+			Diagnostic: "fatal: invalid reference",
+			WorkflowInputs: []problem.WorkflowInput{
+				{Field: "ticket number", Value: "1"},
+			},
+		})
+		if err := New(Options{Writer: buffer, Format: FormatJSON}).Report(context.Background(), port.Report{Problem: value}); err != nil {
+			t.Fatal(err)
+		}
+		for _, expected := range []string{
+			`"context":"action=create branch"`,
+			`"diagnostic":"fatal: invalid reference"`,
+			`"inputs":[{"field":"ticket number","value":"1"}]`,
+		} {
+			if !strings.Contains(buffer.String(), expected) {
+				t.Fatalf("JSON problem output missing %q: %q", expected, buffer.String())
+			}
 		}
 	})
 }
@@ -194,7 +240,7 @@ func TestReporterDefaultAndOptionalFieldPaths(t *testing.T) {
 		t.Fatalf("minimal problem output = %q", minimalProblem.String())
 	}
 
-	for failAt := 0; failAt < 7; failAt++ {
+	for failAt := 0; failAt < 11; failAt++ {
 		failAt := failAt
 		t.Run("problem writer failure "+string(rune('0'+failAt)), func(t *testing.T) {
 			writer := &failAfterWriter{failAt: failAt}
@@ -203,11 +249,16 @@ func TestReporterDefaultAndOptionalFieldPaths(t *testing.T) {
 					Code:        problem.CodeInvalidInput,
 					Category:    problem.CategoryUsage,
 					Field:       "field",
+					Context:     "context",
 					Actual:      "actual",
 					Rule:        "rule",
 					Expected:    "expected",
 					Example:     "example",
 					Remediation: "remediation",
+					Diagnostic:  "diagnostic",
+					WorkflowInputs: []problem.WorkflowInput{
+						{Field: "input", Value: "value"},
+					},
 				}),
 			})
 			if err == nil {

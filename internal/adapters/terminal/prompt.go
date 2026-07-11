@@ -114,12 +114,9 @@ func (prompt *Prompt) formInput(ctx context.Context, request port.InputRequest) 
 		Title(request.Label).
 		Description(request.Description).
 		Value(&value)
-	if request.Required {
+	if request.Required || request.Validate != nil {
 		field.Validate(func(candidate string) error {
-			if strings.TrimSpace(candidate) == "" {
-				return errors.New("a value is required")
-			}
-			return nil
+			return validateInput(request, candidate)
 		})
 	}
 	form := huh.NewForm(huh.NewGroup(field)).
@@ -199,10 +196,9 @@ func (prompt *Prompt) lineInput(ctx context.Context, request port.InputRequest) 
 		if value == "" {
 			value = request.Default
 		}
-		if !request.Required || strings.TrimSpace(value) != "" {
+		if err := validateInput(request, value); err == nil {
 			return value, nil
-		}
-		if _, err := fmt.Fprintln(prompt.output, "A value is required."); err != nil {
+		} else if _, err := fmt.Fprintln(prompt.output, err); err != nil {
 			return "", writeFailure(err)
 		}
 	}
@@ -383,6 +379,69 @@ func (prompt *Prompt) style(code, value string) string {
 		return value
 	}
 	return "\x1b[" + code + "m" + value + "\x1b[0m"
+}
+
+func validateInput(request port.InputRequest, candidate string) error {
+	if request.Required && strings.TrimSpace(candidate) == "" {
+		return errors.New("a value is required")
+	}
+	if request.Validate == nil {
+		return nil
+	}
+	if err := request.Validate(candidate); err != nil {
+		return inputValidationFailure(request, candidate, err)
+	}
+	return nil
+}
+
+func inputValidationFailure(request port.InputRequest, candidate string, cause error) error {
+	var message strings.Builder
+	label := request.Label
+	if label == "" {
+		label = "this value"
+	}
+	fmt.Fprintf(&message, "Invalid value for %s.", label)
+
+	typed, hasProblem := problem.As(cause)
+	if !request.Sensitive && (!hasProblem || !typed.SensitiveActual) {
+		actual := candidate
+		if hasProblem && typed.Actual != "" {
+			actual = typed.Actual
+		}
+		if actual != "" {
+			fmt.Fprintf(&message, "\nActual value:\n  %s", displayValue(actual))
+		}
+	}
+
+	if hasProblem {
+		appendDiagnosticSection(&message, "What is wrong?", typed.Rule)
+		appendDiagnosticSection(&message, "Expected", typed.Expected)
+		appendDiagnosticSection(&message, "Valid example", typed.Example)
+		appendDiagnosticSection(&message, "How to fix it", typed.Remediation)
+	} else {
+		appendDiagnosticSection(&message, "What is wrong?", cause.Error())
+		appendDiagnosticSection(&message, "Expected", request.Description)
+	}
+	message.WriteString("\nEnter a new value.")
+	return errors.New(message.String())
+}
+
+func appendDiagnosticSection(message *strings.Builder, label, value string) {
+	if value == "" {
+		return
+	}
+	separator := ":"
+	if strings.HasSuffix(label, "?") {
+		separator = ""
+	}
+	fmt.Fprintf(message, "\n%s%s\n  %s", label, separator, value)
+}
+
+func displayValue(value string) string {
+	if strings.ContainsAny(value, "\r\n\t\x1b") {
+		return strconv.Quote(value)
+	}
+	return value
 }
 
 var _ port.Prompt = (*Prompt)(nil)

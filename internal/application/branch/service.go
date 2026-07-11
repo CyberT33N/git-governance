@@ -161,6 +161,15 @@ func (service *Service) Create(ctx context.Context, request CreateRequest) (Crea
 			return CreateResult{}, err
 		}
 	}
+	if base.IsRemoteTracking() {
+		exists, err := service.git.TargetBaseExists(ctx, repository, base)
+		if err != nil {
+			return CreateResult{}, err
+		}
+		if !exists {
+			return CreateResult{}, unavailableTargetBase(base)
+		}
+	}
 	if err := service.ensureBranchAvailability(ctx, repository, request, name); err != nil {
 		return CreateResult{}, err
 	}
@@ -437,6 +446,19 @@ func invalidBase(actual, rule, expected string) error {
 		Rule:        rule,
 		Example:     "origin/develop",
 		Remediation: "select the canonical base required by the branch family",
+	})
+}
+
+func unavailableTargetBase(base branch.TargetBase) error {
+	return problem.New(problem.Details{
+		Code:        problem.CodeBranchBaseInvalid,
+		Category:    problem.CategoryRepository,
+		Field:       "target base",
+		Actual:      base.String(),
+		Expected:    "an existing fetched remote-tracking branch",
+		Rule:        "branch creation requires the selected target base to exist after fetch",
+		Example:     "origin/develop",
+		Remediation: "create or fetch the required remote branch, select the correct --remote, or use the workflow for the intended base",
 	})
 }
 

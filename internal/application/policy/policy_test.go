@@ -147,6 +147,10 @@ func (doctorGit) Fetch(context.Context, port.RepositoryIdentity) error {
 	return nil
 }
 
+func (doctorGit) TargetBaseExists(context.Context, port.RepositoryIdentity, branch.TargetBase) (bool, error) {
+	return true, nil
+}
+
 func (doctorGit) CreateBranch(context.Context, port.RepositoryIdentity, branch.BranchName, branch.TargetBase, bool) error {
 	return nil
 }

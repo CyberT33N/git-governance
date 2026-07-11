@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CyberT33N/git-governance/internal/adapters/terminal"
 	commitapp "github.com/CyberT33N/git-governance/internal/application/commit"
 	"github.com/CyberT33N/git-governance/internal/application/port"
 	"github.com/CyberT33N/git-governance/internal/domain/branch"
@@ -43,6 +44,54 @@ func TestCommitCommandTreeHonorsRootFlagsForDryRunPush(t *testing.T) {
 	)
 	if len(git.stagedPaths) != 0 || len(git.committedMessages) != 0 {
 		t.Fatalf("dry run mutated Git: staged=%v commits=%d", git.stagedPaths, len(git.committedMessages))
+	}
+}
+
+func TestCommitCreateRetriesInteractiveSubjectAndBreakingDescription(t *testing.T) {
+	promptOutput := &bytes.Buffer{}
+	prompt := terminal.New(terminal.Options{
+		Input: strings.NewReader(
+			"\n" + // select the default feat type
+				" add export\nadd export\n" +
+				" clients must migrate\nclients must migrate\n",
+		),
+		Output: promptOutput,
+	})
+	git := newCommitCommandGit(t, "feature/ABC-123-add-export")
+	runtime := commandRuntime(git)
+	runtime.PromptFactory = func(bool, string) port.Prompt {
+		return prompt
+	}
+	runtime.InputIsTerminal = func() bool { return true }
+	runtime.OutputIsTerminal = func() bool { return true }
+	command := NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+
+	output, err := executeBootstrapCommand(
+		t,
+		command,
+		"--interactive",
+		"always",
+		"--dry-run",
+		"commit",
+		"create",
+		"--breaking",
+		"--stage",
+		"README.md",
+	)
+	if err != nil {
+		t.Fatalf("interactive commit create error = %v; prompt=%q; output=%q", err, promptOutput.String(), output)
+	}
+	if !strings.Contains(output, "Commit creation plan generated.") {
+		t.Fatalf("commit output = %q", output)
+	}
+	for _, expected := range []string{
+		"Invalid value for Commit subject.",
+		"Invalid value for Breaking change impact.",
+		"Enter a new value.",
+	} {
+		if !strings.Contains(promptOutput.String(), expected) {
+			t.Fatalf("interactive commit diagnostic missing %q: %q", expected, promptOutput.String())
+		}
 	}
 }
 

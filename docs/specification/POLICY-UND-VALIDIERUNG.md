@@ -30,7 +30,12 @@ Jede Eingabe durchläuft in dieser Reihenfolge:
 7. Repository- und Publication-State-Regeln
 8. optionale Policy-Registry-/Bundle-Prüfung
 
-Ungültige Eingaben werden nie stillschweigend in andere Werte umgeschrieben. Die interaktive UI darf eine explizite Korrektur vorschlagen, benötigt aber die Bestätigung des Benutzers.
+Ungültige Eingaben werden nie stillschweigend in andere Werte umgeschrieben.
+Die interaktive UI zeigt für das betroffene Feld den sicheren tatsächlichen
+Wert, Regel, erwartetes Format, gültiges Beispiel und Korrektur und fragt
+denselben Wert erneut ab. Sie verlässt weder das Feld noch startet sie den
+Workflow neu; der Benutzer kann unbegrenzt korrigieren. Die UI darf eine
+explizite Korrektur vorschlagen, benötigt aber die Bestätigung des Benutzers.
 
 ## 3. Ticket-Key
 

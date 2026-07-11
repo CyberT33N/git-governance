@@ -93,7 +93,7 @@ func newBranchCreateCommand(application *application) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "create",
 		Short: "Create a regular governed branch",
-		RunE: func(command *cobra.Command, _ []string) error {
+		RunE: withWorkflowInputs(func(command *cobra.Command, inputs *workflowInputSummary) error {
 			services := application.services()
 			repository, err := application.discover(command.Context(), services)
 			if err != nil {
@@ -103,27 +103,34 @@ func newBranchCreateCommand(application *application) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			inputs.add("branch family", family.String())
 			key, err := application.resolveKey(command.Context(), services, keyRaw)
 			if err != nil {
 				return err
 			}
+			inputs.add("ticket key", key.String())
 			number, err := application.resolveNumber(command.Context(), numberRaw)
 			if err != nil {
 				return err
 			}
+			inputs.add("ticket number", number.String())
 			id := ticket.NewID(key, number)
 			slug, err := application.resolveSlug(command.Context(), slugRaw, "Branch description")
 			if err != nil {
 				return err
 			}
+			inputs.add("branch description", slug.String())
 			var base *branch.TargetBase
 			if family == branch.FamilyScratch {
-				base, err = application.resolveScratchBase(command.Context(), baseRaw, repository.Remote)
+				base, err = application.resolveScratchBase(command.Context(), baseRaw, repository.Remote, id)
 			} else {
 				base, err = parseBase(baseRaw, repository.Remote)
 			}
 			if err != nil {
 				return err
+			}
+			if base != nil {
+				inputs.add("target base", base.String())
 			}
 			name, err := branch.NewTicketBranch(family, id, slug)
 			if err != nil {
@@ -155,7 +162,7 @@ func newBranchCreateCommand(application *application) *cobra.Command {
 					"plan":     planText(result.Plan),
 				},
 			})
-		},
+		}),
 	}
 	command.Flags().StringVar(&familyRaw, "family", "", "branch family")
 	command.Flags().StringVar(&keyRaw, "key", "", "ticket key")

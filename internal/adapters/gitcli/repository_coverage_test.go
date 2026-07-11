@@ -118,7 +118,7 @@ func TestRepositoryCoverageNewAndNilContext(t *testing.T) {
 		runner := &contextCaptureRunner{result: processResult{stdout: "git version test\n"}}
 		repository := &Repository{runner: runner, timeout: time.Second}
 
-		version, err := repository.Version(nil)
+		version, err := repository.Version(testNilContext())
 		if err != nil || version != "git version test" {
 			t.Fatalf("Version() = (%q, %v)", version, err)
 		}
@@ -127,6 +127,70 @@ func TestRepositoryCoverageNewAndNilContext(t *testing.T) {
 		}
 		if _, found := runner.received.Deadline(); !found {
 			t.Fatal("runner context has no timeout deadline")
+		}
+	})
+}
+
+func testNilContext() context.Context {
+	return nil
+}
+
+func TestRepositoryCoverageTargetBaseAvailabilityAndDiagnosticSanitization(t *testing.T) {
+	t.Parallel()
+
+	base := coverageBase(t, "origin", "develop")
+
+	t.Run("target base availability distinguishes absent and failed checks", func(t *testing.T) {
+		repository, runner := coverageRepository(processResult{})
+		exists, err := repository.TargetBaseExists(context.Background(), testIdentity(), base)
+		if err != nil || !exists {
+			t.Fatalf("TargetBaseExists(success) = (%t, %v)", exists, err)
+		}
+		assertCall(t, runner.calls[0], "C:/repo", "", "show-ref", "--verify", "--quiet", "refs/remotes/origin/develop")
+
+		repository, _ = coverageRepository(processResult{err: errors.New("missing ref"), exitCode: 1})
+		exists, err = repository.TargetBaseExists(context.Background(), testIdentity(), base)
+		if err != nil || exists {
+			t.Fatalf("TargetBaseExists(absent) = (%t, %v)", exists, err)
+		}
+
+		repository, _ = coverageRepository(processResult{err: errors.New("show-ref failed"), exitCode: 128})
+		_, err = repository.TargetBaseExists(context.Background(), testIdentity(), base)
+		assertProblemCode(t, err, problem.CodeGitCommandFailed)
+
+		local, parseErr := branch.ParseLocalBase("feature/ABC-123-add-export")
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		repository, _ = coverageRepository()
+		_, err = repository.TargetBaseExists(context.Background(), testIdentity(), local)
+		assertProblemCode(t, err, problem.CodeBranchBaseInvalid)
+	})
+
+	t.Run("diagnostics are bounded and redact credentials", func(t *testing.T) {
+		redacted := commandDiagnostic(processResult{
+			stderr: "fatal: https://user:token@example.invalid/repository\nTOKEN=secret-value",
+		})
+		if strings.Contains(redacted, "token") || strings.Contains(redacted, "secret-value") {
+			t.Fatalf("credential diagnostic leaked secret: %q", redacted)
+		}
+		for _, expected := range []string{"https://[redacted]@example.invalid", "TOKEN=[redacted]"} {
+			if !strings.Contains(redacted, expected) {
+				t.Fatalf("credential diagnostic missing %q: %q", expected, redacted)
+			}
+		}
+
+		if actual := commandDiagnostic(processResult{stdout: "fallback output"}); actual != "fallback output" {
+			t.Fatalf("stdout diagnostic = %q", actual)
+		}
+		if actual := commandDiagnostic(processResult{stderr: "short", truncated: true}); actual != "short\n[Git diagnostic output truncated]" {
+			t.Fatalf("truncated diagnostic = %q", actual)
+		}
+		if actual := commandDiagnostic(processResult{}); actual != "" {
+			t.Fatalf("empty diagnostic = %q", actual)
+		}
+		if actual := commandDiagnostic(processResult{stderr: strings.Repeat("a", maxDiagnosticBytes+1)}); !strings.HasSuffix(actual, "\n[Git diagnostic output truncated]") {
+			t.Fatalf("oversized diagnostic = %q", actual)
 		}
 	})
 }
@@ -736,11 +800,13 @@ func TestRepositoryCoverageCommandDiagnosticsAndCancellation(t *testing.T) {
 			"action=inspect publication",
 			"repository=C:/repo",
 			"remote=origin",
-			"diagnostic output truncated",
 		} {
-			if !strings.Contains(actual.Actual, expected) {
-				t.Fatalf("problem actual %q does not contain %q", actual.Actual, expected)
+			if !strings.Contains(actual.Context, expected) {
+				t.Fatalf("problem context %q does not contain %q", actual.Context, expected)
 			}
+		}
+		if actual.Diagnostic != "[Git diagnostic output was truncated]" {
+			t.Fatalf("problem diagnostic = %q", actual.Diagnostic)
 		}
 	})
 

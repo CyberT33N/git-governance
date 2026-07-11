@@ -97,6 +97,50 @@ func TestAsRejectsUntypedError(t *testing.T) {
 	}
 }
 
+func TestWithWorkflowInputsPreservesClassifiedFailures(t *testing.T) {
+	t.Parallel()
+
+	baseCause := errors.New("Git failed")
+	base := Wrap(Details{
+		Code:     CodeGitCommandFailed,
+		Category: CategoryGit,
+		Field:    "git operation",
+	}, baseCause)
+	inputs := []WorkflowInput{
+		{Field: "ticket number", Value: "1"},
+		{Field: "branch description", Value: "add-export"},
+	}
+
+	enriched := WithWorkflowInputs(base, inputs)
+	actual, ok := As(enriched)
+	if !ok {
+		t.Fatalf("WithWorkflowInputs() result = %T, want classified problem", enriched)
+	}
+	if actual == base || len(actual.WorkflowInputs) != 2 {
+		t.Fatalf("workflow input result = %#v", actual)
+	}
+	if !errors.Is(enriched, base) || !errors.Is(enriched, baseCause) {
+		t.Fatal("workflow input enrichment did not preserve the error chain")
+	}
+	inputs[0].Value = "mutated"
+	if actual.WorkflowInputs[0].Value != "1" {
+		t.Fatalf("workflow inputs alias caller memory: %#v", actual.WorkflowInputs)
+	}
+
+	if got := WithWorkflowInputs(nil, inputs); got != nil {
+		t.Fatalf("nil input error = %v", got)
+	}
+	if got := WithWorkflowInputs(base, nil); got != base {
+		t.Fatalf("empty input list returned %v, want original problem", got)
+	}
+	plain := errors.New("plain")
+	enrichedPlain := WithWorkflowInputs(plain, inputs)
+	plainProblem, ok := As(enrichedPlain)
+	if !ok || plainProblem.Code != CodeInternal || !errors.Is(enrichedPlain, plain) {
+		t.Fatalf("untyped input error = %#v", enrichedPlain)
+	}
+}
+
 func TestProblemErrorAndUnwrapZeroPaths(t *testing.T) {
 	t.Parallel()
 

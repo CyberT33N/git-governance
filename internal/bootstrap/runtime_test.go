@@ -382,12 +382,16 @@ func TestPromptConstructionAndRequiredInputContracts(t *testing.T) {
 		if factoryCalls != 1 || !accessible || color != "never" {
 			t.Fatalf("prompt factory calls = %d, accessible = %t, color = %q", factoryCalls, accessible, color)
 		}
-		if len(prompt.inputRequests) != 1 || prompt.inputRequests[0] != (port.InputRequest{
-			Label:       "Ticket key",
-			Description: "The work item key.",
-			Required:    true,
-		}) {
+		if len(prompt.inputRequests) != 1 {
 			t.Fatalf("prompt input request = %#v", prompt.inputRequests)
+		}
+		request := prompt.inputRequests[0]
+		if request.Label != "Ticket key" ||
+			request.Description != "The work item key." ||
+			!request.Required ||
+			request.Validate != nil ||
+			request.Sensitive {
+			t.Fatalf("prompt input request = %#v", request)
 		}
 		if prompt.inputContexts[0] != ctx {
 			t.Fatal("required input did not forward its context")

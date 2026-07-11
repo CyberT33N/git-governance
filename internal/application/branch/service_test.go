@@ -27,6 +27,8 @@ type fakeGitRepository struct {
 	branchExistsErr     error
 	officialBranchesErr error
 	fetchErr            error
+	targetBaseErr       error
+	targetBaseMissing   bool
 	createBranchErr     error
 	workflowBaseErr     error
 	publicationErr      error
@@ -102,6 +104,11 @@ func (fake *fakeGitRepository) OfficialBranchesForTicket(_ context.Context, _ po
 func (fake *fakeGitRepository) Fetch(context.Context, port.RepositoryIdentity) error {
 	fake.calls = append(fake.calls, "fetch")
 	return fake.methodError(fake.fetchErr)
+}
+
+func (fake *fakeGitRepository) TargetBaseExists(context.Context, port.RepositoryIdentity, domainbranch.TargetBase) (bool, error) {
+	fake.calls = append(fake.calls, "target-base-exists")
+	return !fake.targetBaseMissing, fake.methodError(fake.targetBaseErr)
 }
 
 func (fake *fakeGitRepository) CreateBranch(_ context.Context, _ port.RepositoryIdentity, name domainbranch.BranchName, base domainbranch.TargetBase, switchTo bool) error {
@@ -362,7 +369,7 @@ func TestCreateRegularBranch(t *testing.T) {
 	if git.createdName.String() != actual.Name.String() || git.createdBase.String() != "origin/develop" || !git.createdSwitch {
 		t.Fatalf("create call = (%q, %q, %t)", git.createdName, git.createdBase, git.createdSwitch)
 	}
-	expectedCalls := "validate-ref,has-commits,worktree-clean,fetch,branch-exists,official-branches-for-ticket,create-branch"
+	expectedCalls := "validate-ref,has-commits,worktree-clean,fetch,target-base-exists,branch-exists,official-branches-for-ticket,create-branch"
 	if got := strings.Join(git.calls, ","); got != expectedCalls {
 		t.Fatalf("calls = %q, want %q", got, expectedCalls)
 	}
@@ -434,7 +441,14 @@ func TestCreateStopsBeforeMutationOnInvalidState(t *testing.T) {
 			git:     &fakeGitRepository{hasCommits: true, clean: true, exists: true},
 			request: regularRequest(),
 			code:    problem.CodeBranchAlreadyExists,
-			calls:   "validate-ref,has-commits,worktree-clean,fetch,branch-exists",
+			calls:   "validate-ref,has-commits,worktree-clean,fetch,target-base-exists,branch-exists",
+		},
+		{
+			name:    "target base is absent after fetch",
+			git:     &fakeGitRepository{hasCommits: true, clean: true, targetBaseMissing: true},
+			request: regularRequest(),
+			code:    problem.CodeBranchBaseInvalid,
+			calls:   "validate-ref,has-commits,worktree-clean,fetch,target-base-exists",
 		},
 		{
 			name:    "dirty worktree",
@@ -476,6 +490,7 @@ func TestCreatePropagatesEveryGitDependencyFailure(t *testing.T) {
 		{name: "has commits", git: &fakeGitRepository{hasCommitsErr: errors.New("head failed")}},
 		{name: "worktree", git: &fakeGitRepository{hasCommits: true, worktreeCleanErr: errors.New("status failed")}},
 		{name: "fetch", git: &fakeGitRepository{hasCommits: true, clean: true, fetchErr: errors.New("fetch failed")}},
+		{name: "target base", git: &fakeGitRepository{hasCommits: true, clean: true, targetBaseErr: errors.New("base failed")}},
 		{name: "branch exists", git: &fakeGitRepository{hasCommits: true, clean: true, branchExistsErr: errors.New("exists failed")}},
 		{name: "ticket lookup", git: &fakeGitRepository{hasCommits: true, clean: true, officialBranchesErr: errors.New("lookup failed")}},
 		{name: "create", git: &fakeGitRepository{hasCommits: true, clean: true, createBranchErr: errors.New("create failed")}},
@@ -824,7 +839,7 @@ func TestBranchCreationHelperContracts(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		assertProblemCode(t, contextError(ctx), problem.CodeOperationCancelled)
-		if err := contextError(nil); err != nil {
+		if err := contextError(testNilContext()); err != nil {
 			t.Fatalf("contextError(nil) = %v", err)
 		}
 	})
@@ -1473,6 +1488,10 @@ func assertProblemCode(t *testing.T, err error, expected problem.Code) {
 	if actual.Code != expected {
 		t.Fatalf("problem code = %q, want %q", actual.Code, expected)
 	}
+}
+
+func testNilContext() context.Context {
+	return nil
 }
 
 var _ port.GitRepository = (*fakeGitRepository)(nil)

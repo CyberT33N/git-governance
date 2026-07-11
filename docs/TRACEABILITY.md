@@ -67,6 +67,9 @@ does not rely on any external governance repository or unpublished rule set.
 | `policy describe`, `completion`, `version` | IMPLEMENTED | policy and environment inspection are read-only |
 | `doctor` | IMPLEMENTED | Git version, remote, Lefthook, policy, configuration, and in-progress-operation checks are read-only |
 | Interactive Huh forms and accessible prompts | IMPLEMENTED | tested with accessible form input |
+| Interactive field validation retries | VERIFIED | invalid ticket, slug, commit-subject, and breaking-change values show field diagnostics and retry in place |
+| Workflow input failure summaries | VERIFIED | accepted command inputs accompany classified workflow and branch-creation failures |
+| Git operation diagnostics | VERIFIED | operation context and bounded, credential-redacted Git diagnostics are rendered separately |
 | Direct `git governance` invocation | IMPLEMENTED | available when `git-governance` is on `PATH` |
 
 ## Workflow policy

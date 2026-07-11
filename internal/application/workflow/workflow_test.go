@@ -32,6 +32,32 @@ type fakeGitRepository struct {
 	workflowBases   map[string]branch.TargetBase
 }
 
+func TestParseReleaseStabilizationKind(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []ReleaseStabilizationKind{
+		ReleaseStabilizationBlocker,
+		ReleaseStabilizationDocs,
+		ReleaseStabilizationPrep,
+	} {
+		value := value
+		t.Run(string(value), func(t *testing.T) {
+			actual, err := ParseReleaseStabilizationKind(string(value))
+			if err != nil || actual != value {
+				t.Fatalf("ParseReleaseStabilizationKind(%q) = (%q, %v)", value, actual, err)
+			}
+		})
+	}
+	_, err := ParseReleaseStabilizationKind("feature")
+	if err == nil {
+		t.Fatal("ParseReleaseStabilizationKind accepted an unsupported category")
+	}
+	actual, ok := problem.As(err)
+	if !ok || actual.Field != "stabilization kind" {
+		t.Fatalf("invalid stabilization kind error = %#v", err)
+	}
+}
+
 func (fake *fakeGitRepository) Discover(context.Context, string) (port.RepositoryIdentity, error) {
 	fake.calls = append(fake.calls, "discover")
 	return testRepository(), fake.err
@@ -85,6 +111,11 @@ func (fake *fakeGitRepository) OfficialBranchesForTicket(context.Context, port.R
 func (fake *fakeGitRepository) Fetch(context.Context, port.RepositoryIdentity) error {
 	fake.calls = append(fake.calls, "fetch")
 	return fake.err
+}
+
+func (fake *fakeGitRepository) TargetBaseExists(context.Context, port.RepositoryIdentity, branch.TargetBase) (bool, error) {
+	fake.calls = append(fake.calls, "target-base-exists")
+	return true, fake.err
 }
 
 func (fake *fakeGitRepository) CreateBranch(_ context.Context, _ port.RepositoryIdentity, name branch.BranchName, base branch.TargetBase, switchTo bool) error {

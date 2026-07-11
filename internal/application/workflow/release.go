@@ -23,6 +23,24 @@ type ReleaseService struct {
 
 var commitIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
 
+// ValidateCommitID verifies the bounded hexadecimal identifier accepted by
+// the controlled hotfix propagation workflow.
+func ValidateCommitID(raw string) error {
+	if commitIDPattern.MatchString(raw) {
+		return nil
+	}
+	return problem.New(problem.Details{
+		Code:        problem.CodeInvalidInput,
+		Category:    problem.CategoryGovernance,
+		Field:       "reviewed source commit",
+		Actual:      raw,
+		Expected:    "a 7 to 64 character hexadecimal commit ID",
+		Rule:        "hotfix propagation cherry-picks one reviewed Git commit",
+		Example:     "0123456789abcdef0123456789abcdef01234567",
+		Remediation: "provide the reviewed source commit SHA without spaces or a ref name",
+	})
+}
+
 // NewReleaseService creates a release workflow service.
 func NewReleaseService(branches *branchapp.Service, git port.GitRepository, publisher port.PullRequestPublisher) *ReleaseService {
 	return &ReleaseService{
@@ -203,6 +221,16 @@ const (
 	ReleaseStabilizationDocs    ReleaseStabilizationKind = "docs"
 	ReleaseStabilizationPrep    ReleaseStabilizationKind = "release-prep"
 )
+
+// ParseReleaseStabilizationKind validates the constrained release-change
+// category before a workflow begins.
+func ParseReleaseStabilizationKind(raw string) (ReleaseStabilizationKind, error) {
+	kind := ReleaseStabilizationKind(raw)
+	if _, err := stabilizationFamily(kind); err != nil {
+		return "", err
+	}
+	return kind, nil
+}
 
 // CreateReleaseStabilizationRequest describes an explicitly permitted short
 // working branch from a frozen release line.
@@ -408,11 +436,8 @@ func (service *ReleaseService) PropagateHotfix(ctx context.Context, request Prop
 			"select the active line that also needs the reviewed hotfix",
 		)
 	}
-	if !commitIDPattern.MatchString(request.CommitID) {
-		return PropagateHotfixResult{}, invalidWorkflowInput(
-			"a 7 to 64 character hexadecimal commit ID is required",
-			"provide the reviewed source commit SHA to cherry-pick",
-		)
+	if err := ValidateCommitID(request.CommitID); err != nil {
+		return PropagateHotfixResult{}, err
 	}
 	repository, err := normalizeWorkflowRepository(request.Repository)
 	if err != nil {
@@ -545,11 +570,21 @@ func stabilizationFamily(kind ReleaseStabilizationKind) (branch.Family, error) {
 	case ReleaseStabilizationPrep:
 		return branch.FamilyChore, nil
 	default:
-		return "", invalidWorkflowInput(
-			"release stabilization kind must be blocker, docs, or release-prep",
-			"select only a change category allowed on a frozen release line",
-		)
+		return "", invalidReleaseStabilizationKind(string(kind))
 	}
+}
+
+func invalidReleaseStabilizationKind(actual string) error {
+	return problem.New(problem.Details{
+		Code:        problem.CodeInvalidInput,
+		Category:    problem.CategoryGovernance,
+		Field:       "stabilization kind",
+		Actual:      actual,
+		Expected:    "blocker, docs, or release-prep",
+		Rule:        "frozen release lines accept only release-blocking fixes, documentation, or release preparation",
+		Example:     "blocker",
+		Remediation: "select blocker, docs, or release-prep",
+	})
 }
 
 func hasMatchingSupportReleaseTag(tags []string, version branch.SupportVersion) bool {

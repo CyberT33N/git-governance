@@ -65,25 +65,24 @@ go version go1.26.5
 
 ## Build from source
 
-Clone or open the repository, then run:
+Clone or open the repository, then run the full build gate:
 
 ```powershell
-go mod download
-go test ./...
-go run .\cmd\check-coverage
-go build -o .\dist\git-governance.exe .\cmd\git-governance
-.\dist\git-governance.exe --version
+go run .\cmd\build
 ```
 
 On macOS or Linux:
 
 ```bash
-go mod download
-go test ./...
-go run ./cmd/check-coverage
-go build -o ./dist/git-governance ./cmd/git-governance
-./dist/git-governance --version
+go run ./cmd/build
 ```
+
+`cmd/build` verifies root and build-tool module integrity, checks formatting,
+runs Staticcheck, typechecks packages and tests, runs unit, contract,
+integration, coverage, race, vet, vulnerability, fuzz, and Lefthook checks,
+then builds and smoke-tests the native binary. It stops at the first failed
+gate and writes `dist\git-governance.exe` on Windows or
+`dist/git-governance` on macOS and Linux.
 
 For a local development run without producing a binary:
 
@@ -130,6 +129,20 @@ pipeline. They are not yet published by this repository.
   it, and `--color never` uses plain human output and line-oriented prompts.
 - `--yes` is required for a mutating non-interactive command unless
   `--dry-run` is used.
+
+## Interactive input validation
+
+Every interactive field explains its canonical input contract before accepting a
+value. If a value is invalid, the command stays at that exact field, prints the
+actual value (when safe), the violated rule, the expected format, a valid
+example, and the correction. The prompt can be retried without limit; accepted
+earlier values are retained and the workflow does not restart.
+
+An error after accepted inputs—for example a repository or Git failure—includes
+the input summary used by that command. Inline field diagnostics intentionally
+show only the failing field so a correction remains focused. Git failures
+separate operation context from the bounded Git diagnostic; the context is not
+mislabelled as an input value.
 
 ## Project-agnostic quality gates
 
@@ -298,6 +311,10 @@ git switch -c feature/ABC-123-add-export-button origin/develop
 ```
 
 It does not check out and pull the local `develop` branch first.
+The selected remote must therefore expose `develop` after the fetch. A
+repository adopting this policy must create and protect that integration line
+before regular ticket work begins; the CLI now stops with a target-base
+diagnostic before attempting `git switch` when it is absent.
 
 Normal ticket work permits exactly one official regular branch per ticket. For
 example, once `feature/ABC-123-add-export-button` exists locally or on the

@@ -39,7 +39,7 @@ func newCommitCreateCommand(application *application) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "create",
 		Short: "Create a governed commit from explicit staged paths",
-		RunE: func(command *cobra.Command, _ []string) error {
+		RunE: withWorkflowInputs(func(command *cobra.Command, inputs *workflowInputSummary) error {
 			services := application.services()
 			repository, err := application.discover(command.Context(), services)
 			if err != nil {
@@ -53,16 +53,28 @@ func newCommitCreateCommand(application *application) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			inputs.add("ticket", commitTicket.String())
 			kind, err := resolveCommitType(application, command, currentBranch, typeRaw)
 			if err != nil {
 				return err
 			}
+			inputs.add("commit type", kind.String())
 			if subject == "" {
-				subject, err = application.requireInput(command.Context(), "", "Commit subject", "Describe the change in one concise line.")
+				subject, err = application.requireInput(
+					command.Context(),
+					"",
+					"Commit subject",
+					"Enter one non-empty, unpadded line of at most 200 characters. Do not use control characters. Example: add export button.",
+					func(value string) error {
+						_, validationErr := commitmsg.NewHeader(kind, commitTicket, value, breaking)
+						return validationErr
+					},
+				)
 				if err != nil {
 					return err
 				}
 			}
+			inputs.add("commit subject", subject)
 			header, err := commitmsg.NewHeader(kind, commitTicket, subject, breaking)
 			if err != nil {
 				return err
@@ -73,11 +85,21 @@ func newCommitCreateCommand(application *application) *cobra.Command {
 			}
 			if breaking {
 				if breakingDescription == "" {
-					breakingDescription, err = application.requireInput(command.Context(), "", "Breaking change impact", "Explain the incompatible public contract change and migration impact.")
+					breakingDescription, err = application.requireInput(
+						command.Context(),
+						"",
+						"Breaking change impact",
+						"Describe the incompatible public contract change and the concrete migration impact without leading or trailing whitespace. Example: clients must use the versioned export endpoint.",
+						func(value string) error {
+							_, validationErr := commitmsg.NewFooter("BREAKING CHANGE", value)
+							return validationErr
+						},
+					)
 					if err != nil {
 						return err
 					}
 				}
+				inputs.add("breaking change impact", breakingDescription)
 				breakingFooter, err := commitmsg.NewFooter("BREAKING CHANGE", breakingDescription)
 				if err != nil {
 					return err
@@ -119,7 +141,7 @@ func newCommitCreateCommand(application *application) *cobra.Command {
 					"plan":      commitPlanText(result.Plan),
 				},
 			})
-		},
+		}),
 	}
 	command.Flags().StringVar(&typeRaw, "type", "", "commit type")
 	command.Flags().StringVar(&ticketRaw, "ticket", "", "ticket ID; defaults to the current ticket branch")
