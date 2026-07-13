@@ -4,6 +4,7 @@ import (
 	"github.com/CyberT33N/git-governance/internal/application/port"
 	"github.com/CyberT33N/git-governance/internal/application/workflow"
 	"github.com/CyberT33N/git-governance/internal/domain/branch"
+	"github.com/CyberT33N/git-governance/internal/domain/commitmsg"
 	"github.com/CyberT33N/git-governance/internal/domain/ticket"
 	"github.com/spf13/cobra"
 )
@@ -117,8 +118,12 @@ func newTicketStartCommand(application *application) *cobra.Command {
 			}
 			return application.report(command, port.Report{
 				Operation: "workflow.ticket.start",
-				Summary:   "Ticket workflow start completed.",
-				Fields:    fields,
+				Summary: application.withInteractiveFetchSummary(
+					"Ticket workflow start completed.",
+					repository.Remote,
+					fetchCompleted(result.Official.DryRun, result.Official.Plan),
+				),
+				Fields: fields,
 			})
 		}),
 	}
@@ -133,10 +138,12 @@ func newTicketStartCommand(application *application) *cobra.Command {
 
 func newTicketPublishCommand(application *application) *cobra.Command {
 	var (
-		branchRaw string
-		baseRaw   string
-		push      bool
-		draft     bool
+		branchRaw         string
+		baseRaw           string
+		scratchTargetRaw  string
+		scratchMessageRaw string
+		push              bool
+		draft             bool
 	)
 	command := &cobra.Command{
 		Use:   "publish",
@@ -152,6 +159,34 @@ func newTicketPublishCommand(application *application) *cobra.Command {
 				return err
 			}
 			inputs.add("ticket branch", name.String())
+			var (
+				scratchTarget  *branch.BranchName
+				scratchMessage *commitmsg.Message
+			)
+			if name.Family() == branch.FamilyScratch {
+				var explicitTarget *branch.BranchName
+				if scratchTargetRaw != "" {
+					target, err := branch.ParseName(scratchTargetRaw)
+					if err != nil {
+						return err
+					}
+					explicitTarget = &target
+				}
+				target, err := services.scratch.ResolveTarget(command.Context(), repository, name, explicitTarget)
+				if err != nil {
+					return err
+				}
+				scratchTarget = &target
+				inputs.add("official ticket branch", target.String())
+				message, err := application.resolveScratchMergeMessage(command.Context(), scratchMessageRaw, target)
+				if err != nil {
+					return err
+				}
+				scratchMessage = &message
+				inputs.add("squash commit message", message.Header().String())
+			} else if scratchTargetRaw != "" || scratchMessageRaw != "" {
+				return invalidOption("scratch transfer", "configured", "--target and --message are only supported when publishing from scratch")
+			}
 			base, err := parseBase(baseRaw, repository.Remote)
 			if err != nil {
 				return err
@@ -159,16 +194,27 @@ func newTicketPublishCommand(application *application) *cobra.Command {
 			if base != nil {
 				inputs.add("target base", base.String())
 			}
-			if err := application.confirmMutation(command.Context(), "Publish ticket workflow", "Validate the commit series, synchronize safely, and optionally push the branch?"); err != nil {
+			label := "Publish ticket workflow"
+			description := "Validate the commit series, synchronize safely, and optionally push the branch?"
+			if scratchTarget != nil && scratchMessage != nil {
+				label = "Publish ticket workflow from scratch"
+				description = "You are on private scratch branch " + name.String() +
+					". Squash-merge it into " + scratchTarget.String() + " as " +
+					scratchMessage.Header().String() +
+					", then validate, synchronize safely, and optionally push the official branch?"
+			}
+			if err := application.confirmMutation(command.Context(), label, description); err != nil {
 				return err
 			}
 			result, err := services.tickets.PublishTicket(command.Context(), workflow.PublishTicketRequest{
-				Repository: repository,
-				Branch:     name,
-				Base:       base,
-				Push:       push,
-				Draft:      draft,
-				DryRun:     application.options.dryRun,
+				Repository:     repository,
+				Branch:         name,
+				Base:           base,
+				ScratchTarget:  scratchTarget,
+				ScratchMessage: scratchMessage,
+				Push:           push,
+				Draft:          draft,
+				DryRun:         application.options.dryRun,
 			})
 			if err != nil {
 				return err
@@ -182,17 +228,28 @@ func newTicketPublishCommand(application *application) *cobra.Command {
 				"pullRequestTitle":     result.PullRequest.Title,
 				"publishedPullRequest": result.PublishedURL,
 			}
+			if result.ScratchMerge != nil {
+				fields["scratchBranch"] = result.ScratchMerge.Source.String()
+				fields["squashMerged"] = boolString(result.ScratchMerge.Committed)
+				fields["squashCommit"] = result.ScratchMerge.Message.Header().String()
+			}
 			addQualityFields(fields, result)
 			return application.report(command, port.Report{
 				Operation: "workflow.ticket.publish",
-				Summary:   "Ticket publish workflow completed.",
-				Fields:    fields,
-				Data:      result.PullRequest,
+				Summary: application.withInteractiveFetchSummary(
+					"Ticket publish workflow completed.",
+					repository.Remote,
+					!result.DryRun,
+				),
+				Fields: fields,
+				Data:   result.PullRequest,
 			})
 		}),
 	}
 	command.Flags().StringVar(&branchRaw, "branch", "", "ticket branch; defaults to the current branch")
 	command.Flags().StringVar(&baseRaw, "base", "", "explicit base for hotfix ticket publication")
+	command.Flags().StringVar(&scratchTargetRaw, "target", "", "optional local official target when publishing from scratch")
+	command.Flags().StringVar(&scratchMessageRaw, "message", "", "full Conventional Commit message for a scratch squash transfer")
 	command.Flags().BoolVar(&push, "push", false, "push the branch after validation")
 	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
 	return command
@@ -253,7 +310,11 @@ func newHotfixWorkflowCommand(application *application) *cobra.Command {
 			}
 			return application.report(command, port.Report{
 				Operation: "workflow.hotfix.start",
-				Summary:   "Hotfix branch created.",
+				Summary: application.withInteractiveFetchSummary(
+					"Hotfix branch created.",
+					repository.Remote,
+					fetchCompleted(result.DryRun, result.Plan),
+				),
 				Fields: map[string]string{
 					"branch": result.Name.String(),
 					"base":   result.Base.String(),
@@ -337,9 +398,13 @@ func newHotfixPublishCommand(application *application) *cobra.Command {
 			addQualityFields(fields, result)
 			return application.report(command, port.Report{
 				Operation: "workflow.hotfix.publish",
-				Summary:   "Hotfix publish workflow completed.",
-				Fields:    fields,
-				Data:      result.PullRequest,
+				Summary: application.withInteractiveFetchSummary(
+					"Hotfix publish workflow completed.",
+					repository.Remote,
+					!result.DryRun,
+				),
+				Fields: fields,
+				Data:   result.PullRequest,
 			})
 		}),
 	}
@@ -416,7 +481,11 @@ func newHotfixPropagateCommand(application *application) *cobra.Command {
 			}
 			return application.report(command, port.Report{
 				Operation: "workflow.hotfix.propagate",
-				Summary:   "Hotfix propagation workflow completed.",
+				Summary: application.withInteractiveFetchSummary(
+					"Hotfix propagation workflow completed.",
+					repository.Remote,
+					fetchCompleted(result.Branch.DryRun, result.Branch.Plan) || !result.Publication.DryRun,
+				),
 				Fields: map[string]string{
 					"source":               source.String(),
 					"target":               target.String(),
@@ -540,7 +609,11 @@ func newReleaseCutCommand(application *application) *cobra.Command {
 			}
 			return application.report(command, port.Report{
 				Operation: "workflow.release.cut",
-				Summary:   "Protected release-line creation intent prepared.",
+				Summary: application.withInteractiveFetchSummary(
+					"Protected release-line creation intent prepared.",
+					repository.Remote,
+					fetchCompleted(result.DryRun, result.Plan),
+				),
 				Fields: map[string]string{
 					"branch":   result.Intent.Branch.String(),
 					"base":     result.Intent.Source.String(),
@@ -624,7 +697,11 @@ func newReleaseStabilizeCommand(application *application) *cobra.Command {
 			}
 			return application.report(command, port.Report{
 				Operation: "workflow.release.stabilize",
-				Summary:   "Release stabilization branch created.",
+				Summary: application.withInteractiveFetchSummary(
+					"Release stabilization branch created.",
+					repository.Remote,
+					fetchCompleted(result.DryRun, result.Plan),
+				),
 				Fields: map[string]string{
 					"release": release.String(),
 					"branch":  result.Name.String(),
@@ -714,9 +791,13 @@ func newReleasePublishStabilizationCommand(application *application) *cobra.Comm
 			addQualityFields(fields, result)
 			return application.report(command, port.Report{
 				Operation: "workflow.release.publish-stabilization",
-				Summary:   "Release stabilization pull request prepared.",
-				Fields:    fields,
-				Data:      result.PullRequest,
+				Summary: application.withInteractiveFetchSummary(
+					"Release stabilization pull request prepared.",
+					repository.Remote,
+					!result.DryRun,
+				),
+				Fields: fields,
+				Data:   result.PullRequest,
 			})
 		}),
 	}
@@ -856,7 +937,11 @@ func newSupportPrepareCommand(application *application) *cobra.Command {
 			}
 			return application.report(command, port.Report{
 				Operation: "workflow.release.support",
-				Summary:   "Protected support-line creation intent prepared.",
+				Summary: application.withInteractiveFetchSummary(
+					"Protected support-line creation intent prepared.",
+					repository.Remote,
+					fetchCompleted(result.DryRun, result.Plan),
+				),
 				Fields: map[string]string{
 					"branch":   result.Intent.Branch.String(),
 					"base":     result.Intent.Source.String(),

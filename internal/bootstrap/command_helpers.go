@@ -58,6 +58,25 @@ func (application *application) report(command *cobra.Command, result port.Repor
 	return application.reporter(command.OutOrStdout()).Report(command.Context(), result)
 }
 
+func (application *application) withInteractiveFetchSummary(summary, remote string, fetched bool) string {
+	if !fetched || !application.promptAvailable() {
+		return summary
+	}
+	return "🟢 Remote references fetched and stale references pruned from " + remote + " before this operation.\n" + summary
+}
+
+func fetchCompleted(dryRun bool, plan []branchapp.PlanStep) bool {
+	if dryRun {
+		return false
+	}
+	for _, step := range plan {
+		if step.Action == "fetch" {
+			return true
+		}
+	}
+	return false
+}
+
 func (application *application) discover(ctx context.Context, service services) (port.RepositoryIdentity, error) {
 	identity, err := service.git.Discover(ctx, application.options.repository)
 	if err != nil {
@@ -147,6 +166,33 @@ func (application *application) resolveSlug(ctx context.Context, raw string, lab
 		label,
 		"Enter 1 to 100 lowercase ASCII letters or digits. Separate words with exactly one hyphen; do not use spaces, uppercase letters, or leading, trailing, or repeated hyphens. Example: add-export-button.",
 		branch.ParseSlug,
+	)
+}
+
+func (application *application) resolveScratchMergeMessage(
+	ctx context.Context,
+	raw string,
+	target branch.BranchName,
+) (commitmsg.Message, error) {
+	targetTicket, _ := target.Ticket()
+	return resolveValidatedInput(
+		application,
+		ctx,
+		raw,
+		"Squash commit message",
+		"Enter the complete Conventional Commit message that will become one commit on "+
+			target.String()+". It must use ticket "+targetTicket.String()+
+			". Example: feat("+targetTicket.String()+"): add export button.",
+		func(value string) (commitmsg.Message, error) {
+			message, err := commitmsg.Parse(value)
+			if err != nil {
+				return commitmsg.Message{}, err
+			}
+			if err := branchapp.ValidateScratchMergeMessage(target, message); err != nil {
+				return commitmsg.Message{}, err
+			}
+			return message, nil
+		},
 	)
 }
 

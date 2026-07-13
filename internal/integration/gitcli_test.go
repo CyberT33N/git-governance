@@ -178,6 +178,77 @@ func TestGitCLIAdapterAgainstLocalRepositories(t *testing.T) {
 	}
 }
 
+func TestScratchSquashMergeAgainstLocalRepository(t *testing.T) {
+	t.Parallel()
+
+	local, _ := setupRepository(t)
+	adapter := gitcli.New(gitcli.Options{Timeout: 10 * time.Second})
+	ctx := context.Background()
+	identity, err := adapter.Discover(ctx, local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity.Remote = "origin"
+	if err := adapter.Fetch(ctx, identity); err != nil {
+		t.Fatal(err)
+	}
+
+	develop := mustBranch(t, "develop")
+	base, err := branch.NewTargetBase("origin", develop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := mustBranch(t, "feature/ABC-123-add-export")
+	if err := adapter.CreateBranch(ctx, identity, target, base, true); err != nil {
+		t.Fatal(err)
+	}
+	localTarget, err := branch.NewLocalBase(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := mustBranch(t, "scratch/ABC-123-export-exploration")
+	if err := adapter.CreateBranch(ctx, identity, source, localTarget, true); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(local, "scratch.txt"), "explored implementation\n")
+	if err := adapter.Stage(ctx, identity, []string{"scratch.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Commit(ctx, identity, mustMessage(t, "feat(ABC-123): explore export implementation")); err != nil {
+		t.Fatal(err)
+	}
+
+	merger := branchapp.NewScratchMerger(
+		adapter,
+		branchapp.NewService(adapter, policy.SyntaxOnlyKeyPolicy{}),
+	)
+	result, err := merger.Merge(ctx, branchapp.ScratchMergeRequest{
+		Repository: identity,
+		Source:     source,
+		Message:    mustMessage(t, "feat(ABC-123): add export"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Target != target || !result.Committed {
+		t.Fatalf("scratch merge result = %#v", result)
+	}
+	current, err := adapter.CurrentBranch(ctx, identity)
+	if err != nil || current != target {
+		t.Fatalf("CurrentBranch() after squash = (%q, %v)", current.String(), err)
+	}
+	if contents, err := os.ReadFile(filepath.Join(local, "scratch.txt")); err != nil || strings.TrimSpace(string(contents)) != "explored implementation" {
+		t.Fatalf("squashed file = (%q, %v)", contents, err)
+	}
+	if exists, err := adapter.BranchExists(ctx, identity, source); err != nil || !exists {
+		t.Fatalf("scratch branch existence after transfer = (%t, %v)", exists, err)
+	}
+	history := runGit(t, local, "log", "--format=%s", target.String())
+	if !strings.Contains(history, "feat(ABC-123): add export") {
+		t.Fatalf("target history = %q", history)
+	}
+}
+
 func setupRepository(t *testing.T) (string, string) {
 	t.Helper()
 

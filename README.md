@@ -130,6 +130,18 @@ pipeline. They are not yet published by this repository.
 - `--yes` is required for a mutating non-interactive command unless
   `--dry-run` is used.
 
+When an interactive human workflow completes a remote refresh, its success
+header starts with:
+
+```text
+🟢 Remote references fetched and stale references pruned from <remote> before this operation.
+```
+
+The status appears only after a successful `git fetch --prune <remote>` and is
+absent from dry runs, `--interactive never`, JSON output, and `--quiet`.
+Fetching refreshes configured remote-tracking references; it does not pull or
+switch a local branch.
+
 ## Interactive input validation
 
 Every interactive field explains its canonical input contract before accepting a
@@ -219,6 +231,7 @@ stress test that other families do not need.
 git governance branch list
 git governance branch create
 git governance branch validate
+git governance branch merge-scratch
 git governance branch sync-base
 
 git governance commit create
@@ -348,6 +361,39 @@ git governance --interactive never --yes branch create `
 different ticket are rejected. Use `workflow ticket start --scratch` when a new
 official branch and its private exploration branch should be created together.
 
+### Squash a scratch branch into its official branch
+
+`branch merge-scratch` transfers the current `scratch/*` branch as exactly one
+governed commit to its local official ticket branch. It resolves the target by
+ticket ID, not by the slug: `scratch/ABC-123-export-exploration` may therefore
+transfer to `feature/ABC-123-add-export-button`, `fix/ABC-123-...`, or another
+official family for `ABC-123`. The two descriptions do not need to match.
+
+When exactly one local official branch has the same ticket, no target input is
+needed. If no local official branch exists, the command stops with
+`SCRATCH_TARGET_BRANCH_MISSING`. If manual work created multiple local
+official branches for the ticket, specify the intended target explicitly:
+
+```powershell
+git governance branch merge-scratch `
+  --target feature/ABC-123-add-export-button `
+  --message "feat(ABC-123): add export button"
+```
+
+The standard human flow shows the scratch source, resolved target, and squash
+commit before requiring confirmation. Non-interactive automation uses the
+existing interaction contract rather than a separate `--silent` flag:
+
+```powershell
+git governance --interactive never --yes branch merge-scratch `
+  --message "feat(ABC-123): add export button"
+```
+
+The command switches to the official branch, applies `git merge --squash`, and
+creates the supplied Conventional Commit. It never runs `git add .`, pushes,
+or deletes the scratch branch. A conflict remains in Git for explicit user
+resolution; the CLI does not hide or automatically discard it.
+
 ### Validate a branch
 
 ```powershell
@@ -461,6 +507,23 @@ Publish after development:
 ```powershell
 git governance --yes workflow ticket publish --push
 ```
+
+When invoked from an official ticket branch, publication follows the normal
+flow. When invoked from a `scratch/*` branch, the workflow first resolves the
+same local official ticket branch, shows both branch names and the supplied
+squash commit, and asks for confirmation. After confirmation it reuses the
+same `branch merge-scratch` application component before validating and
+optionally pushing the official branch:
+
+```powershell
+git governance workflow ticket publish `
+  --message "feat(ABC-123): add export button" `
+  --push
+```
+
+For non-interactive execution, use `--interactive never --yes` and provide
+the commit message. Use `--target <official-branch>` only when a manually
+created repository has more than one local official branch for the ticket.
 
 The workflow validates the commit series, runs configured quality gates,
 checks base freshness, conditionally rebases only an unpublished branch, then

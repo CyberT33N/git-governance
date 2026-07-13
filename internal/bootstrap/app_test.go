@@ -538,6 +538,10 @@ func (*prePushGit) Merge(context.Context, port.RepositoryIdentity, branch.Target
 	return nil
 }
 
+func (*prePushGit) SquashMerge(context.Context, port.RepositoryIdentity, branch.BranchName) error {
+	return nil
+}
+
 func (*prePushGit) CherryPick(context.Context, port.RepositoryIdentity, string) error {
 	return nil
 }
@@ -681,6 +685,10 @@ func (*commandGit) Rebase(context.Context, port.RepositoryIdentity, branch.Targe
 }
 
 func (*commandGit) Merge(context.Context, port.RepositoryIdentity, branch.TargetBase, commitmsg.Message) error {
+	return nil
+}
+
+func (*commandGit) SquashMerge(context.Context, port.RepositoryIdentity, branch.BranchName) error {
 	return nil
 }
 

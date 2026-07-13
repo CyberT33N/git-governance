@@ -170,8 +170,9 @@ func parsePrePushUpdate(line string) (PushUpdate, error) {
 	return update, nil
 }
 
-// ValidatePrePushUpdates validates every actual outgoing branch update. It
-// never fetches, rebases, merges, pushes, or otherwise mutates Git state.
+// ValidatePrePushUpdates refreshes remote-tracking references once, then
+// validates every actual outgoing branch update. It never rebases, merges, or
+// pushes.
 func (synchronizer *Synchronizer) ValidatePrePushUpdates(
 	ctx context.Context,
 	repository port.RepositoryIdentity,

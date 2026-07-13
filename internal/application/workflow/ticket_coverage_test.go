@@ -6,9 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	branchapp "github.com/CyberT33N/git-governance/internal/application/branch"
 	"github.com/CyberT33N/git-governance/internal/application/port"
 	"github.com/CyberT33N/git-governance/internal/domain/branch"
+	"github.com/CyberT33N/git-governance/internal/domain/commitmsg"
 	"github.com/CyberT33N/git-governance/internal/domain/problem"
+	"github.com/CyberT33N/git-governance/internal/domain/ticket"
 )
 
 type ticketCoverageGit struct {
@@ -23,6 +26,84 @@ type ticketCoverageGit struct {
 	branchExistsCursor int
 	createErrors       []error
 	createCursor       int
+}
+
+type scratchTicketWorkflowGit struct {
+	*fakeGitRepository
+
+	localBranches map[string]bool
+	official      []branch.BranchName
+	squashErr     error
+
+	switched  []branch.BranchName
+	squashed  []branch.BranchName
+	committed []string
+}
+
+func newScratchTicketWorkflowGit(source, target branch.BranchName) *scratchTicketWorkflowGit {
+	return &scratchTicketWorkflowGit{
+		fakeGitRepository: &fakeGitRepository{
+			clean:       true,
+			publication: branch.PublicationUnpublished,
+			messages:    []string{"feat(ABC-123): add export"},
+		},
+		localBranches: map[string]bool{
+			source.String(): true,
+			target.String(): true,
+		},
+		official: []branch.BranchName{target},
+	}
+}
+
+func (git *scratchTicketWorkflowGit) BranchExists(
+	_ context.Context,
+	_ port.RepositoryIdentity,
+	branchName branch.BranchName,
+) (bool, error) {
+	git.calls = append(git.calls, "branch-exists")
+	return git.localBranches[branchName.String()], nil
+}
+
+func (git *scratchTicketWorkflowGit) OfficialBranchesForTicket(
+	_ context.Context,
+	_ port.RepositoryIdentity,
+	_ ticket.ID,
+) ([]branch.BranchName, error) {
+	git.calls = append(git.calls, "official-branches-for-ticket")
+	return append([]branch.BranchName(nil), git.official...), nil
+}
+
+func (git *scratchTicketWorkflowGit) SwitchBranch(
+	_ context.Context,
+	_ port.RepositoryIdentity,
+	name branch.BranchName,
+) error {
+	git.calls = append(git.calls, "switch")
+	git.switched = append(git.switched, name)
+	return nil
+}
+
+func (git *scratchTicketWorkflowGit) SquashMerge(
+	_ context.Context,
+	_ port.RepositoryIdentity,
+	source branch.BranchName,
+) error {
+	git.calls = append(git.calls, "squash-merge")
+	if git.squashErr != nil {
+		return git.squashErr
+	}
+	git.squashed = append(git.squashed, source)
+	return nil
+}
+
+func (git *scratchTicketWorkflowGit) Commit(
+	_ context.Context,
+	_ port.RepositoryIdentity,
+	message commitmsg.Message,
+) error {
+	git.calls = append(git.calls, "commit")
+	git.committed = append(git.committed, message.String())
+	return nil
 }
 
 func (git *ticketCoverageGit) ValidateBranchRef(context.Context, port.RepositoryIdentity, branch.BranchName) error {
@@ -165,9 +246,16 @@ func TestTicketServiceCoveragePublishFailuresAndBranches(t *testing.T) {
 		assertProblemCode(t, err, problem.CodeInternal)
 	})
 
+	t.Run("requires a canonical branch", func(t *testing.T) {
+		request := validRequest()
+		request.Branch = branch.BranchName{}
+		_, err := newTicketServiceWithGit(newTicketCoverageGit(), nil, nil).PublishTicket(context.Background(), request)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+	})
+
 	t.Run("rejects non-official branches", func(t *testing.T) {
 		request := validRequest()
-		request.Branch = mustBranch("scratch/ABC-123-export-exploration")
+		request.Branch = mustBranch("develop")
 		_, err := newTicketServiceWithGit(newTicketCoverageGit(), nil, nil).PublishTicket(context.Background(), request)
 		assertProblemCode(t, err, problem.CodeInvalidInput)
 	})
@@ -287,4 +375,130 @@ func TestTicketServiceCoveragePublishFailuresAndBranches(t *testing.T) {
 	})
 }
 
+func TestPublishTicketTransfersScratchThroughSharedMerger(t *testing.T) {
+	source := mustBranch("scratch/ABC-123-export-exploration")
+	target := mustBranch("feature/ABC-123-add-export")
+	message := mustScratchCommitMessage(t, "feat(ABC-123): add export")
+	git := newScratchTicketWorkflowGit(source, target)
+	branches := branchapp.NewService(git, &fakeKeyPolicy{})
+	sync := branchapp.NewSynchronizer(git, branches, nil)
+	service := NewTicketService(branches, sync, git, nil, nil).
+		WithScratchMerger(branchapp.NewScratchMerger(git, branches))
+
+	result, err := service.PublishTicket(context.Background(), PublishTicketRequest{
+		Repository:     testRepository(),
+		Branch:         source,
+		ScratchMessage: &message,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Branch != target || result.ScratchMerge == nil || !result.ScratchMerge.Committed {
+		t.Fatalf("PublishTicket() = %#v", result)
+	}
+	if result.PullRequest.Source != target || result.PullRequest.Target.String() != "develop" {
+		t.Fatalf("pull request = %#v", result.PullRequest)
+	}
+	if len(git.switched) != 1 || git.switched[0] != target ||
+		len(git.squashed) != 1 || git.squashed[0] != source ||
+		len(git.committed) != 1 || git.committed[0] != message.String() {
+		t.Fatalf(
+			"scratch transfer calls = switched:%#v squashed:%#v committed:%#v",
+			git.switched,
+			git.squashed,
+			git.committed,
+		)
+	}
+}
+
+func TestPublishTicketPlansScratchTransferDuringDryRun(t *testing.T) {
+	source := mustBranch("scratch/ABC-123-export-exploration")
+	target := mustBranch("feature/ABC-123-add-export")
+	message := mustScratchCommitMessage(t, "feat(ABC-123): add export")
+	git := newScratchTicketWorkflowGit(source, target)
+	branches := branchapp.NewService(git, &fakeKeyPolicy{})
+	sync := branchapp.NewSynchronizer(git, branches, nil)
+	service := NewTicketService(branches, sync, git, nil, nil).
+		WithScratchMerger(branchapp.NewScratchMerger(git, branches))
+
+	result, err := service.PublishTicket(context.Background(), PublishTicketRequest{
+		Repository:     testRepository(),
+		Branch:         source,
+		ScratchMessage: &message,
+		DryRun:         true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.DryRun || result.Branch != target || result.ScratchMerge == nil ||
+		!result.ScratchMerge.DryRun || result.ScratchMerge.Committed ||
+		result.Sync.RecommendedAction != "planned" ||
+		result.Quality.Status != port.QualitySkipped {
+		t.Fatalf("dry PublishTicket() = %#v", result)
+	}
+	for _, prohibited := range []string{"switch", "squash-merge", "commit", "fetch"} {
+		if strings.Contains(strings.Join(git.calls, ","), prohibited) {
+			t.Fatalf("dry scratch publish called %q: %v", prohibited, git.calls)
+		}
+	}
+}
+
+func TestPublishTicketScratchTransferFailurePaths(t *testing.T) {
+	source := mustBranch("scratch/ABC-123-export-exploration")
+	target := mustBranch("feature/ABC-123-add-export")
+	message := mustScratchCommitMessage(t, "feat(ABC-123): add export")
+	request := func() PublishTicketRequest {
+		return PublishTicketRequest{
+			Repository:     testRepository(),
+			Branch:         source,
+			ScratchMessage: &message,
+		}
+	}
+
+	t.Run("requires the composed scratch merger", func(t *testing.T) {
+		git := newScratchTicketWorkflowGit(source, target)
+		branches := branchapp.NewService(git, &fakeKeyPolicy{})
+		service := NewTicketService(branches, branchapp.NewSynchronizer(git, branches, nil), git, nil, nil)
+
+		_, err := service.PublishTicket(context.Background(), request())
+		assertProblemCode(t, err, problem.CodeInternal)
+	})
+
+	t.Run("requires a scratch commit message", func(t *testing.T) {
+		git := newScratchTicketWorkflowGit(source, target)
+		branches := branchapp.NewService(git, &fakeKeyPolicy{})
+		service := NewTicketService(branches, branchapp.NewSynchronizer(git, branches, nil), git, nil, nil).
+			WithScratchMerger(branchapp.NewScratchMerger(git, branches))
+		missingMessage := request()
+		missingMessage.ScratchMessage = nil
+
+		_, err := service.PublishTicket(context.Background(), missingMessage)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+	})
+
+	t.Run("propagates a squash conflict", func(t *testing.T) {
+		squashErr := errors.New("squash conflict")
+		git := newScratchTicketWorkflowGit(source, target)
+		git.squashErr = squashErr
+		branches := branchapp.NewService(git, &fakeKeyPolicy{})
+		service := NewTicketService(branches, branchapp.NewSynchronizer(git, branches, nil), git, nil, nil).
+			WithScratchMerger(branchapp.NewScratchMerger(git, branches))
+
+		_, err := service.PublishTicket(context.Background(), request())
+		if !errors.Is(err, squashErr) {
+			t.Fatalf("PublishTicket() error = %v, want %v", err, squashErr)
+		}
+	})
+}
+
+func mustScratchCommitMessage(t *testing.T, raw string) commitmsg.Message {
+	t.Helper()
+	message, err := commitmsg.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return message
+}
+
 var _ port.GitRepository = (*ticketCoverageGit)(nil)
+var _ port.GitRepository = (*scratchTicketWorkflowGit)(nil)

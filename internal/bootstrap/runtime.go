@@ -57,6 +57,7 @@ type services struct {
 	git         port.GitRepository
 	branches    *branchapp.Service
 	sync        *branchapp.Synchronizer
+	scratch     *branchapp.ScratchMerger
 	commits     *commitapp.Service
 	tickets     *workflow.TicketService
 	releases    *workflow.ReleaseService
@@ -125,14 +126,18 @@ func (application *application) services() services {
 	}
 	branches := branchapp.NewService(git, application.runtime.KeyPolicy)
 	sync := branchapp.NewSynchronizer(git, branches, qualityRunner)
-	tickets := workflow.NewTicketService(branches, sync, git, qualityRunner, application.runtime.Publisher)
+	scratch := branchapp.NewScratchMerger(git, branches)
+	commits := commitapp.NewService(git, application.runtime.KeyPolicy, sync)
+	tickets := workflow.NewTicketService(branches, sync, git, qualityRunner, application.runtime.Publisher).
+		WithScratchMerger(scratch)
 	releases := workflow.NewReleaseService(branches, git, application.runtime.Publisher).WithTicketService(tickets)
 	policyInspector, _ := application.runtime.KeyPolicy.(port.PolicyInspector)
 	return services{
 		git:         git,
 		branches:    branches,
 		sync:        sync,
-		commits:     commitapp.NewService(git, application.runtime.KeyPolicy, sync),
+		scratch:     scratch,
+		commits:     commits,
 		tickets:     tickets,
 		releases:    releases,
 		preferences: policy.NewPreferencesService(store),

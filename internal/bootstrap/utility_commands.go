@@ -52,7 +52,11 @@ func newPrePushCommand(application *application) *cobra.Command {
 				}
 				return application.report(command, port.Report{
 					Operation: "validate.pre-push",
-					Summary:   "Pre-push validation passed for every supplied update.",
+					Summary: application.withInteractiveFetchSummary(
+						"Pre-push validation passed for every supplied update.",
+						repository.Remote,
+						true,
+					),
 					Fields: map[string]string{
 						"updates":       strconv.Itoa(len(result.Updates)),
 						"qualityStatus": string(result.Quality.Status),
@@ -86,8 +90,12 @@ func newPrePushCommand(application *application) *cobra.Command {
 			fields["qualityDetail"] = result.Quality.Detail
 			return application.report(command, port.Report{
 				Operation: "validate.pre-push",
-				Summary:   "Pre-push validation passed.",
-				Fields:    fields,
+				Summary: application.withInteractiveFetchSummary(
+					"Pre-push validation passed.",
+					repository.Remote,
+					result.Base != nil,
+				),
+				Fields: fields,
 			})
 		},
 	}

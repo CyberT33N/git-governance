@@ -217,6 +217,65 @@ func TestCommandHelpersReportAndDiscover(t *testing.T) {
 	})
 }
 
+func TestCommandHelpersInteractiveFetchSummary(t *testing.T) {
+	const summary = "Branch created."
+
+	interactive := newCommandHelperApplication(newCommandHelperOptions(), nil, true, true)
+	if got, want := interactive.withInteractiveFetchSummary(summary, "origin", true),
+		"🟢 Remote references fetched and stale references pruned from origin before this operation.\n"+summary; got != want {
+		t.Fatalf("interactive fetch summary = %q, want %q", got, want)
+	}
+
+	for _, testCase := range []struct {
+		name        string
+		application *application
+		fetched     bool
+	}{
+		{
+			name:        "fetch was not performed",
+			application: interactive,
+			fetched:     false,
+		},
+		{
+			name:        "noninteractive execution",
+			application: newCommandHelperApplication(newCommandHelperOptions(), nil, false, false),
+			fetched:     true,
+		},
+		{
+			name: "JSON output",
+			application: newCommandHelperApplication(func() *appOptions {
+				options := newCommandHelperOptions()
+				options.output = "json"
+				return options
+			}(), nil, true, true),
+			fetched: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := testCase.application.withInteractiveFetchSummary(summary, "origin", testCase.fetched); got != summary {
+				t.Fatalf("suppressed fetch summary = %q, want %q", got, summary)
+			}
+		})
+	}
+
+	for _, testCase := range []struct {
+		name   string
+		dryRun bool
+		plan   []branchapp.PlanStep
+		want   bool
+	}{
+		{name: "dry run", dryRun: true, plan: []branchapp.PlanStep{{Action: "fetch"}}, want: false},
+		{name: "plan without fetch", plan: []branchapp.PlanStep{{Action: "create"}}, want: false},
+		{name: "completed fetch", plan: []branchapp.PlanStep{{Action: "fetch"}}, want: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := fetchCompleted(testCase.dryRun, testCase.plan); got != testCase.want {
+				t.Fatalf("fetchCompleted(%t, %#v) = %t, want %t", testCase.dryRun, testCase.plan, got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestCommandHelpersConfirmMutation(t *testing.T) {
 	t.Run("skips confirmation for dry runs and explicit consent", func(t *testing.T) {
 		for _, testCase := range []struct {
@@ -501,6 +560,61 @@ func TestCommandHelpersResolveNumberAndSlug(t *testing.T) {
 		)
 		assertCommandHelperProblem(t, err, problem.CodeBranchSlugInvalid, problem.CategoryGovernance, "branch slug")
 	})
+}
+
+func TestCommandHelpersResolveScratchMergeMessage(t *testing.T) {
+	target, err := branch.ParseName("feature/ABC-123-add-export")
+	if err != nil {
+		t.Fatal(err)
+	}
+	application := newCommandHelperApplication(newCommandHelperOptions(), nil, false, false)
+
+	message, err := application.resolveScratchMergeMessage(
+		context.Background(),
+		"feat(ABC-123): add export",
+		target,
+	)
+	if err != nil || message.Header().String() != "feat(ABC-123): add export" {
+		t.Fatalf("resolveScratchMergeMessage() = (%q, %v)", message.String(), err)
+	}
+
+	_, err = application.resolveScratchMergeMessage(
+		context.Background(),
+		"not a Conventional Commit",
+		target,
+	)
+	assertCommandHelperProblem(t, err, problem.CodeCommitHeaderInvalid, problem.CategoryGovernance, "commit header")
+
+	_, err = application.resolveScratchMergeMessage(
+		context.Background(),
+		"feat(ABC-124): wrong ticket",
+		target,
+	)
+	assertCommandHelperProblem(t, err, problem.CodeCommitTicketMismatch, problem.CategoryGovernance, "squash commit ticket")
+
+	options := newCommandHelperOptions()
+	options.interactive = "never"
+	_, err = newCommandHelperApplication(options, nil, false, false).resolveScratchMergeMessage(
+		context.Background(),
+		"",
+		target,
+	)
+	assertCommandHelperProblem(t, err, problem.CodeInvalidInput, problem.CategoryUsage, "Squash commit message")
+
+	prompt := &commandHelperPrompt{
+		inputs: []commandHelperStringReply{{value: "feat(ABC-123): add export"}},
+	}
+	interactive := newCommandHelperApplication(newCommandHelperOptions(), prompt, true, true)
+	message, err = interactive.resolveScratchMergeMessage(context.Background(), "", target)
+	if err != nil || message.Header().String() != "feat(ABC-123): add export" {
+		t.Fatalf("interactive resolveScratchMergeMessage() = (%q, %v)", message.String(), err)
+	}
+	if len(prompt.inputRequests) != 1 ||
+		prompt.inputRequests[0].Label != "Squash commit message" ||
+		!strings.Contains(prompt.inputRequests[0].Description, target.String()) ||
+		!strings.Contains(prompt.inputRequests[0].Description, "ABC-123") {
+		t.Fatalf("scratch message prompt = %#v", prompt.inputRequests)
+	}
 }
 
 func TestCommandHelpersResolveFamily(t *testing.T) {

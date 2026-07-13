@@ -374,6 +374,37 @@ func TestMutationOperationsUseArgumentArraysAndStdin(t *testing.T) {
 	}
 }
 
+func TestSquashMergeUsesArgumentArrays(t *testing.T) {
+	t.Parallel()
+
+	source, err := branch.ParseName("scratch/ABC-123-export-exploration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{results: []processResult{{}}}
+	repository := &Repository{runner: runner, timeout: time.Second}
+	if err := repository.SquashMerge(context.Background(), testIdentity(), source); err != nil {
+		t.Fatal(err)
+	}
+	assertCall(
+		t,
+		runner.calls[0],
+		"C:/repo",
+		"",
+		"merge",
+		"--squash",
+		"--no-commit",
+		source.String(),
+	)
+
+	failing := &Repository{
+		runner:  &fakeRunner{results: []processResult{{err: errors.New("conflict"), exitCode: 1}}},
+		timeout: time.Second,
+	}
+	err = failing.SquashMerge(context.Background(), testIdentity(), source)
+	assertProblemCode(t, err, problem.CodeGitCommandFailed)
+}
+
 func TestInspectPushUpdateUsesExactObjectIDs(t *testing.T) {
 	t.Parallel()
 

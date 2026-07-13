@@ -89,6 +89,7 @@ git governance
 │   ├── list
 │   ├── create
 │   ├── validate
+│   ├── merge-scratch
 │   └── sync-base
 ├── commit
 │   ├── create
@@ -216,6 +217,45 @@ Branch erzeugen: feature/ABC-123-add-export-button
 Startpunkt: origin/develop
 Arbeitsbranch wechseln: ja
 ```
+
+### 5.5 `branch merge-scratch`
+
+```text
+git governance branch merge-scratch \
+  [--branch scratch/<ticket>-<slug>] \
+  [--target <official-ticket-branch>] \
+  --message "<Conventional Commit>"
+```
+
+Ohne `--branch` ist der aktuelle Branch die Scratch-Quelle. Das Kommando
+akzeptiert nur einen lokalen `scratch/*`-Branch und überträgt dessen Inhalt als
+genau einen Squash-Commit in einen lokalen offiziellen Ticket-Branch.
+
+Die Zielauflösung verwendet die Ticket-ID, nicht den Branch-Slug:
+
+- `scratch/ABC-123-export-exploration` und
+  `feature/ABC-123-add-export-button` gehören zusammen, obwohl ihre
+  Beschreibungen unterschiedlich sind.
+- Genau ein lokaler `feature`, `fix`, `docs`, `refactor`, `chore`, `test`,
+  `perf` oder `hotfix`-Branch für dasselbe Ticket wird automatisch verwendet.
+- Fehlt dieser lokale Branch, endet der Command mit
+  `SCRATCH_TARGET_BRANCH_MISSING`; ein Remote-Tracking-Ref allein ist kein
+  mergebarer lokaler Zielbranch.
+- Bei mehreren lokalen Kandidaten ist `--target` Pflicht; der Command rät
+  nicht zwischen Branch-Familien.
+
+Interaktiv zeigt die Bestätigung Scratch-Quelle, Zielbranch und Commit. Für
+Automation sind die vorhandenen globalen Optionen maßgeblich:
+
+```text
+git governance --interactive never --yes branch merge-scratch \
+  --message "feat(ABC-123): add export button"
+```
+
+Die Ausführung wechselt auf das Ziel, führt `git merge --squash` aus und
+erstellt den angegebenen, ticket-konsistenten Conventional Commit. Sie führt
+nie `git add .`, Push oder Scratch-Löschung aus. Bei einem Konflikt bleibt der
+normale Git-Konfliktzustand für explizite Auflösung erhalten.
 
 ## 6. `branch validate`
 
@@ -392,14 +432,32 @@ git governance workflow ticket publish \
 
 Ablauf:
 
-1. offiziellen Ticket-Branch und sauberen Zustand prüfen
-2. Branch- und Commit-Serie validieren
-3. projektdefinierte Quality Checks ausführen
-4. Basisfrische prüfen
-5. bei unveröffentlichtem Branch und Basisdelta nach Bestätigung rebasen
-6. nach einem Rebase Branch-/Policy-Prüfung, Commit-Serie und Quality Gates erneut ausführen
-7. ersten Push ausführen
-8. PR-Payload mit Head, Base `develop`, Ticket und vorgeschlagenem Titel erzeugen
+1. aktuellen Branch auflösen
+2. bei `scratch/*` den lokalen offiziellen Zielbranch über die Ticket-ID
+   bestimmen, Scratch, Ziel und Squash-Commit anzeigen und bestätigen
+3. bei bestätigtem Scratch-Pfad denselben `branch merge-scratch`-Use-Case
+   ausführen und auf dem offiziellen Branch fortsetzen
+4. offiziellen Ticket-Branch und sauberen Zustand prüfen
+5. Branch- und Commit-Serie validieren
+6. projektdefinierte Quality Checks ausführen
+7. Basisfrische prüfen
+8. bei unveröffentlichtem Branch und Basisdelta nach Bestätigung rebasen
+9. nach einem Rebase Branch-/Policy-Prüfung, Commit-Serie und Quality Gates erneut ausführen
+10. ersten Push ausführen
+11. PR-Payload mit Head, Base `develop`, Ticket und vorgeschlagenem Titel erzeugen
+
+Für einen Scratch-Start benötigt der nicht-interaktive Modus eine vollständige
+Commit-Nachricht und die bestehende Mutationsfreigabe:
+
+```text
+git governance --interactive never --yes workflow ticket publish \
+  --message "feat(ABC-123): add export button" \
+  --push
+```
+
+`--target <official-ticket-branch>` ist nur auf `scratch/*` zulässig und löst
+manuelle Mehrdeutigkeit auf. Auf einem offiziellen Branch bleiben `--target`
+und `--message` dieses Scratch-Transfers ungültig.
 
 Ohne Provider-Adapter wird kein Hosting-API-Aufruf erfunden. Die JSON-Ausgabe ist eine stabile Übergabeoberfläche für GitHub-, GitLab-, Bitbucket- oder andere Adapter.
 
@@ -613,6 +671,18 @@ Read-only-Diagnose:
 ## 18. Human- und JSON-Ausgabe
 
 ### 18.1 Human
+
+Nach einem erfolgreichen `git fetch --prune <remote>` beginnt die interaktive
+Human-Abschlussmeldung mit:
+
+```text
+🟢 Remote references fetched and stale references pruned from <remote> before this operation.
+```
+
+Die Anzeige wird nur nach einem tatsächlich erfolgreich abgeschlossenen Fetch
+ausgegeben, nicht bei `--dry-run`, `--interactive=never`, JSON-Ausgabe oder
+`--quiet`. Fetch aktualisiert konfigurierte Remote-Tracking-Referenzen; ein
+lokaler Branch wird dadurch nicht gepullt oder gewechselt.
 
 Fehlerdarstellung:
 

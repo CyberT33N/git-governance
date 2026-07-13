@@ -30,7 +30,7 @@ func TestBranchCommandTreeAndListReportContracts(t *testing.T) {
 	for _, child := range command.Commands() {
 		children[child.Name()] = true
 	}
-	for _, expected := range []string{"list", "validate", "create", "sync-base"} {
+	for _, expected := range []string{"list", "validate", "create", "merge-scratch", "sync-base"} {
 		if !children[expected] {
 			t.Fatalf("branch command children = %#v, missing %q", children, expected)
 		}
@@ -216,6 +216,44 @@ func TestBranchCreateCommandContracts(t *testing.T) {
 			fields["dryRun"] != "false" ||
 			!strings.Contains(fields["plan"], "create: feature/ABC-123-add-export from origin/develop") {
 			t.Fatalf("regular creation fields = %#v", fields)
+		}
+		if strings.Contains(output, "Remote references fetched and stale references pruned") {
+			t.Fatalf("noninteractive JSON output unexpectedly contains an interactive fetch summary: %q", output)
+		}
+	})
+
+	t.Run("shows the completed remote refresh in the interactive summary", func(t *testing.T) {
+		git := newBranchCommandGit(t, "feature/ABC-123-add-export")
+		application := newBranchCommandApplication(git, nil, &commandHelperPrompt{}, "human")
+		application.options.yes = true
+
+		stdout, stderr, err := executeBranchCommand(
+			t,
+			newBranchCreateCommand(application),
+			context.Background(),
+			"--family", "feature",
+			"--key", "ABC",
+			"--ticket", "123",
+			"--slug", "add-export",
+			"--switch=false",
+		)
+		if err != nil {
+			t.Fatalf("interactive branch creation error = %v", err)
+		}
+		if stderr != "" {
+			t.Fatalf("interactive branch creation stderr = %q", stderr)
+		}
+		for _, expected := range []string{
+			"🟢 Remote references fetched and stale references pruned from origin before this operation.",
+			"Branch created.",
+			"branch: feature/ABC-123-add-export",
+		} {
+			if !strings.Contains(stdout, expected) {
+				t.Fatalf("interactive branch creation output missing %q: %q", expected, stdout)
+			}
+		}
+		if git.fetchCalls != 1 {
+			t.Fatalf("interactive branch creation fetch calls = %d, want 1", git.fetchCalls)
 		}
 	})
 
@@ -637,6 +675,184 @@ func TestBranchSyncBaseCommandContracts(t *testing.T) {
 	})
 }
 
+func TestScratchMergeCommandFailureContracts(t *testing.T) {
+	const source = "scratch/ABC-123-export-exploration"
+	target, err := branch.ParseName("feature/ABC-123-add-export")
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := "feat(ABC-123): add export"
+	newGit := func() *branchCommandGit {
+		git := newBranchCommandGit(t, source)
+		git.officialBranches = []branch.BranchName{target}
+		git.localBranches = map[string]bool{
+			source:          true,
+			target.String(): true,
+		}
+		return git
+	}
+
+	t.Run("propagates discovery and current branch failures", func(t *testing.T) {
+		discoverErr := errors.New("repository discovery failed")
+		git := newGit()
+		git.discoverErr = discoverErr
+		_, _, err := executeBranchCommand(
+			t,
+			newScratchMergeCommand(newBranchCommandApplication(git, nil, nil, "human")),
+			context.Background(),
+		)
+		if !errors.Is(err, discoverErr) {
+			t.Fatalf("discovery error = %v, want %v", err, discoverErr)
+		}
+
+		currentErr := errors.New("current branch failed")
+		git = newGit()
+		git.currentErr = currentErr
+		_, _, err = executeBranchCommand(
+			t,
+			newScratchMergeCommand(newBranchCommandApplication(git, nil, nil, "human")),
+			context.Background(),
+		)
+		if !errors.Is(err, currentErr) {
+			t.Fatalf("current branch error = %v, want %v", err, currentErr)
+		}
+	})
+
+	t.Run("rejects invalid targets missing sources and invalid messages", func(t *testing.T) {
+		git := newGit()
+		_, _, err := executeBranchCommand(
+			t,
+			newScratchMergeCommand(newBranchCommandApplication(git, nil, nil, "human")),
+			context.Background(),
+			"--target", "not-a-branch",
+		)
+		assertProblemCode(t, err, problem.CodeBranchNameInvalid)
+
+		git = newGit()
+		git.localBranches[source] = false
+		_, _, err = executeBranchCommand(
+			t,
+			newScratchMergeCommand(newBranchCommandApplication(git, nil, nil, "human")),
+			context.Background(),
+			"--message", message,
+		)
+		assertProblemCode(t, err, problem.CodeScratchSourceBranchMissing)
+
+		git = newGit()
+		_, _, err = executeBranchCommand(
+			t,
+			newScratchMergeCommand(newBranchCommandApplication(git, nil, nil, "human")),
+			context.Background(),
+			"--message", "not a Conventional Commit",
+		)
+		assertProblemCode(t, err, problem.CodeCommitHeaderInvalid)
+	})
+
+	t.Run("propagates squash merge failures after confirmation", func(t *testing.T) {
+		squashErr := errors.New("squash conflict")
+		git := newGit()
+		git.squashErr = squashErr
+		application := newBranchCommandApplication(git, nil, nil, "human")
+		application.options.yes = true
+		_, _, err := executeBranchCommand(
+			t,
+			newScratchMergeCommand(application),
+			context.Background(),
+			"--message", message,
+		)
+		if !errors.Is(err, squashErr) {
+			t.Fatalf("squash merge error = %v, want %v", err, squashErr)
+		}
+	})
+}
+
+func TestScratchMergeCommandContracts(t *testing.T) {
+	source := "scratch/ABC-123-export-exploration"
+	target, err := branch.ParseName("feature/ABC-123-add-export")
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := "feat(ABC-123): add export"
+
+	t.Run("squashes the current scratch branch in noninteractive automation", func(t *testing.T) {
+		git := newBranchCommandGit(t, source)
+		git.officialBranches = []branch.BranchName{target}
+		git.localBranches = map[string]bool{
+			source:          true,
+			target.String(): true,
+		}
+		application := newBranchCommandApplication(git, nil, nil, "json")
+		application.options.yes = true
+
+		stdout, stderr, err := executeBranchCommand(
+			t,
+			newScratchMergeCommand(application),
+			context.Background(),
+			"--target", target.String(),
+			"--message", message,
+		)
+		if err != nil {
+			t.Fatalf("scratch merge error = %v", err)
+		}
+		if stderr != "" {
+			t.Fatalf("scratch merge stderr = %q", stderr)
+		}
+		fields := utilityJSONFields(t, assertSingleUtilityJSONResult(t, stdout, "branch.merge-scratch"))
+		if fields["scratchBranch"] != source ||
+			fields["officialBranch"] != target.String() ||
+			fields["commit"] != message ||
+			fields["committed"] != "true" ||
+			fields["dryRun"] != "false" ||
+			!strings.Contains(fields["plan"], "squash-merge: "+source+" into "+target.String()) {
+			t.Fatalf("scratch merge fields = %#v", fields)
+		}
+		if len(git.switchedBranches) != 1 || git.switchedBranches[0] != target ||
+			len(git.squashedBranches) != 1 || git.squashedBranches[0].String() != source ||
+			len(git.committedMessages) != 1 || git.committedMessages[0].String() != message {
+			t.Fatalf(
+				"scratch merge calls = switched:%#v squashed:%#v committed:%#v",
+				git.switchedBranches,
+				git.squashedBranches,
+				git.committedMessages,
+			)
+		}
+	})
+
+	t.Run("shows source and target before confirmation", func(t *testing.T) {
+		git := newBranchCommandGit(t, source)
+		git.officialBranches = []branch.BranchName{target}
+		git.localBranches = map[string]bool{
+			source:          true,
+			target.String(): true,
+		}
+		prompt := &commandHelperPrompt{
+			confirms: []commandHelperConfirmReply{{value: false}},
+		}
+		application := newBranchCommandApplication(git, nil, prompt, "human")
+
+		_, _, err := executeBranchCommand(
+			t,
+			newScratchMergeCommand(application),
+			context.Background(),
+			"--message", message,
+		)
+		assertProblemCode(t, err, problem.CodeOperationCancelled)
+		if len(prompt.confirmRequests) != 1 ||
+			prompt.confirmRequests[0].Label != "Squash merge scratch branch" ||
+			!strings.Contains(prompt.confirmRequests[0].Description, source) ||
+			!strings.Contains(prompt.confirmRequests[0].Description, target.String()) {
+			t.Fatalf("scratch merge confirmation = %#v", prompt.confirmRequests)
+		}
+		if len(git.squashedBranches) != 0 || len(git.committedMessages) != 0 {
+			t.Fatalf(
+				"declined scratch merge mutated Git: squashed=%#v committed=%#v",
+				git.squashedBranches,
+				git.committedMessages,
+			)
+		}
+	})
+}
+
 func TestBranchCommandReportHelpers(t *testing.T) {
 	for _, testCase := range []struct {
 		name   string
@@ -675,6 +891,17 @@ func TestBranchCommandReportHelpers(t *testing.T) {
 	}
 	if got := boolString(false); got != "false" {
 		t.Fatalf("boolString(false) = %q", got)
+	}
+	for _, testCase := range []struct {
+		result branchapp.ScratchMergeResult
+		want   string
+	}{
+		{result: branchapp.ScratchMergeResult{DryRun: true}, want: "Scratch squash-merge plan generated."},
+		{result: branchapp.ScratchMergeResult{}, want: "Scratch branch squashed into the official ticket branch."},
+	} {
+		if got := scratchMergeSummary(testCase.result); got != testCase.want {
+			t.Fatalf("scratchMergeSummary(%#v) = %q, want %q", testCase.result, got, testCase.want)
+		}
 	}
 }
 
@@ -783,6 +1010,9 @@ type branchCommandGit struct {
 	missingBaseCommitsErr error
 	rebaseErr             error
 	mergeErr              error
+	switchErr             error
+	squashErr             error
+	commitErr             error
 
 	hasCommits         bool
 	worktreeClean      bool
@@ -790,6 +1020,7 @@ type branchCommandGit struct {
 	officialBranches   []branch.BranchName
 	publication        branch.PublicationState
 	missingBaseCommits bool
+	localBranches      map[string]bool
 
 	discoverContexts  []context.Context
 	currentContexts   []context.Context
@@ -799,6 +1030,9 @@ type branchCommandGit struct {
 	createdBranches   []branchCreateCall
 	rebasedBases      []branch.TargetBase
 	mergedBranches    []branchMergeCall
+	switchedBranches  []branch.BranchName
+	squashedBranches  []branch.BranchName
+	committedMessages []commitmsg.Message
 }
 
 func newBranchCommandGit(t *testing.T, current string) *branchCommandGit {
@@ -870,6 +1104,9 @@ func (git *branchCommandGit) BranchExists(
 ) (bool, error) {
 	if git.branchExistsErr != nil {
 		return false, git.branchExistsErr
+	}
+	if git.localBranches != nil {
+		return git.localBranches[name.String()], nil
 	}
 	return git.branchExists, nil
 }
@@ -958,6 +1195,42 @@ func (git *branchCommandGit) Merge(
 		base:    base,
 		message: message,
 	})
+	return nil
+}
+
+func (git *branchCommandGit) SwitchBranch(
+	_ context.Context,
+	_ port.RepositoryIdentity,
+	name branch.BranchName,
+) error {
+	if git.switchErr != nil {
+		return git.switchErr
+	}
+	git.switchedBranches = append(git.switchedBranches, name)
+	return nil
+}
+
+func (git *branchCommandGit) SquashMerge(
+	_ context.Context,
+	_ port.RepositoryIdentity,
+	source branch.BranchName,
+) error {
+	if git.squashErr != nil {
+		return git.squashErr
+	}
+	git.squashedBranches = append(git.squashedBranches, source)
+	return nil
+}
+
+func (git *branchCommandGit) Commit(
+	_ context.Context,
+	_ port.RepositoryIdentity,
+	message commitmsg.Message,
+) error {
+	if git.commitErr != nil {
+		return git.commitErr
+	}
+	git.committedMessages = append(git.committedMessages, message)
 	return nil
 }
 

@@ -140,6 +140,11 @@ func (fake *fakeGitRepository) Merge(context.Context, port.RepositoryIdentity, b
 	return fake.err
 }
 
+func (fake *fakeGitRepository) SquashMerge(context.Context, port.RepositoryIdentity, branch.BranchName) error {
+	fake.calls = append(fake.calls, "squash-merge")
+	return fake.err
+}
+
 func (fake *fakeGitRepository) CherryPick(context.Context, port.RepositoryIdentity, string) error {
 	fake.calls = append(fake.calls, "cherry-pick")
 	return fake.err

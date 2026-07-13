@@ -191,6 +191,10 @@ func (doctorGit) Merge(context.Context, port.RepositoryIdentity, branch.TargetBa
 	return nil
 }
 
+func (doctorGit) SquashMerge(context.Context, port.RepositoryIdentity, branch.BranchName) error {
+	return nil
+}
+
 func (doctorGit) CherryPick(context.Context, port.RepositoryIdentity, string) error {
 	return nil
 }

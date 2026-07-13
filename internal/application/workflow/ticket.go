@@ -8,6 +8,7 @@ import (
 	branchapp "github.com/CyberT33N/git-governance/internal/application/branch"
 	"github.com/CyberT33N/git-governance/internal/application/port"
 	"github.com/CyberT33N/git-governance/internal/domain/branch"
+	"github.com/CyberT33N/git-governance/internal/domain/commitmsg"
 	"github.com/CyberT33N/git-governance/internal/domain/problem"
 	"github.com/CyberT33N/git-governance/internal/domain/ticket"
 )
@@ -16,6 +17,7 @@ import (
 type TicketService struct {
 	branches  *branchapp.Service
 	sync      *branchapp.Synchronizer
+	scratch   *branchapp.ScratchMerger
 	git       port.GitRepository
 	quality   port.QualityRunner
 	publisher port.PullRequestPublisher
@@ -36,6 +38,13 @@ func NewTicketService(
 		quality:   quality,
 		publisher: publisher,
 	}
+}
+
+// WithScratchMerger adds the reusable scratch-transfer use case to ticket
+// publication without changing the regular ticket workflow composition.
+func (service *TicketService) WithScratchMerger(merger *branchapp.ScratchMerger) *TicketService {
+	service.scratch = merger
+	return service
 }
 
 // StartTicketRequest describes normal ticket work from develop.
@@ -132,6 +141,8 @@ type PublishTicketRequest struct {
 	Branch          branch.BranchName
 	Base            *branch.TargetBase
 	Target          *branch.BranchName
+	ScratchTarget   *branch.BranchName
+	ScratchMessage  *commitmsg.Message
 	WorkflowManaged bool
 	Push            bool
 	Draft           bool
@@ -146,6 +157,7 @@ type PublishTicketResult struct {
 	PullRequest         port.PullRequest
 	PublishedURL        string
 	DryRun              bool
+	ScratchMerge        *branchapp.ScratchMergeResult
 	Quality             port.QualityResult
 	PostMutationQuality *port.QualityResult
 }
@@ -157,7 +169,13 @@ func (service *TicketService) PublishTicket(ctx context.Context, request Publish
 	if service.branches == nil || service.sync == nil || service.git == nil {
 		return PublishTicketResult{}, internalDependencyError("ticket workflow services")
 	}
-	if request.Branch.IsZero() || !request.Branch.Family().IsOfficialWorkingBranch() {
+	if request.Branch.IsZero() {
+		return PublishTicketResult{}, invalidWorkflowInput(
+			"ticket publish requires a canonical ticket branch",
+			"run this workflow from a scratch or official ticket branch",
+		)
+	}
+	if request.Branch.Family() != branch.FamilyScratch && !request.Branch.Family().IsOfficialWorkingBranch() {
 		return PublishTicketResult{}, invalidWorkflowInput(
 			"ticket publish requires an official ticket branch",
 			"run this workflow from feature, fix, docs, refactor, chore, test, perf, or hotfix work",
@@ -170,6 +188,31 @@ func (service *TicketService) PublishTicket(ctx context.Context, request Publish
 	}
 	if repository.Root == "" {
 		return PublishTicketResult{}, repositoryRequired()
+	}
+
+	var scratchMerge *branchapp.ScratchMergeResult
+	if request.Branch.Family() == branch.FamilyScratch {
+		if service.scratch == nil {
+			return PublishTicketResult{}, internalDependencyError("scratch merger")
+		}
+		if request.ScratchMessage == nil {
+			return PublishTicketResult{}, invalidWorkflowInput(
+				"publishing from scratch requires a validated squash commit message",
+				"provide a Conventional Commit message for the transfer into the official branch",
+			)
+		}
+		merged, err := service.scratch.Merge(ctx, branchapp.ScratchMergeRequest{
+			Repository: repository,
+			Source:     request.Branch,
+			Target:     request.ScratchTarget,
+			Message:    *request.ScratchMessage,
+			DryRun:     request.DryRun,
+		})
+		if err != nil {
+			return PublishTicketResult{}, err
+		}
+		scratchMerge = &merged
+		request.Branch = merged.Target
 	}
 
 	validation, err := service.branches.Validate(ctx, branchapp.ValidateRequest{
@@ -196,6 +239,23 @@ func (service *TicketService) PublishTicket(ctx context.Context, request Publish
 	target, err := resolvePullRequestTarget(validation.Name, base, request.Target, request.WorkflowManaged)
 	if err != nil {
 		return PublishTicketResult{}, err
+	}
+	pullRequest := newTicketPullRequest(validation.Name, target, request.Draft)
+	if scratchMerge != nil && request.DryRun {
+		return PublishTicketResult{
+			Branch:       validation.Name,
+			PullRequest:  pullRequest,
+			DryRun:       true,
+			ScratchMerge: scratchMerge,
+			Sync: branchapp.SyncResult{
+				Name:              validation.Name,
+				RecommendedAction: "planned",
+			},
+			Quality: port.QualityResult{
+				Status: port.QualitySkipped,
+				Detail: "quality gates are not executed during dry-run",
+			},
+		}, nil
 	}
 
 	if !request.DryRun {
@@ -244,21 +304,13 @@ func (service *TicketService) PublishTicket(ctx context.Context, request Publish
 		}
 	}
 
-	branchTicket, _ := validation.Name.Ticket()
-	branchSlug, _ := validation.Name.Slug()
-	pullRequest := port.PullRequest{
-		Source: validation.Name,
-		Target: target,
-		Ticket: branchTicket,
-		Title:  branchTicket.String() + ": " + branchSlug.String(),
-		Draft:  request.Draft,
-	}
 	result := PublishTicketResult{
-		Branch:      validation.Name,
-		Sync:        syncResult,
-		PullRequest: pullRequest,
-		DryRun:      request.DryRun,
-		Quality:     quality,
+		Branch:       validation.Name,
+		Sync:         syncResult,
+		PullRequest:  pullRequest,
+		DryRun:       request.DryRun,
+		ScratchMerge: scratchMerge,
+		Quality:      quality,
 	}
 	if syncResult.Quality != nil {
 		result.PostMutationQuality = syncResult.Quality
@@ -280,6 +332,18 @@ func (service *TicketService) PublishTicket(ctx context.Context, request Publish
 		result.PublishedURL = published.URL
 	}
 	return result, nil
+}
+
+func newTicketPullRequest(name, target branch.BranchName, draft bool) port.PullRequest {
+	branchTicket, _ := name.Ticket()
+	branchSlug, _ := name.Slug()
+	return port.PullRequest{
+		Source: name,
+		Target: target,
+		Ticket: branchTicket,
+		Title:  branchTicket.String() + ": " + branchSlug.String(),
+		Draft:  draft,
+	}
 }
 
 func (service *TicketService) validateCommitSeries(ctx context.Context, repository port.RepositoryIdentity, name branch.BranchName, base branch.TargetBase) error {

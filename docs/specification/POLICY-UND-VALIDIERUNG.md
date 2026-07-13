@@ -222,6 +222,14 @@ Regexe können folgende Regeln nicht beweisen und werden deshalb durch Domain- u
 - Release-Cuts starten von `origin/develop`
 - `scratch/*` ist privat und kein PR-Ziel
 - ein direkt erstellter `scratch/*`-Branch startet von einem lokalen offiziellen Ticket-Branch mit derselben Ticket-ID
+- ein Scratch-Transfer nutzt ausschließlich einen vorhandenen lokalen offiziellen
+  Ticket-Branch mit derselben Ticket-ID; Scratch- und Ziel-Slug müssen nicht
+  identisch sein
+- genau ein lokaler offizieller Kandidat wird automatisch gewählt; kein
+  Kandidat führt zu `SCRATCH_TARGET_BRANCH_MISSING`, mehrere Kandidaten
+  erfordern einen expliziten Zielbranch
+- der Transfer nutzt `git merge --squash` und erzeugt einen einzelnen
+  ticket-konsistenten Conventional Commit auf dem offiziellen Zielbranch
 - `main`, `develop`, `release/*` und `support/*` sind Shared Lines
 - pro Ticket existiert im normalen Workflow genau ein offizieller Arbeitsbranch
 - die Ticket-Exklusivität wird nach `fetch --prune` gegen lokale und
@@ -468,6 +476,10 @@ Mindestens folgende stabile Codes sind erforderlich:
 - `BRANCH_ALREADY_EXISTS`
 - `TICKET_BRANCH_ALREADY_EXISTS`
 - `BRANCH_PUBLICATION_UNKNOWN`
+- `SCRATCH_SOURCE_BRANCH_MISSING`
+- `SCRATCH_TARGET_BRANCH_MISSING`
+- `SCRATCH_TARGET_BRANCH_AMBIGUOUS`
+- `SCRATCH_MERGE_EMPTY`
 - `SHARED_LINE_MUTATION_FORBIDDEN`
 - `REBASE_NOT_REQUIRED`
 - `REBASE_AFTER_PUBLISH_FORBIDDEN`

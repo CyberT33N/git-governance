@@ -548,6 +548,17 @@ func (repository *Repository) Merge(ctx context.Context, identity port.Repositor
 	return nil
 }
 
+// SquashMerge stages the net changes from a private branch without preserving
+// its individual commits. The application validates and creates the resulting
+// governed commit separately.
+func (repository *Repository) SquashMerge(ctx context.Context, identity port.RepositoryIdentity, source branch.BranchName) error {
+	result := repository.invoke(ctx, identity.Root, nil, "merge", "--squash", "--no-commit", source.String())
+	if result.err != nil {
+		return repository.commandProblem(problem.CodeGitCommandFailed, identity, "squash merge the scratch branch", result)
+	}
+	return nil
+}
+
 // CherryPick applies one explicitly supplied commit and preserves its source
 // commit ID in the generated message through Git's -x trailer.
 func (repository *Repository) CherryPick(ctx context.Context, identity port.RepositoryIdentity, commitID string) error {

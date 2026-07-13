@@ -49,16 +49,17 @@ does not rely on any external governance repository or unpublished rule set.
 | Commit creation through stdin | VERIFIED | real local Git integration test |
 | First-push publication detection | VERIFIED | real local Git integration test |
 | Base delta, merge, and rebase paths | VERIFIED | real local Git integration test |
+| Scratch-to-official squash transfer | VERIFIED | whitebox, CLI-contract, Git-adapter, and real local Git integration tests |
 | No automatic amend or force push | VERIFIED | absent from public command tree and application APIs |
 
 ## User-facing commands
 
 | Command area | Status | Notes |
 |---|---|---|
-| `branch list`, `validate`, `create`, `sync-base` | IMPLEMENTED | CLI contract tests cover help, JSON, flags, and dry-run behavior |
+| `branch list`, `validate`, `create`, `merge-scratch`, `sync-base` | IMPLEMENTED | CLI contract tests cover help, JSON, flags, and dry-run behavior |
 | `commit create`, `validate` | IMPLEMENTED | explicit staging and ticket consistency are enforced |
 | `workflow ticket start` | IMPLEMENTED | optional scratch branch and provider-neutral PR intent |
-| `workflow ticket publish` | IMPLEMENTED | regular ticket flow reruns branch, commit-series, and quality checks after a mutation |
+| `workflow ticket publish` | IMPLEMENTED | regular flow and confirmed Scratch-to-official squash transfer rerun branch, commit-series, and quality checks after a mutation |
 | `workflow hotfix start` | IMPLEMENTED | affected-line selection is mandatory |
 | hotfix publish and propagation | IMPLEMENTED | affected-line publish plus `cherry-pick -x` forward/backport workflow |
 | `workflow release cut`, `stabilize`, `promote`, `backmerge`, `support`, `cleanup` | IMPLEMENTED | stabilization constraints, release-to-main intent, cleanup, and support-tag provenance are enforced |
@@ -83,7 +84,7 @@ does not rely on any external governance repository or unpublished rule set.
 | First push checks basis freshness | VERIFIED | push is blocked when an unpublished branch misses base commits |
 | Unpublished branch rebase | VERIFIED | only after a real base delta |
 | Published branch synchronization | VERIFIED | recommends or performs explicit merge, never routine rebase |
-| Scratch branch | VERIFIED | private local branch from the same-ticket official local branch; remote-tracking bases are rejected |
+| Scratch branch | VERIFIED | private local branch from the same-ticket official local branch; transfer resolves an existing local official target by ticket ID and squashes to one governed commit |
 | Release stabilization and completion | IMPLEMENTED | constrained stabilization, promotion intent, backmerge, cleanup, and support-tag provenance are present |
 
 ## Testing and quality

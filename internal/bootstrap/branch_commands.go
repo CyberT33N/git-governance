@@ -20,6 +20,7 @@ func newBranchCommand(application *application) *cobra.Command {
 		newBranchListCommand(application),
 		newBranchValidateCommand(application),
 		newBranchCreateCommand(application),
+		newScratchMergeCommand(application),
 		newBranchSyncBaseCommand(application),
 	)
 	return command
@@ -153,7 +154,11 @@ func newBranchCreateCommand(application *application) *cobra.Command {
 			}
 			return application.report(command, port.Report{
 				Operation: "branch.create",
-				Summary:   branchCreationSummary(result),
+				Summary: application.withInteractiveFetchSummary(
+					branchCreationSummary(result),
+					repository.Remote,
+					fetchCompleted(result.DryRun, result.Plan),
+				),
 				Fields: map[string]string{
 					"branch":   result.Name.String(),
 					"base":     result.Base.String(),
@@ -170,6 +175,83 @@ func newBranchCreateCommand(application *application) *cobra.Command {
 	command.Flags().StringVar(&slugRaw, "slug", "", "kebab-case branch description")
 	command.Flags().StringVar(&baseRaw, "base", "", "explicit base for eligible branch families")
 	command.Flags().BoolVar(&switchTo, "switch", true, "switch to the branch after creating it")
+	return command
+}
+
+func newScratchMergeCommand(application *application) *cobra.Command {
+	var (
+		sourceRaw  string
+		targetRaw  string
+		messageRaw string
+	)
+	command := &cobra.Command{
+		Use:   "merge-scratch",
+		Short: "Squash a private scratch branch into its official ticket branch",
+		RunE: withWorkflowInputs(func(command *cobra.Command, inputs *workflowInputSummary) error {
+			services := application.services()
+			repository, err := application.discover(command.Context(), services)
+			if err != nil {
+				return err
+			}
+			source, err := currentOrSpecified(command.Context(), services, sourceRaw, repository)
+			if err != nil {
+				return err
+			}
+			inputs.add("scratch branch", source.String())
+
+			var explicitTarget *branch.BranchName
+			if targetRaw != "" {
+				target, err := branch.ParseName(targetRaw)
+				if err != nil {
+					return err
+				}
+				explicitTarget = &target
+			}
+			target, err := services.scratch.ResolveTarget(command.Context(), repository, source, explicitTarget)
+			if err != nil {
+				return err
+			}
+			inputs.add("official ticket branch", target.String())
+			message, err := application.resolveScratchMergeMessage(command.Context(), messageRaw, target)
+			if err != nil {
+				return err
+			}
+			inputs.add("squash commit message", message.Header().String())
+
+			if err := application.confirmMutation(
+				command.Context(),
+				"Squash merge scratch branch",
+				"Squash-merge "+source.String()+" into "+target.String()+" as one commit?",
+			); err != nil {
+				return err
+			}
+			result, err := services.scratch.Merge(command.Context(), branchapp.ScratchMergeRequest{
+				Repository: repository,
+				Source:     source,
+				Target:     &target,
+				Message:    message,
+				DryRun:     application.options.dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			return application.report(command, port.Report{
+				Operation: "branch.merge-scratch",
+				Summary:   scratchMergeSummary(result),
+				Fields: map[string]string{
+					"scratchBranch":  result.Source.String(),
+					"officialBranch": result.Target.String(),
+					"commit":         result.Message.Header().String(),
+					"committed":      boolString(result.Committed),
+					"dryRun":         boolString(result.DryRun),
+					"plan":           planText(result.Plan),
+				},
+			})
+		}),
+	}
+	command.Flags().StringVar(&sourceRaw, "branch", "", "scratch branch; defaults to the current branch")
+	command.Flags().StringVar(&targetRaw, "target", "", "optional local official ticket branch target")
+	command.Flags().StringVar(&messageRaw, "message", "", "full Conventional Commit message for the squashed change")
 	return command
 }
 
@@ -236,8 +318,12 @@ func newBranchSyncBaseCommand(application *application) *cobra.Command {
 			}
 			return application.report(command, port.Report{
 				Operation: "branch.sync-base",
-				Summary:   "Branch base synchronization checked.",
-				Fields:    fields,
+				Summary: application.withInteractiveFetchSummary(
+					"Branch base synchronization checked.",
+					repository.Remote,
+					!application.options.dryRun,
+				),
+				Fields: fields,
 			})
 		},
 	}
@@ -253,6 +339,13 @@ func branchCreationSummary(result branchapp.CreateResult) string {
 		return "Branch creation plan generated."
 	}
 	return "Branch created."
+}
+
+func scratchMergeSummary(result branchapp.ScratchMergeResult) string {
+	if result.DryRun {
+		return "Scratch squash-merge plan generated."
+	}
+	return "Scratch branch squashed into the official ticket branch."
 }
 
 func planText(steps []branchapp.PlanStep) string {

@@ -51,6 +51,7 @@ type GitRepository interface {
 	CommitMessagesSince(ctx context.Context, repository RepositoryIdentity, base branch.TargetBase) ([]string, error)
 	Rebase(ctx context.Context, repository RepositoryIdentity, base branch.TargetBase) error
 	Merge(ctx context.Context, repository RepositoryIdentity, base branch.TargetBase, message commitmsg.Message) error
+	SquashMerge(ctx context.Context, repository RepositoryIdentity, source branch.BranchName) error
 	CherryPick(ctx context.Context, repository RepositoryIdentity, commitID string) error
 	DeleteLocalBranch(ctx context.Context, repository RepositoryIdentity, name branch.BranchName, force bool) error
 	ReleaseTagsAt(ctx context.Context, repository RepositoryIdentity, revision string) ([]string, error)
