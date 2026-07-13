@@ -58,29 +58,17 @@ func (service *Service) Validate(ctx context.Context, request ValidateRequest) (
 	if request.Branch.IsZero() {
 		return ValidateResult{}, invalidCommitInput("a current canonical branch is required")
 	}
-	if request.Message.Header().Type() == "" {
-		return ValidateResult{}, invalidCommitInput("a validated Conventional Commit message is required")
-	}
 	if request.Branch.Family().IsSharedLine() {
 		return ValidateResult{}, sharedLineForbidden(request.Branch)
+	}
+	if err := ValidateMessageForBranch(request.Branch, request.Message); err != nil {
+		return ValidateResult{}, err
 	}
 	if err := service.git.ValidateBranchRef(ctx, repository, request.Branch); err != nil {
 		return ValidateResult{}, err
 	}
 
 	messageTicket := request.Message.Header().Ticket()
-	if branchTicket, ok := request.Branch.Ticket(); ok && branchTicket.String() != messageTicket.String() {
-		return ValidateResult{}, problem.New(problem.Details{
-			Code:        problem.CodeCommitTicketMismatch,
-			Category:    problem.CategoryGovernance,
-			Field:       "ticket",
-			Actual:      messageTicket.String(),
-			Expected:    branchTicket.String(),
-			Rule:        "ticket-scoped branch commits use the branch ticket",
-			Example:     request.Message.Header().Type().String() + "(" + branchTicket.String() + "): " + request.Message.Header().Subject(),
-			Remediation: "use the ticket from the current branch or switch to the matching branch",
-		})
-	}
 	if service.keyPolicy != nil {
 		if err := service.keyPolicy.ValidateKey(ctx, repository, messageTicket.Key()); err != nil {
 			return ValidateResult{}, err

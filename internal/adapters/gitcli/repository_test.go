@@ -374,6 +374,24 @@ func TestMutationOperationsUseArgumentArraysAndStdin(t *testing.T) {
 	}
 }
 
+func TestContinueRebaseUsesAControlledEditor(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{results: []processResult{{}}}
+	repository := &Repository{runner: runner, timeout: time.Second}
+	if err := repository.ContinueRebase(context.Background(), testIdentity()); err != nil {
+		t.Fatal(err)
+	}
+	assertCall(t, runner.calls[0], "C:/repo", "", "-c", "core.editor=true", "rebase", "--continue")
+
+	failing := &Repository{
+		runner:  &fakeRunner{results: []processResult{{err: errors.New("continue failed"), exitCode: 1}}},
+		timeout: time.Second,
+	}
+	err := failing.ContinueRebase(context.Background(), testIdentity())
+	assertProblemCode(t, err, problem.CodeGitCommandFailed)
+}
+
 func TestSquashMergeUsesArgumentArrays(t *testing.T) {
 	t.Parallel()
 
@@ -580,6 +598,35 @@ func TestHasStagedChanges(t *testing.T) {
 			if err != nil || actual != testCase.staged {
 				t.Fatalf("HasStagedChanges() = (%t, %v)", actual, err)
 			}
+		})
+	}
+}
+
+func TestHasUnmergedConflicts(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name      string
+		result    processResult
+		conflicts bool
+		code      problem.Code
+	}{
+		{name: "none", result: processResult{}, conflicts: false},
+		{name: "unmerged paths", result: processResult{stdout: "conflict.txt\n"}, conflicts: true},
+		{name: "command failure", result: processResult{err: errors.New("diff failed"), exitCode: 128}, code: problem.CodeGitCommandFailed},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			repository, runner := coverageRepository(testCase.result)
+			conflicts, err := repository.HasUnmergedConflicts(context.Background(), testIdentity())
+			if testCase.code != "" {
+				assertProblemCode(t, err, testCase.code)
+				return
+			}
+			if err != nil || conflicts != testCase.conflicts {
+				t.Fatalf("HasUnmergedConflicts() = (%t, %v)", conflicts, err)
+			}
+			assertCall(t, runner.calls[0], "C:/repo", "", "diff", "--name-only", "--diff-filter=U")
 		})
 	}
 }

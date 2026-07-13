@@ -7,6 +7,7 @@ import (
 	"github.com/CyberT33N/git-governance/internal/application/port"
 	"github.com/CyberT33N/git-governance/internal/domain/branch"
 	"github.com/CyberT33N/git-governance/internal/domain/commitmsg"
+	"github.com/CyberT33N/git-governance/internal/domain/problem"
 	"github.com/CyberT33N/git-governance/internal/domain/ticket"
 	"github.com/spf13/cobra"
 )
@@ -49,66 +50,29 @@ func newCommitCreateCommand(application *application) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			commitTicket, err := resolveCommitTicket(application, command, currentBranch, ticketRaw)
+			commitTicket, err := resolveCommitTicket(currentBranch, ticketRaw)
 			if err != nil {
 				return err
 			}
 			inputs.add("ticket", commitTicket.String())
-			kind, err := resolveCommitType(application, command, currentBranch, typeRaw)
+			message, err := application.resolveCommitMessage(command.Context(), commitMessageInput{
+				Branch:               currentBranch,
+				Family:               typeRaw,
+				Description:          subject,
+				Body:                 body,
+				Breaking:             breaking,
+				BreakingDescription:  breakingDescription,
+				FooterSpecifications: footerSpecs,
+				DescriptionLabel:     "Commit description",
+				Operation:            "this commit",
+			})
 			if err != nil {
 				return err
 			}
-			inputs.add("commit type", kind.String())
-			if subject == "" {
-				subject, err = application.requireInput(
-					command.Context(),
-					"",
-					"Commit subject",
-					"Enter one non-empty, unpadded line of at most 200 characters. Do not use control characters. Example: add export button.",
-					func(value string) error {
-						_, validationErr := commitmsg.NewHeader(kind, commitTicket, value, breaking)
-						return validationErr
-					},
-				)
-				if err != nil {
-					return err
-				}
-			}
-			inputs.add("commit subject", subject)
-			header, err := commitmsg.NewHeader(kind, commitTicket, subject, breaking)
-			if err != nil {
-				return err
-			}
-			footers, err := parseFooterSpecs(footerSpecs)
-			if err != nil {
-				return err
-			}
-			if breaking {
-				if breakingDescription == "" {
-					breakingDescription, err = application.requireInput(
-						command.Context(),
-						"",
-						"Breaking change impact",
-						"Describe the incompatible public contract change and the concrete migration impact without leading or trailing whitespace. Example: clients must use the versioned export endpoint.",
-						func(value string) error {
-							_, validationErr := commitmsg.NewFooter("BREAKING CHANGE", value)
-							return validationErr
-						},
-					)
-					if err != nil {
-						return err
-					}
-				}
-				inputs.add("breaking change impact", breakingDescription)
-				breakingFooter, err := commitmsg.NewFooter("BREAKING CHANGE", breakingDescription)
-				if err != nil {
-					return err
-				}
-				footers = append(footers, breakingFooter)
-			}
-			message, err := commitmsg.NewMessage(header, body, footers)
-			if err != nil {
-				return err
+			inputs.add("commit family", message.Header().Type().String())
+			inputs.add("commit description", message.Header().Subject())
+			if message.IsBreaking() {
+				inputs.add("breaking change", "true")
 			}
 			base, err := parseBase(baseRaw, repository.Remote)
 			if err != nil {
@@ -143,9 +107,9 @@ func newCommitCreateCommand(application *application) *cobra.Command {
 			})
 		}),
 	}
-	command.Flags().StringVar(&typeRaw, "type", "", "commit type")
-	command.Flags().StringVar(&ticketRaw, "ticket", "", "ticket ID; defaults to the current ticket branch")
-	command.Flags().StringVar(&subject, "subject", "", "short commit subject")
+	command.Flags().StringVar(&typeRaw, "type", "", "commit family")
+	command.Flags().StringVar(&ticketRaw, "ticket", "", "ticket ID compatibility check; the current branch is authoritative")
+	command.Flags().StringVar(&subject, "subject", "", "commit description")
 	command.Flags().StringVar(&body, "body", "", "optional commit body")
 	command.Flags().BoolVar(&breaking, "breaking", false, "mark an incompatible public contract change")
 	command.Flags().StringVar(&breakingDescription, "breaking-description", "", "breaking change migration impact")
@@ -208,102 +172,31 @@ func newCommitValidateCommand(application *application) *cobra.Command {
 	return command
 }
 
-func resolveCommitTicket(application *application, command *cobra.Command, current branch.BranchName, raw string) (ticket.ID, error) {
-	if raw != "" {
-		return ticket.ParseID(raw)
+func resolveCommitTicket(current branch.BranchName, raw string) (ticket.ID, error) {
+	fromBranch, ticketScoped := current.Ticket()
+	if !ticketScoped {
+		return ticket.ID{}, missingCommitContext(current)
 	}
-	if fromBranch, ok := current.Ticket(); ok {
+	if raw == "" {
 		return fromBranch, nil
 	}
-	if !application.promptAvailable() {
-		return ticket.ID{}, missingInput("ticket")
-	}
-	key, err := application.resolveKey(command.Context(), application.services(), "")
+	explicit, err := ticket.ParseID(raw)
 	if err != nil {
 		return ticket.ID{}, err
 	}
-	number, err := application.resolveNumber(command.Context(), "")
-	if err != nil {
-		return ticket.ID{}, err
+	if explicit.String() == fromBranch.String() {
+		return fromBranch, nil
 	}
-	return ticket.NewID(key, number), nil
-}
-
-func resolveCommitType(application *application, command *cobra.Command, current branch.BranchName, raw string) (commitmsg.Type, error) {
-	if raw != "" {
-		return commitmsg.ParseType(raw)
-	}
-	defaultType := defaultCommitType(current.Family())
-	if !application.promptAvailable() {
-		return defaultType, nil
-	}
-	types := commitmsg.Types()
-	options := make([]port.SelectOption, 0, len(types))
-	for _, kind := range types {
-		options = append(options, port.SelectOption{
-			Value:       kind.String(),
-			Label:       kind.String(),
-			Description: commitTypeDescription(kind),
-		})
-	}
-	value, err := application.prompt().Select(command.Context(), port.SelectRequest{
-		Label:       "Commit type",
-		Description: "Select the semantic type of this change. Branch and commit taxonomies are intentionally separate.",
-		Options:     options,
-		Default:     defaultType.String(),
+	return ticket.ID{}, problem.New(problem.Details{
+		Code:        problem.CodeCommitTicketMismatch,
+		Category:    problem.CategoryGovernance,
+		Field:       "ticket",
+		Actual:      explicit.String(),
+		Expected:    fromBranch.String(),
+		Rule:        "governed commit creation derives the ticket from the current branch",
+		Example:     "feat(" + fromBranch.String() + "): add export button",
+		Remediation: "remove --ticket or supply the ticket derived from the current branch",
 	})
-	if err != nil {
-		return "", err
-	}
-	return commitmsg.ParseType(value)
-}
-
-func defaultCommitType(family branch.Family) commitmsg.Type {
-	switch family {
-	case branch.FamilyFeature:
-		return commitmsg.TypeFeat
-	case branch.FamilyFix, branch.FamilyHotfix:
-		return commitmsg.TypeFix
-	case branch.FamilyDocs:
-		return commitmsg.TypeDocs
-	case branch.FamilyRefactor:
-		return commitmsg.TypeRefactor
-	case branch.FamilyChore:
-		return commitmsg.TypeChore
-	case branch.FamilyTest:
-		return commitmsg.TypeTest
-	case branch.FamilyPerf:
-		return commitmsg.TypePerf
-	default:
-		return commitmsg.TypeChore
-	}
-}
-
-func commitTypeDescription(kind commitmsg.Type) string {
-	switch kind {
-	case commitmsg.TypeFeat:
-		return "New product functionality."
-	case commitmsg.TypeFix:
-		return "A defect correction."
-	case commitmsg.TypeDocs:
-		return "Documentation-only change."
-	case commitmsg.TypeRefactor:
-		return "Internal restructuring without a feature or fix."
-	case commitmsg.TypeTest:
-		return "Test work."
-	case commitmsg.TypePerf:
-		return "Measured performance improvement."
-	case commitmsg.TypeBuild:
-		return "Build system or dependency change."
-	case commitmsg.TypeCI:
-		return "Continuous-integration configuration."
-	case commitmsg.TypeStyle:
-		return "Formatting with no semantic effect."
-	case commitmsg.TypeRevert:
-		return "A deliberate revert with a commit reference."
-	default:
-		return "Maintenance or tooling work."
-	}
 }
 
 func parseFooterSpecs(values []string) ([]commitmsg.Footer, error) {

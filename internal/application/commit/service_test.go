@@ -135,6 +135,11 @@ func (fake *fakeGitRepository) Rebase(context.Context, port.RepositoryIdentity, 
 	return fake.err
 }
 
+func (fake *fakeGitRepository) ContinueRebase(context.Context, port.RepositoryIdentity) error {
+	fake.calls = append(fake.calls, "continue-rebase")
+	return fake.err
+}
+
 func (fake *fakeGitRepository) Merge(context.Context, port.RepositoryIdentity, branch.TargetBase, commitmsg.Message) error {
 	fake.calls = append(fake.calls, "merge")
 	return fake.err
@@ -158,6 +163,11 @@ func (fake *fakeGitRepository) DeleteLocalBranch(context.Context, port.Repositor
 func (fake *fakeGitRepository) ReleaseTagsAt(context.Context, port.RepositoryIdentity, string) ([]string, error) {
 	fake.calls = append(fake.calls, "release-tags")
 	return nil, fake.err
+}
+
+func (fake *fakeGitRepository) HasUnmergedConflicts(context.Context, port.RepositoryIdentity) (bool, error) {
+	fake.calls = append(fake.calls, "unmerged-conflicts")
+	return false, fake.err
 }
 
 func (fake *fakeGitRepository) HasStagedChanges(context.Context, port.RepositoryIdentity) (bool, error) {

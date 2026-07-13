@@ -228,6 +228,13 @@ Das ist ein modularer Monolith, keine Microservice-Architektur. Die fachliche Ko
 
 Alle Value Objects werden nur valide erzeugt. Regexe sind Implementierungsbausteine, nicht das gesamte Domain-Modell.
 
+Die Commit-Familien werden aus dem kanonischen `CommitType`-Katalog
+abgeleitet. Ein Application-Modul komponiert daraus zusammen mit der aus dem
+Branch abgeleiteten Ticket-ID eine vollständige Commit-Nachricht. Dadurch
+verwenden `commit create`, Scratch-Transfers und Synchronisations-Merges
+dieselbe Familienauswahl und dieselbe Header-Invariante, ohne Commit-Typen oder
+Ticket-Scope in Workflows zu duplizieren.
+
 ### 9.2 Application Use Cases
 
 - `CreateBranch`
@@ -312,8 +319,13 @@ Die interaktive Erklärung muss deutlich machen:
 4. Basisfrische prüfen.
 5. Nur bei unveröffentlichtem Branch und fehlenden Basis-Commits rebasen.
 6. Validierungen erneut ausführen.
-7. Ersten Push mit Upstream ausführen oder als Plan ausgeben.
-8. Providerneutrale PR-Daten für Ziel `develop` erzeugen.
+7. Den Rebase-Ausgang interaktiv anzeigen; bei Konflikten den pausierten
+   Rebase oder einen vorherigen Scratch-Squash nach expliziter Auflösung und
+   Retry fortsetzen.
+8. Ersten Push mit Upstream interaktiv bestätigen oder nicht-interaktiv
+   explizit anfordern.
+9. Providerneutrale PR-Daten für Ziel `develop` erzeugen; eine echte
+   Provider-Erstellung wird nur mit konfiguriertem Outbound Adapter angeboten.
 
 Ein späterer GitHub-/GitLab-Adapter ist ein Outbound Adapter. Ohne festgelegten Provider darf der Domain-Kern keine `gh`-, GitHub- oder GitLab-Abhängigkeit besitzen.
 

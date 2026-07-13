@@ -11,6 +11,7 @@ import (
 	"time"
 
 	branchapp "github.com/CyberT33N/git-governance/internal/application/branch"
+	commitapp "github.com/CyberT33N/git-governance/internal/application/commit"
 	"github.com/CyberT33N/git-governance/internal/application/policy"
 	"github.com/CyberT33N/git-governance/internal/application/port"
 	"github.com/CyberT33N/git-governance/internal/domain/branch"
@@ -572,6 +573,8 @@ func TestCommandHelpersResolveScratchMergeMessage(t *testing.T) {
 	message, err := application.resolveScratchMergeMessage(
 		context.Background(),
 		"feat(ABC-123): add export",
+		"",
+		"",
 		target,
 	)
 	if err != nil || message.Header().String() != "feat(ABC-123): add export" {
@@ -581,6 +584,8 @@ func TestCommandHelpersResolveScratchMergeMessage(t *testing.T) {
 	_, err = application.resolveScratchMergeMessage(
 		context.Background(),
 		"not a Conventional Commit",
+		"",
+		"",
 		target,
 	)
 	assertCommandHelperProblem(t, err, problem.CodeCommitHeaderInvalid, problem.CategoryGovernance, "commit header")
@@ -588,6 +593,8 @@ func TestCommandHelpersResolveScratchMergeMessage(t *testing.T) {
 	_, err = application.resolveScratchMergeMessage(
 		context.Background(),
 		"feat(ABC-124): wrong ticket",
+		"",
+		"",
 		target,
 	)
 	assertCommandHelperProblem(t, err, problem.CodeCommitTicketMismatch, problem.CategoryGovernance, "squash commit ticket")
@@ -597,23 +604,31 @@ func TestCommandHelpersResolveScratchMergeMessage(t *testing.T) {
 	_, err = newCommandHelperApplication(options, nil, false, false).resolveScratchMergeMessage(
 		context.Background(),
 		"",
+		"",
+		"",
 		target,
 	)
-	assertCommandHelperProblem(t, err, problem.CodeInvalidInput, problem.CategoryUsage, "Squash commit message")
+	assertCommandHelperProblem(t, err, problem.CodeInvalidInput, problem.CategoryUsage, "commit family")
 
 	prompt := &commandHelperPrompt{
-		inputs: []commandHelperStringReply{{value: "feat(ABC-123): add export"}},
+		selects: []commandHelperStringReply{{value: "feat"}},
+		inputs:  []commandHelperStringReply{{value: "add export"}},
 	}
 	interactive := newCommandHelperApplication(newCommandHelperOptions(), prompt, true, true)
-	message, err = interactive.resolveScratchMergeMessage(context.Background(), "", target)
+	message, err = interactive.resolveScratchMergeMessage(context.Background(), "", "", "", target)
 	if err != nil || message.Header().String() != "feat(ABC-123): add export" {
 		t.Fatalf("interactive resolveScratchMergeMessage() = (%q, %v)", message.String(), err)
 	}
-	if len(prompt.inputRequests) != 1 ||
-		prompt.inputRequests[0].Label != "Squash commit message" ||
+	if len(prompt.selectRequests) != 1 ||
+		prompt.selectRequests[0].Label != "Commit family" ||
+		len(prompt.selectRequests[0].Options) != len(commitapp.Families()) ||
+		!strings.Contains(prompt.selectRequests[0].Description, target.String()) ||
+		!strings.Contains(prompt.selectRequests[0].Description, "ABC-123") ||
+		len(prompt.inputRequests) != 1 ||
+		prompt.inputRequests[0].Label != "Squash commit description" ||
 		!strings.Contains(prompt.inputRequests[0].Description, target.String()) ||
 		!strings.Contains(prompt.inputRequests[0].Description, "ABC-123") {
-		t.Fatalf("scratch message prompt = %#v", prompt.inputRequests)
+		t.Fatalf("scratch message prompts = selects:%#v inputs:%#v", prompt.selectRequests, prompt.inputRequests)
 	}
 }
 

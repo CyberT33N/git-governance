@@ -1,10 +1,14 @@
 package bootstrap
 
 import (
+	"context"
+
+	branchapp "github.com/CyberT33N/git-governance/internal/application/branch"
 	"github.com/CyberT33N/git-governance/internal/application/port"
 	"github.com/CyberT33N/git-governance/internal/application/workflow"
 	"github.com/CyberT33N/git-governance/internal/domain/branch"
 	"github.com/CyberT33N/git-governance/internal/domain/commitmsg"
+	"github.com/CyberT33N/git-governance/internal/domain/problem"
 	"github.com/CyberT33N/git-governance/internal/domain/ticket"
 	"github.com/spf13/cobra"
 )
@@ -142,6 +146,8 @@ func newTicketPublishCommand(application *application) *cobra.Command {
 		baseRaw           string
 		scratchTargetRaw  string
 		scratchMessageRaw string
+		scratchFamilyRaw  string
+		scratchSubjectRaw string
 		push              bool
 		draft             bool
 	)
@@ -178,14 +184,21 @@ func newTicketPublishCommand(application *application) *cobra.Command {
 				}
 				scratchTarget = &target
 				inputs.add("official ticket branch", target.String())
-				message, err := application.resolveScratchMergeMessage(command.Context(), scratchMessageRaw, target)
+				message, err := application.resolveScratchMergeMessage(
+					command.Context(),
+					scratchMessageRaw,
+					scratchFamilyRaw,
+					scratchSubjectRaw,
+					target,
+				)
 				if err != nil {
 					return err
 				}
 				scratchMessage = &message
-				inputs.add("squash commit message", message.Header().String())
-			} else if scratchTargetRaw != "" || scratchMessageRaw != "" {
-				return invalidOption("scratch transfer", "configured", "--target and --message are only supported when publishing from scratch")
+				inputs.add("squash commit family", message.Header().Type().String())
+				inputs.add("squash commit description", message.Header().Subject())
+			} else if scratchTargetRaw != "" || scratchMessageRaw != "" || scratchFamilyRaw != "" || scratchSubjectRaw != "" {
+				return invalidOption("scratch transfer", "configured", "--target, --message, --type, and --subject are only supported when publishing from scratch")
 			}
 			base, err := parseBase(baseRaw, repository.Remote)
 			if err != nil {
@@ -212,11 +225,72 @@ func newTicketPublishCommand(application *application) *cobra.Command {
 				Base:           base,
 				ScratchTarget:  scratchTarget,
 				ScratchMessage: scratchMessage,
-				Push:           push,
 				Draft:          draft,
 				DryRun:         application.options.dryRun,
 			})
 			if err != nil {
+				if isScratchMergeConflict(err) && application.promptAvailable() && scratchTarget != nil && scratchMessage != nil {
+					scratchMerge, resumeErr := application.resumeScratchMergeAfterConflict(
+						command.Context(),
+						services,
+						repository,
+						name,
+						*scratchTarget,
+						*scratchMessage,
+					)
+					if resumeErr != nil {
+						return resumeErr
+					}
+					result, err = services.tickets.PublishTicket(command.Context(), workflow.PublishTicketRequest{
+						Repository: repository,
+						Branch:     *scratchTarget,
+						Base:       base,
+						Draft:      draft,
+						DryRun:     application.options.dryRun,
+					})
+					if err == nil {
+						result.ScratchMerge = &scratchMerge
+					}
+				}
+			}
+			if err != nil {
+				if !application.promptAvailable() || !isRebaseConflict(err) {
+					return err
+				}
+				resumeBranch := name
+				if scratchTarget != nil {
+					resumeBranch = *scratchTarget
+				}
+				result, err = application.resumeTicketPublishAfterRebaseConflict(
+					command.Context(),
+					services,
+					repository,
+					resumeBranch,
+					base,
+					draft,
+				)
+				if err != nil {
+					return err
+				}
+				if scratchTarget != nil && scratchMessage != nil {
+					result.ScratchMerge = &branchapp.ScratchMergeResult{
+						Source:    name,
+						Target:    *scratchTarget,
+						Message:   *scratchMessage,
+						Committed: true,
+					}
+				}
+			}
+			if err := application.reportTicketSynchronization(command, result.Sync, result.DryRun); err != nil {
+				return err
+			}
+			if err := application.completeTicketPublishInteraction(
+				command.Context(),
+				services,
+				repository,
+				&result,
+				push,
+			); err != nil {
 				return err
 			}
 			fields := map[string]string{
@@ -227,6 +301,14 @@ func newTicketPublishCommand(application *application) *cobra.Command {
 				"pullRequestTarget":    result.PullRequest.Target.String(),
 				"pullRequestTitle":     result.PullRequest.Title,
 				"publishedPullRequest": result.PublishedURL,
+			}
+			switch {
+			case result.PublishedURL != "":
+				fields["pullRequestPublication"] = "created"
+			case services.tickets.HasPullRequestPublisher():
+				fields["pullRequestPublication"] = "not requested"
+			default:
+				fields["pullRequestPublication"] = "intent-only; no hosting-provider adapter is configured"
 			}
 			if result.ScratchMerge != nil {
 				fields["scratchBranch"] = result.ScratchMerge.Source.String()
@@ -249,10 +331,201 @@ func newTicketPublishCommand(application *application) *cobra.Command {
 	command.Flags().StringVar(&branchRaw, "branch", "", "ticket branch; defaults to the current branch")
 	command.Flags().StringVar(&baseRaw, "base", "", "explicit base for hotfix ticket publication")
 	command.Flags().StringVar(&scratchTargetRaw, "target", "", "optional local official target when publishing from scratch")
-	command.Flags().StringVar(&scratchMessageRaw, "message", "", "full Conventional Commit message for a scratch squash transfer")
+	command.Flags().StringVar(&scratchFamilyRaw, "type", "", "commit family for a scratch squash transfer")
+	command.Flags().StringVar(&scratchSubjectRaw, "subject", "", "commit description for a scratch squash transfer")
+	command.Flags().StringVar(&scratchMessageRaw, "message", "", "complete commit message compatibility input for a scratch squash transfer")
 	command.Flags().BoolVar(&push, "push", false, "push the branch after validation")
 	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
 	return command
+}
+
+func (application *application) reportTicketSynchronization(
+	command *cobra.Command,
+	result branchapp.SyncResult,
+	dryRun bool,
+) error {
+	if dryRun || !application.promptAvailable() {
+		return nil
+	}
+	summary := "Target-base synchronization completed without a rebase."
+	switch result.RecommendedAction {
+	case "rebased":
+		summary = "Rebase completed successfully; the official branch is synchronized with its target base."
+	case "none":
+		summary = "No rebase was performed because the target base has no commits missing from the branch."
+	case "merge":
+		summary = "No rebase was performed because the branch is already published; a controlled merge is required if its target base advanced."
+	}
+	return application.report(command, port.Report{
+		Operation: "workflow.ticket.publish.sync",
+		Summary:   summary,
+		Fields: map[string]string{
+			"branch":     result.Name.String(),
+			"targetBase": result.Base.String(),
+			"syncAction": result.RecommendedAction,
+		},
+	})
+}
+
+func (application *application) resumeTicketPublishAfterRebaseConflict(
+	ctx context.Context,
+	services services,
+	repository port.RepositoryIdentity,
+	name branch.BranchName,
+	base *branch.TargetBase,
+	draft bool,
+) (workflow.PublishTicketResult, error) {
+	for {
+		action, err := application.prompt().Select(ctx, port.SelectRequest{
+			Label: "Rebase conflict requires resolution",
+			Description: "Git paused the rebase because conflicts remain. Resolve every conflict, stage the resolutions, then select Retry. " +
+				"Selecting Cancel leaves the Git rebase untouched.",
+			Options: []port.SelectOption{
+				{Value: "retry", Label: "Retry", Description: "Continue the resolved rebase and resume this ticket publication."},
+				{Value: "cancel", Label: "Cancel", Description: "Leave the rebase paused for manual resolution."},
+			},
+			Default: "retry",
+		})
+		if err != nil {
+			return workflow.PublishTicketResult{}, err
+		}
+		if action == "cancel" {
+			return workflow.PublishTicketResult{}, problem.New(problem.Details{
+				Code:        problem.CodeOperationCancelled,
+				Category:    problem.CategoryCancelled,
+				Field:       "rebase retry",
+				Expected:    "Retry after resolving the rebase conflicts",
+				Rule:        "the workflow leaves unresolved Git conflicts for explicit user resolution",
+				Remediation: "resolve and stage the conflicts, then rerun ticket publish to resume the paused rebase",
+			})
+		}
+		result, err := services.tickets.ResumeTicketPublish(ctx, workflow.ResumeTicketPublishRequest{
+			Repository: repository,
+			Branch:     name,
+			Base:       base,
+			Draft:      draft,
+		})
+		if err == nil {
+			return result, nil
+		}
+		if !isRebaseConflict(err) {
+			return workflow.PublishTicketResult{}, err
+		}
+	}
+}
+
+func (application *application) resumeScratchMergeAfterConflict(
+	ctx context.Context,
+	services services,
+	repository port.RepositoryIdentity,
+	source, target branch.BranchName,
+	message commitmsg.Message,
+) (branchapp.ScratchMergeResult, error) {
+	for {
+		action, err := application.prompt().Select(ctx, port.SelectRequest{
+			Label: "Scratch merge conflict requires resolution",
+			Description: "Git paused the scratch squash transfer because conflicts remain. Resolve every conflict, stage the resolutions, then select Retry. " +
+				"Selecting Cancel leaves the squash transfer untouched.",
+			Options: []port.SelectOption{
+				{Value: "retry", Label: "Retry", Description: "Commit the resolved squash transfer and continue ticket publication."},
+				{Value: "cancel", Label: "Cancel", Description: "Leave the unresolved scratch transfer for manual resolution."},
+			},
+			Default: "retry",
+		})
+		if err != nil {
+			return branchapp.ScratchMergeResult{}, err
+		}
+		if action == "cancel" {
+			return branchapp.ScratchMergeResult{}, problem.New(problem.Details{
+				Code:        problem.CodeOperationCancelled,
+				Category:    problem.CategoryCancelled,
+				Field:       "scratch merge retry",
+				Expected:    "Retry after resolving the scratch merge conflicts",
+				Rule:        "the workflow leaves unresolved Git conflicts for explicit user resolution",
+				Remediation: "resolve and stage the conflicts, then rerun ticket publish to resume the scratch transfer",
+			})
+		}
+		result, err := services.scratch.Resume(ctx, branchapp.ScratchMergeRequest{
+			Repository: repository,
+			Source:     source,
+			Target:     &target,
+			Message:    message,
+		})
+		if err == nil {
+			return result, nil
+		}
+		if !isScratchMergeConflict(err) {
+			return branchapp.ScratchMergeResult{}, err
+		}
+	}
+}
+
+func (application *application) completeTicketPublishInteraction(
+	ctx context.Context,
+	services services,
+	repository port.RepositoryIdentity,
+	result *workflow.PublishTicketResult,
+	requestedPush bool,
+) error {
+	if result == nil || result.DryRun {
+		return nil
+	}
+	push := requestedPush
+	if application.promptAvailable() && !application.options.yes {
+		confirmed, err := application.prompt().Confirm(ctx, port.ConfirmRequest{
+			Label:       "Push official ticket branch",
+			Description: "Push " + result.Branch.String() + " after the completed synchronization? The first push configures its matching upstream branch.",
+			Default:     requestedPush,
+		})
+		if err != nil {
+			return err
+		}
+		push = confirmed
+	}
+	if !push {
+		return nil
+	}
+	base := result.Sync.Base
+	if err := services.tickets.PushPreparedTicket(ctx, repository, result.Branch, &base); err != nil {
+		return err
+	}
+	result.Pushed = true
+	if !services.tickets.HasPullRequestPublisher() {
+		return nil
+	}
+
+	createPullRequest := requestedPush
+	if application.promptAvailable() && !application.options.yes {
+		confirmed, err := application.prompt().Confirm(ctx, port.ConfirmRequest{
+			Label: "Create pull request",
+			Description: "Create the pull request from " + result.PullRequest.Source.String() +
+				" to " + result.PullRequest.Target.String() + " now?",
+			Default: false,
+		})
+		if err != nil {
+			return err
+		}
+		createPullRequest = confirmed
+	}
+	if !createPullRequest {
+		return nil
+	}
+	publishedURL, err := services.tickets.PublishPullRequest(ctx, result.PullRequest)
+	if err != nil {
+		return err
+	}
+	result.PublishedURL = publishedURL
+	return nil
+}
+
+func isRebaseConflict(err error) bool {
+	typed, ok := problem.As(err)
+	return ok && typed.Code == problem.CodeRebaseConflict
+}
+
+func isScratchMergeConflict(err error) bool {
+	typed, ok := problem.As(err)
+	return ok && typed.Code == problem.CodeScratchMergeConflict
 }
 
 func newHotfixWorkflowCommand(application *application) *cobra.Command {

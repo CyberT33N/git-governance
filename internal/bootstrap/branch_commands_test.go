@@ -561,6 +561,34 @@ func TestBranchSyncBaseCommandContracts(t *testing.T) {
 		}
 	})
 
+	t.Run("accepts structured merge input and rejects it for other strategies", func(t *testing.T) {
+		git := newBranchCommandGit(t, "feature/ABC-123-add-export")
+		git.publication = branch.PublicationPublished
+		git.missingBaseCommits = true
+		application := newBranchCommandApplication(git, nil, nil, "human")
+		application.options.yes = true
+		_, _, err := executeBranchCommand(
+			t,
+			newBranchSyncBaseCommand(application),
+			context.Background(),
+			"--strategy", "merge",
+			"--merge-type", "chore",
+			"--merge-subject", "merge origin/develop",
+		)
+		if err != nil || len(git.mergedBranches) != 1 ||
+			git.mergedBranches[0].message.Header().String() != "chore(ABC-123): merge origin/develop" {
+			t.Fatalf("structured merge = (%#v, %v)", git.mergedBranches, err)
+		}
+
+		_, _, err = executeBranchCommand(
+			t,
+			newBranchSyncBaseCommand(newBranchCommandApplication(newBranchCommandGit(t, "feature/ABC-123-add-export"), nil, nil, "human")),
+			context.Background(),
+			"--merge-type", "chore",
+		)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+	})
+
 	t.Run("honors a declined rebase confirmation", func(t *testing.T) {
 		prompt := &commandHelperPrompt{
 			confirms: []commandHelperConfirmReply{{value: false}},
@@ -1009,7 +1037,12 @@ type branchCommandGit struct {
 	publicationErr        error
 	missingBaseCommitsErr error
 	rebaseErr             error
+	continueRebaseErr     error
+	continueRebaseErrors  []error
+	activeOperationErr    error
+	unmergedConflictsErr  error
 	mergeErr              error
+	pushErr               error
 	switchErr             error
 	squashErr             error
 	commitErr             error
@@ -1021,6 +1054,10 @@ type branchCommandGit struct {
 	publication        branch.PublicationState
 	missingBaseCommits bool
 	localBranches      map[string]bool
+	activeOperation    string
+	active             bool
+	unmergedConflicts  bool
+	unmergedStates     []bool
 
 	discoverContexts  []context.Context
 	currentContexts   []context.Context
@@ -1029,6 +1066,7 @@ type branchCommandGit struct {
 	fetchCalls        int
 	createdBranches   []branchCreateCall
 	rebasedBases      []branch.TargetBase
+	pushes            []branch.BranchName
 	mergedBranches    []branchMergeCall
 	switchedBranches  []branch.BranchName
 	squashedBranches  []branch.BranchName
@@ -1063,6 +1101,13 @@ func (git *branchCommandGit) CurrentBranch(
 		return branch.BranchName{}, git.currentErr
 	}
 	return git.commandGit.CurrentBranch(ctx, repository)
+}
+
+func (git *branchCommandGit) ActiveOperation(context.Context, port.RepositoryIdentity) (string, bool, error) {
+	if git.activeOperationErr != nil {
+		return "", false, git.activeOperationErr
+	}
+	return git.activeOperation, git.active, nil
 }
 
 func (git *branchCommandGit) ValidateBranchRef(
@@ -1170,6 +1215,18 @@ func (git *branchCommandGit) HasMissingBaseCommits(
 	return git.missingBaseCommits, nil
 }
 
+func (git *branchCommandGit) HasUnmergedConflicts(context.Context, port.RepositoryIdentity) (bool, error) {
+	if git.unmergedConflictsErr != nil {
+		return false, git.unmergedConflictsErr
+	}
+	if len(git.unmergedStates) > 0 {
+		value := git.unmergedStates[0]
+		git.unmergedStates = git.unmergedStates[1:]
+		return value, nil
+	}
+	return git.unmergedConflicts, nil
+}
+
 func (git *branchCommandGit) Rebase(
 	ctx context.Context,
 	repository port.RepositoryIdentity,
@@ -1179,6 +1236,23 @@ func (git *branchCommandGit) Rebase(
 		return git.rebaseErr
 	}
 	git.rebasedBases = append(git.rebasedBases, base)
+	return nil
+}
+
+func (git *branchCommandGit) ContinueRebase(context.Context, port.RepositoryIdentity) error {
+	if len(git.continueRebaseErrors) > 0 {
+		err := git.continueRebaseErrors[0]
+		git.continueRebaseErrors = git.continueRebaseErrors[1:]
+		if err != nil {
+			return err
+		}
+	}
+	if git.continueRebaseErr != nil {
+		return git.continueRebaseErr
+	}
+	git.active = false
+	git.activeOperation = ""
+	git.missingBaseCommits = false
 	return nil
 }
 
@@ -1231,6 +1305,19 @@ func (git *branchCommandGit) Commit(
 		return git.commitErr
 	}
 	git.committedMessages = append(git.committedMessages, message)
+	return nil
+}
+
+func (git *branchCommandGit) Push(
+	_ context.Context,
+	_ port.RepositoryIdentity,
+	name branch.BranchName,
+	_ bool,
+) error {
+	if git.pushErr != nil {
+		return git.pushErr
+	}
+	git.pushes = append(git.pushes, name)
 	return nil
 }
 

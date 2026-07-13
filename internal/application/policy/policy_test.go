@@ -187,6 +187,10 @@ func (doctorGit) Rebase(context.Context, port.RepositoryIdentity, branch.TargetB
 	return nil
 }
 
+func (doctorGit) ContinueRebase(context.Context, port.RepositoryIdentity) error {
+	return nil
+}
+
 func (doctorGit) Merge(context.Context, port.RepositoryIdentity, branch.TargetBase, commitmsg.Message) error {
 	return nil
 }
@@ -205,6 +209,10 @@ func (doctorGit) DeleteLocalBranch(context.Context, port.RepositoryIdentity, bra
 
 func (doctorGit) ReleaseTagsAt(context.Context, port.RepositoryIdentity, string) ([]string, error) {
 	return nil, nil
+}
+
+func (doctorGit) HasUnmergedConflicts(context.Context, port.RepositoryIdentity) (bool, error) {
+	return false, nil
 }
 
 func (doctorGit) HasStagedChanges(context.Context, port.RepositoryIdentity) (bool, error) {

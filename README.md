@@ -377,22 +377,33 @@ official branches for the ticket, specify the intended target explicitly:
 ```powershell
 git governance branch merge-scratch `
   --target feature/ABC-123-add-export-button `
-  --message "feat(ABC-123): add export button"
+  --type feat `
+  --subject "add export button"
 ```
 
-The standard human flow shows the scratch source, resolved target, and squash
-commit before requiring confirmation. Non-interactive automation uses the
-existing interaction contract rather than a separate `--silent` flag:
+The standard human flow first displays the fixed target branch, ticket key, and
+ticket ID. It then presents every supported commit family and asks only for the
+description that follows `: ` in the generated header. The key and ticket are
+derived from the resolved target and are never selectable in this flow.
+Non-interactive automation uses the existing interaction contract rather than a
+separate `--silent` flag:
 
 ```powershell
 git governance --interactive never --yes branch merge-scratch `
-  --message "feat(ABC-123): add export button"
+  --type feat `
+  --subject "add export button"
 ```
 
 The command switches to the official branch, applies `git merge --squash`, and
-creates the supplied Conventional Commit. It never runs `git add .`, pushes,
-or deletes the scratch branch. A conflict remains in Git for explicit user
-resolution; the CLI does not hide or automatically discard it.
+creates the generated Conventional Commit. It never runs `git add .`, pushes,
+or deletes the scratch branch. `--message` remains a compatibility input for
+automation that must provide a complete multiline message; it cannot be mixed
+with `--type` or `--subject`. A squash-merge conflict remains in Git for
+explicit user resolution; the direct command does not hide or automatically
+discard it. When the same transfer occurs inside `workflow ticket publish`, the
+workflow keeps the resolved source, target, and commit context, presents Retry
+after the user resolves and stages conflicts, and continues without repeating
+the squash merge.
 
 ### Validate a branch
 
@@ -407,7 +418,8 @@ git governance branch validate --branch feature/ABC-123-add-export-button
 git governance branch sync-base --strategy check
 git governance --yes branch sync-base --strategy rebase
 git governance --yes branch sync-base --strategy merge `
-  --merge-message "chore(ABC-123): merge origin/develop"
+  --merge-type chore `
+  --merge-subject "merge origin/develop"
 ```
 
 Policy:
@@ -454,7 +466,17 @@ git governance --yes commit create `
 ```
 
 The ticket defaults to the current ticket branch. An explicit ticket must
-match that branch.
+match that branch and is retained only as a compatibility check. All supported
+commit-creation flows derive the ticket key and ticket ID from the current or
+resolved target branch. Direct commits on `main`, `develop`, `release/*`, and
+`support/*` remain forbidden.
+
+In interactive mode, the CLI first shows that fixed context, then presents the
+canonical commit-family list, and finally asks for the one-line description.
+The description must be the non-empty, unpadded text after `: ` and must not
+contain control characters. `commit validate --message` and `--message-file`
+remain full-message validation inputs because hooks validate the exact message
+that Git supplies.
 
 Add a breaking change:
 
@@ -517,19 +539,28 @@ optionally pushing the official branch:
 
 ```powershell
 git governance workflow ticket publish `
-  --message "feat(ABC-123): add export button" `
+  --type feat `
+  --subject "add export button" `
   --push
 ```
 
 For non-interactive execution, use `--interactive never --yes` and provide
-the commit message. Use `--target <official-branch>` only when a manually
+the commit family and description. `--message` remains available only as the
+complete-message compatibility input. Use `--target <official-branch>` only when a manually
 created repository has more than one local official branch for the ticket.
 
 The workflow validates the commit series, runs configured quality gates,
 checks base freshness, conditionally rebases only an unpublished branch, then
 revalidates branch policy, the full commit series, and quality gates before it
-can push. It emits a provider-neutral pull-request intent targeting `develop`
-and deliberately ends at that pull-request boundary.
+can push. Interactive publication reports whether a rebase happened or why it
+did not. If Git pauses either the scratch squash transfer or the rebase for
+conflicts, the workflow keeps the publication context, asks the user to resolve
+and stage conflicts, and provides Retry until that Git operation completes. It
+then asks before pushing the official
+branch. After a push, it asks before creating a pull request only when a
+hosting-provider adapter is configured. Without such an adapter, it reports
+the provider-neutral pull-request intent targeting `develop`; it never invents
+a GitHub, GitLab, or other hosting API call.
 
 ## Hotfix, release, and support workflows
 

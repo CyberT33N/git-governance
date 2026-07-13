@@ -180,9 +180,11 @@ func newBranchCreateCommand(application *application) *cobra.Command {
 
 func newScratchMergeCommand(application *application) *cobra.Command {
 	var (
-		sourceRaw  string
-		targetRaw  string
-		messageRaw string
+		sourceRaw     string
+		targetRaw     string
+		messageRaw    string
+		commitFamily  string
+		commitSubject string
 	)
 	command := &cobra.Command{
 		Use:   "merge-scratch",
@@ -212,11 +214,18 @@ func newScratchMergeCommand(application *application) *cobra.Command {
 				return err
 			}
 			inputs.add("official ticket branch", target.String())
-			message, err := application.resolveScratchMergeMessage(command.Context(), messageRaw, target)
+			message, err := application.resolveScratchMergeMessage(
+				command.Context(),
+				messageRaw,
+				commitFamily,
+				commitSubject,
+				target,
+			)
 			if err != nil {
 				return err
 			}
-			inputs.add("squash commit message", message.Header().String())
+			inputs.add("squash commit family", message.Header().Type().String())
+			inputs.add("squash commit description", message.Header().Subject())
 
 			if err := application.confirmMutation(
 				command.Context(),
@@ -251,7 +260,9 @@ func newScratchMergeCommand(application *application) *cobra.Command {
 	}
 	command.Flags().StringVar(&sourceRaw, "branch", "", "scratch branch; defaults to the current branch")
 	command.Flags().StringVar(&targetRaw, "target", "", "optional local official ticket branch target")
-	command.Flags().StringVar(&messageRaw, "message", "", "full Conventional Commit message for the squashed change")
+	command.Flags().StringVar(&commitFamily, "type", "", "commit family for the squashed change")
+	command.Flags().StringVar(&commitSubject, "subject", "", "commit description for the squashed change")
+	command.Flags().StringVar(&messageRaw, "message", "", "complete commit message compatibility input for the squashed change")
 	return command
 }
 
@@ -261,6 +272,8 @@ func newBranchSyncBaseCommand(application *application) *cobra.Command {
 		baseRaw      string
 		strategyRaw  string
 		mergeMessage string
+		mergeFamily  string
+		mergeSubject string
 	)
 	command := &cobra.Command{
 		Use:   "sync-base",
@@ -281,12 +294,22 @@ func newBranchSyncBaseCommand(application *application) *cobra.Command {
 			}
 			strategy := branchapp.SyncStrategy(strategyRaw)
 			var parsedMergeMessage *commitmsg.Message
-			if mergeMessage != "" {
-				message, err := commitmsg.Parse(mergeMessage)
+			if strategy == branchapp.SyncMerge {
+				message, err := application.resolveCommitMessage(command.Context(), commitMessageInput{
+					Branch:           name,
+					CompleteMessage:  mergeMessage,
+					Family:           mergeFamily,
+					Description:      mergeSubject,
+					RequireFamily:    true,
+					DescriptionLabel: "Merge commit description",
+					Operation:        "the branch-base synchronization merge",
+				})
 				if err != nil {
 					return err
 				}
 				parsedMergeMessage = &message
+			} else if mergeMessage != "" || mergeFamily != "" || mergeSubject != "" {
+				return invalidOption("merge commit input", "configured", "merge commit inputs are only supported with --strategy merge")
 			}
 			if strategy == branchapp.SyncRebase || strategy == branchapp.SyncMerge {
 				if err := application.confirmMutation(command.Context(), "Synchronize branch base", "Apply "+strategyRaw+" to "+name.String()+" if policy permits?"); err != nil {
@@ -330,7 +353,9 @@ func newBranchSyncBaseCommand(application *application) *cobra.Command {
 	command.Flags().StringVar(&nameRaw, "branch", "", "branch name; defaults to the current branch")
 	command.Flags().StringVar(&baseRaw, "base", "", "explicit remote target base")
 	command.Flags().StringVar(&strategyRaw, "strategy", string(branchapp.SyncCheck), "check, auto, rebase, or merge")
-	command.Flags().StringVar(&mergeMessage, "merge-message", "", "full governed merge commit message for --strategy merge")
+	command.Flags().StringVar(&mergeFamily, "merge-type", "", "commit family for --strategy merge")
+	command.Flags().StringVar(&mergeSubject, "merge-subject", "", "commit description for --strategy merge")
+	command.Flags().StringVar(&mergeMessage, "merge-message", "", "complete merge message compatibility input for --strategy merge")
 	return command
 }
 

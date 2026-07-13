@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -22,6 +23,15 @@ type fakeGitRepository struct {
 	messages        []string
 	messageBatches  [][]string
 	err             error
+	validateRefErr  error
+	workflowBaseErr error
+	activeErr       error
+	continueErr     error
+	publicationErr  error
+	missingErr      error
+	pushErr         error
+	activeOperation string
+	active          bool
 	calls           []string
 	createdNames    []branch.BranchName
 	createdBases    []branch.TargetBase
@@ -75,7 +85,10 @@ func (fake *fakeGitRepository) RemoteURL(context.Context, port.RepositoryIdentit
 
 func (fake *fakeGitRepository) ActiveOperation(context.Context, port.RepositoryIdentity) (string, bool, error) {
 	fake.calls = append(fake.calls, "active-operation")
-	return "", false, fake.err
+	if fake.activeErr != nil {
+		return "", false, fake.activeErr
+	}
+	return fake.activeOperation, fake.active, fake.err
 }
 
 func (fake *fakeGitRepository) HasCommits(context.Context, port.RepositoryIdentity) (bool, error) {
@@ -95,6 +108,9 @@ func (fake *fakeGitRepository) CurrentBranch(context.Context, port.RepositoryIde
 
 func (fake *fakeGitRepository) ValidateBranchRef(context.Context, port.RepositoryIdentity, branch.BranchName) error {
 	fake.calls = append(fake.calls, "validate-ref")
+	if fake.validateRefErr != nil {
+		return fake.validateRefErr
+	}
 	return fake.err
 }
 
@@ -143,6 +159,9 @@ func (fake *fakeGitRepository) ClearWorkflowBase(_ context.Context, _ port.Repos
 
 func (fake *fakeGitRepository) WorkflowBase(_ context.Context, _ port.RepositoryIdentity, name branch.BranchName) (branch.TargetBase, bool, error) {
 	fake.calls = append(fake.calls, "workflow-base")
+	if fake.workflowBaseErr != nil {
+		return branch.TargetBase{}, false, fake.workflowBaseErr
+	}
 	base, found := fake.workflowBases[name.String()]
 	return base, found, fake.err
 }
@@ -154,11 +173,17 @@ func (fake *fakeGitRepository) SwitchBranch(context.Context, port.RepositoryIden
 
 func (fake *fakeGitRepository) PublicationState(context.Context, port.RepositoryIdentity, branch.BranchName) (branch.PublicationState, error) {
 	fake.calls = append(fake.calls, "publication")
+	if fake.publicationErr != nil {
+		return branch.PublicationUnknown, fake.publicationErr
+	}
 	return fake.publication, fake.err
 }
 
 func (fake *fakeGitRepository) HasMissingBaseCommits(context.Context, port.RepositoryIdentity, branch.TargetBase) (bool, error) {
 	fake.calls = append(fake.calls, "missing-base")
+	if fake.missingErr != nil {
+		return false, fake.missingErr
+	}
 	return fake.missing, fake.err
 }
 
@@ -174,6 +199,17 @@ func (fake *fakeGitRepository) CommitMessagesSince(context.Context, port.Reposit
 
 func (fake *fakeGitRepository) Rebase(context.Context, port.RepositoryIdentity, branch.TargetBase) error {
 	fake.calls = append(fake.calls, "rebase")
+	return fake.err
+}
+
+func (fake *fakeGitRepository) ContinueRebase(context.Context, port.RepositoryIdentity) error {
+	fake.calls = append(fake.calls, "continue-rebase")
+	if fake.continueErr != nil {
+		return fake.continueErr
+	}
+	fake.active = false
+	fake.activeOperation = ""
+	fake.missing = false
 	return fake.err
 }
 
@@ -203,6 +239,11 @@ func (fake *fakeGitRepository) ReleaseTagsAt(context.Context, port.RepositoryIde
 	return append([]string(nil), fake.releaseTags...), fake.err
 }
 
+func (fake *fakeGitRepository) HasUnmergedConflicts(context.Context, port.RepositoryIdentity) (bool, error) {
+	fake.calls = append(fake.calls, "unmerged-conflicts")
+	return false, fake.err
+}
+
 func (fake *fakeGitRepository) HasStagedChanges(context.Context, port.RepositoryIdentity) (bool, error) {
 	fake.calls = append(fake.calls, "staged")
 	return true, fake.err
@@ -221,6 +262,9 @@ func (fake *fakeGitRepository) Commit(context.Context, port.RepositoryIdentity, 
 func (fake *fakeGitRepository) Push(_ context.Context, _ port.RepositoryIdentity, name branch.BranchName, _ bool) error {
 	fake.calls = append(fake.calls, "push")
 	fake.pushed = append(fake.pushed, name)
+	if fake.pushErr != nil {
+		return fake.pushErr
+	}
 	return fake.err
 }
 
@@ -422,6 +466,201 @@ func TestPublishTicketBlocksPushWhenPostRebaseValidationFails(t *testing.T) {
 	if strings.Contains(strings.Join(git.calls, ","), "push") {
 		t.Fatalf("post-rebase validation failure must stop before push: %v", git.calls)
 	}
+}
+
+func TestTicketPublicationResumePushAndPullRequestBoundaries(t *testing.T) {
+	t.Parallel()
+
+	name := mustBranch("feature/ABC-123-add-export")
+	base := mustBase("origin", "develop")
+	git := &fakeGitRepository{
+		clean:       true,
+		publication: branch.PublicationUnpublished,
+		messages:    []string{"feat(ABC-123): add export"},
+	}
+	quality := &fakeQualityRunner{}
+	service := newTicketService(git, quality, nil)
+
+	resumed, err := service.ResumeTicketPublish(context.Background(), ResumeTicketPublishRequest{
+		Repository: testRepository(),
+		Branch:     name,
+		Base:       &base,
+	})
+	if err != nil || resumed.Branch != name || resumed.Sync.RecommendedAction != "rebased" ||
+		resumed.PostMutationQuality == nil || quality.calls != 1 {
+		t.Fatalf("ResumeTicketPublish() = (%#v, %v), quality=%d", resumed, err, quality.calls)
+	}
+
+	if err := service.PushPreparedTicket(context.Background(), testRepository(), name, &base); err != nil {
+		t.Fatalf("PushPreparedTicket() error = %v", err)
+	}
+	if len(git.pushed) != 1 || git.pushed[0] != name {
+		t.Fatalf("prepared push = %v", git.pushed)
+	}
+	if service.HasPullRequestPublisher() {
+		t.Fatal("service unexpectedly reports a publisher")
+	}
+	_, err = service.PublishPullRequest(context.Background(), resumed.PullRequest)
+	assertProblemCode(t, err, problem.CodeExternalCommandFailed)
+
+	publisher := &fakePublisher{result: port.PublishedPullRequest{URL: "https://example.invalid/pr/2"}}
+	service = newTicketService(git, nil, publisher)
+	if !service.HasPullRequestPublisher() {
+		t.Fatal("service did not report the configured publisher")
+	}
+	url, err := service.PublishPullRequest(context.Background(), resumed.PullRequest)
+	if err != nil || url != "https://example.invalid/pr/2" || publisher.calls != 1 {
+		t.Fatalf("PublishPullRequest() = (%q, %v), calls=%d", url, err, publisher.calls)
+	}
+}
+
+func TestTicketPublicationResumeAndPushWhiteboxFailurePaths(t *testing.T) {
+	name := mustBranch("feature/ABC-123-add-export")
+	base := mustBase("origin", "develop")
+	request := ResumeTicketPublishRequest{
+		Repository: testRepository(),
+		Branch:     name,
+		Base:       &base,
+	}
+
+	t.Run("guards composed services repository and branch inputs", func(t *testing.T) {
+		_, err := (&TicketService{}).ResumeTicketPublish(context.Background(), request)
+		assertProblemCode(t, err, problem.CodeInternal)
+
+		git := &fakeGitRepository{}
+		service := newTicketService(git, nil, nil)
+		invalid := request
+		invalid.Branch = mustBranch("scratch/ABC-123-experiment")
+		_, err = service.ResumeTicketPublish(context.Background(), invalid)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+
+		invalid = request
+		invalid.Repository = port.RepositoryIdentity{}
+		_, err = service.ResumeTicketPublish(context.Background(), invalid)
+		assertProblemCode(t, err, problem.CodeRepositoryNotFound)
+	})
+
+	t.Run("resolves branch validation workflow base target and series failures", func(t *testing.T) {
+		validationErr := errors.New("branch validation failed")
+		git := &fakeGitRepository{validateRefErr: validationErr}
+		_, err := newTicketService(git, nil, nil).ResumeTicketPublish(context.Background(), request)
+		if !errors.Is(err, validationErr) {
+			t.Fatalf("validation error = %v, want %v", err, validationErr)
+		}
+
+		hotfix := mustBranch("hotfix/ABC-123-payment-timeout")
+		main := mustBase("origin", "main")
+		git = &fakeGitRepository{
+			publication: branch.PublicationUnpublished,
+			messages:    []string{"fix(ABC-123): resolve timeout"},
+			workflowBases: map[string]branch.TargetBase{
+				hotfix.String(): main,
+			},
+		}
+		result, err := newTicketService(git, nil, nil).ResumeTicketPublish(context.Background(), ResumeTicketPublishRequest{
+			Repository: port.RepositoryIdentity{Root: testRepository().Root},
+			Branch:     hotfix,
+		})
+		if err != nil || result.PullRequest.Target.String() != "main" {
+			t.Fatalf("hotfix resume = (%#v, %v)", result, err)
+		}
+
+		workflowBaseErr := errors.New("workflow base unavailable")
+		git = &fakeGitRepository{workflowBaseErr: workflowBaseErr}
+		_, err = newTicketService(git, nil, nil).ResumeTicketPublish(context.Background(), ResumeTicketPublishRequest{
+			Repository: testRepository(),
+			Branch:     hotfix,
+		})
+		if !errors.Is(err, workflowBaseErr) {
+			t.Fatalf("workflow base error = %v, want %v", err, workflowBaseErr)
+		}
+
+		git = &fakeGitRepository{}
+		_, err = newTicketService(git, nil, nil).ResumeTicketPublish(context.Background(), ResumeTicketPublishRequest{
+			Repository: testRepository(),
+			Branch:     hotfix,
+		})
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+
+		wrongTarget := mustBranch("main")
+		_, err = newTicketService(&fakeGitRepository{publication: branch.PublicationUnpublished}, nil, nil).ResumeTicketPublish(context.Background(), ResumeTicketPublishRequest{
+			Repository: testRepository(),
+			Branch:     name,
+			Base:       &base,
+			Target:     &wrongTarget,
+		})
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+
+		git = &fakeGitRepository{publication: branch.PublicationUnpublished}
+		_, err = newTicketService(git, nil, nil).ResumeTicketPublish(context.Background(), request)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+	})
+
+	t.Run("propagates synchronization and post-sync failures", func(t *testing.T) {
+		git := &fakeGitRepository{
+			publication: branch.PublicationUnpublished,
+			missing:     true,
+		}
+		_, err := newTicketService(git, nil, nil).ResumeTicketPublish(context.Background(), request)
+		assertProblemCode(t, err, problem.CodeRebaseConflict)
+
+		git = &fakeGitRepository{
+			publication: branch.PublicationUnpublished,
+			messages:    []string{"feat(ABC-124): wrong ticket"},
+		}
+		_, err = newTicketService(git, nil, nil).ResumeTicketPublish(context.Background(), request)
+		assertProblemCode(t, err, problem.CodeCommitTicketMismatch)
+
+		git = &fakeGitRepository{
+			publication: branch.PublicationUnpublished,
+			messages:    []string{"feat(ABC-123): add export"},
+		}
+		result, err := newTicketService(git, nil, nil).ResumeTicketPublish(context.Background(), request)
+		if err != nil || result.PostMutationQuality == nil || result.Quality.Status != port.QualityUnconfigured {
+			t.Fatalf("resume without quality runner = (%#v, %v)", result, err)
+		}
+	})
+
+	t.Run("push protects all preconditions and preserves adapter failures", func(t *testing.T) {
+		err := (&TicketService{}).PushPreparedTicket(context.Background(), testRepository(), name, &base)
+		assertProblemCode(t, err, problem.CodeInternal)
+
+		git := &fakeGitRepository{}
+		service := newTicketService(git, nil, nil)
+		err = service.PushPreparedTicket(context.Background(), testRepository(), mustBranch("scratch/ABC-123-experiment"), &base)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+
+		git = &fakeGitRepository{publication: branch.PublicationUnpublished, missing: true}
+		err = newTicketService(git, nil, nil).PushPreparedTicket(context.Background(), testRepository(), name, &base)
+		assertProblemCode(t, err, problem.CodeBranchBaseInvalid)
+
+		publicationErr := errors.New("publication failed")
+		git = &fakeGitRepository{publicationErr: publicationErr}
+		err = newTicketService(git, nil, nil).PushPreparedTicket(context.Background(), testRepository(), name, &base)
+		if !errors.Is(err, publicationErr) {
+			t.Fatalf("publication error = %v, want %v", err, publicationErr)
+		}
+
+		git = &fakeGitRepository{publication: branch.PublicationUnknown}
+		err = newTicketService(git, nil, nil).PushPreparedTicket(context.Background(), testRepository(), name, &base)
+		assertProblemCode(t, err, problem.CodeBranchPublicationUnknown)
+
+		pushErr := errors.New("push failed")
+		git = &fakeGitRepository{publication: branch.PublicationUnpublished, pushErr: pushErr}
+		err = newTicketService(git, nil, nil).PushPreparedTicket(context.Background(), testRepository(), name, &base)
+		if !errors.Is(err, pushErr) {
+			t.Fatalf("push error = %v, want %v", err, pushErr)
+		}
+	})
+
+	t.Run("pull request publisher errors are preserved", func(t *testing.T) {
+		publishErr := errors.New("publisher failed")
+		service := newTicketService(&fakeGitRepository{}, nil, &fakePublisher{err: publishErr})
+		_, err := service.PublishPullRequest(context.Background(), port.PullRequest{})
+		if !errors.Is(err, publishErr) {
+			t.Fatalf("publisher error = %v, want %v", err, publishErr)
+		}
+	})
 }
 
 func TestPublishHotfixTargetsAffectedLine(t *testing.T) {

@@ -334,6 +334,141 @@ func (service *TicketService) PublishTicket(ctx context.Context, request Publish
 	return result, nil
 }
 
+// ResumeTicketPublishRequest identifies a ticket publication that paused on a
+// rebase conflict. The branch must be the official branch being published; a
+// scratch transfer is completed before the rebase can start.
+type ResumeTicketPublishRequest struct {
+	Repository      port.RepositoryIdentity
+	Branch          branch.BranchName
+	Base            *branch.TargetBase
+	Target          *branch.BranchName
+	WorkflowManaged bool
+	Draft           bool
+}
+
+// ResumeTicketPublish continues an already resolved rebase and revalidates the
+// resulting branch before the caller offers the next publication step.
+func (service *TicketService) ResumeTicketPublish(ctx context.Context, request ResumeTicketPublishRequest) (PublishTicketResult, error) {
+	if service.branches == nil || service.sync == nil || service.git == nil {
+		return PublishTicketResult{}, internalDependencyError("ticket workflow services")
+	}
+	if request.Branch.IsZero() || !request.Branch.Family().IsOfficialWorkingBranch() {
+		return PublishTicketResult{}, invalidWorkflowInput(
+			"rebase resumption requires an official ticket branch",
+			"resolve the active rebase on the official ticket branch, then select Retry",
+		)
+	}
+	repository := request.Repository
+	if repository.Remote == "" {
+		repository.Remote = "origin"
+	}
+	if repository.Root == "" {
+		return PublishTicketResult{}, repositoryRequired()
+	}
+
+	validation, err := service.branches.Validate(ctx, branchapp.ValidateRequest{
+		Repository: repository,
+		Name:       request.Branch,
+	})
+	if err != nil {
+		return PublishTicketResult{}, err
+	}
+	baseInput := request.Base
+	if baseInput == nil && validation.Name.Family().MayUseWorkflowBase() {
+		storedBase, found, err := service.git.WorkflowBase(ctx, repository, validation.Name)
+		if err != nil {
+			return PublishTicketResult{}, err
+		}
+		if found {
+			baseInput = &storedBase
+		}
+	}
+	base, err := resolveTicketBase(validation.Name, repository, baseInput, request.WorkflowManaged)
+	if err != nil {
+		return PublishTicketResult{}, err
+	}
+	target, err := resolvePullRequestTarget(validation.Name, base, request.Target, request.WorkflowManaged)
+	if err != nil {
+		return PublishTicketResult{}, err
+	}
+	syncResult, err := service.sync.ResumeRebase(ctx, branchapp.ResumeRebaseRequest{
+		Repository:      repository,
+		Name:            validation.Name,
+		Base:            &base,
+		WorkflowManaged: request.WorkflowManaged,
+	})
+	if err != nil {
+		return PublishTicketResult{}, err
+	}
+	if err := service.validateCommitSeries(ctx, repository, validation.Name, base); err != nil {
+		return PublishTicketResult{}, err
+	}
+	result := PublishTicketResult{
+		Branch:      validation.Name,
+		Sync:        syncResult,
+		PullRequest: newTicketPullRequest(validation.Name, target, request.Draft),
+	}
+	if syncResult.Quality != nil {
+		result.PostMutationQuality = syncResult.Quality
+		result.Quality = *syncResult.Quality
+	}
+	return result, nil
+}
+
+// PushPreparedTicket performs the final pre-push validation and configures the
+// upstream only when the branch has not yet been published.
+func (service *TicketService) PushPreparedTicket(
+	ctx context.Context,
+	repository port.RepositoryIdentity,
+	name branch.BranchName,
+	base *branch.TargetBase,
+) error {
+	if service.sync == nil || service.git == nil {
+		return internalDependencyError("ticket publication services")
+	}
+	if !name.Family().IsOfficialWorkingBranch() {
+		return invalidWorkflowInput(
+			"only official ticket branches can be pushed by ticket publication",
+			"complete any scratch transfer before publishing",
+		)
+	}
+	validation, err := service.sync.ValidatePrePush(ctx, branchapp.PrePushRequest{
+		Repository: repository,
+		Name:       name,
+		Base:       base,
+	})
+	if err != nil {
+		return err
+	}
+	return service.git.Push(ctx, repository, name, validation.Publication == branch.PublicationUnpublished)
+}
+
+// HasPullRequestPublisher reports whether this process can create a real
+// provider-specific pull request rather than only emit its portable intent.
+func (service *TicketService) HasPullRequestPublisher() bool {
+	return service != nil && service.publisher != nil
+}
+
+// PublishPullRequest invokes the configured provider adapter for an already
+// prepared pull-request intent.
+func (service *TicketService) PublishPullRequest(ctx context.Context, request port.PullRequest) (string, error) {
+	if service == nil || service.publisher == nil {
+		return "", problem.New(problem.Details{
+			Code:        problem.CodeExternalCommandFailed,
+			Category:    problem.CategoryExternal,
+			Field:       "pull request publisher",
+			Expected:    "a configured hosting-provider adapter",
+			Rule:        "a real pull request can be created only through an explicit provider adapter",
+			Remediation: "configure a supported hosting-provider adapter or create the displayed provider-neutral pull-request intent manually",
+		})
+	}
+	published, err := service.publisher.Publish(ctx, request)
+	if err != nil {
+		return "", err
+	}
+	return published.URL, nil
+}
+
 func newTicketPullRequest(name, target branch.BranchName, draft bool) port.PullRequest {
 	branchTicket, _ := name.Ticket()
 	branchSlug, _ := name.Slug()

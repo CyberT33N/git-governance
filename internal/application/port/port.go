@@ -50,11 +50,13 @@ type GitRepository interface {
 	HasMissingBaseCommits(ctx context.Context, repository RepositoryIdentity, base branch.TargetBase) (bool, error)
 	CommitMessagesSince(ctx context.Context, repository RepositoryIdentity, base branch.TargetBase) ([]string, error)
 	Rebase(ctx context.Context, repository RepositoryIdentity, base branch.TargetBase) error
+	ContinueRebase(ctx context.Context, repository RepositoryIdentity) error
 	Merge(ctx context.Context, repository RepositoryIdentity, base branch.TargetBase, message commitmsg.Message) error
 	SquashMerge(ctx context.Context, repository RepositoryIdentity, source branch.BranchName) error
 	CherryPick(ctx context.Context, repository RepositoryIdentity, commitID string) error
 	DeleteLocalBranch(ctx context.Context, repository RepositoryIdentity, name branch.BranchName, force bool) error
 	ReleaseTagsAt(ctx context.Context, repository RepositoryIdentity, revision string) ([]string, error)
+	HasUnmergedConflicts(ctx context.Context, repository RepositoryIdentity) (bool, error)
 	HasStagedChanges(ctx context.Context, repository RepositoryIdentity) (bool, error)
 	Stage(ctx context.Context, repository RepositoryIdentity, paths []string) error
 	Commit(ctx context.Context, repository RepositoryIdentity, message commitmsg.Message) error

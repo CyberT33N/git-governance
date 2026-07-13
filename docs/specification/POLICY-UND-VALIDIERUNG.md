@@ -425,6 +425,21 @@ chore(ABC-123): merge origin/develop
 
 Hosting-seitig erzeugte Merge-Commits auf Shared Lines sind keine lokalen Ticket-Commits. CI klassifiziert sie über Parent-Anzahl und PR-Metadaten, statt einen normalen Ticket-Header vorzutäuschen.
 
+Alle unterstützten lokalen Commit-Erstellungspfade besitzen einen bekannten
+Branch-Kontext: `commit create` verwendet den aktuellen offiziellen
+Ticket-Branch, Scratch-Transfers verwenden den aufgelösten offiziellen
+Zielbranch und Synchronisations-Merges verwenden den aktuellen offiziellen
+Branch. Key und Ticket-ID werden daher aus diesem Branch-Kontext abgeleitet und
+sind keine frei wählbaren Commit-Eingaben. Ein nicht kanonischer Branch oder
+Detached HEAD kann keinen governeten Commit-Erstellungspfad ausführen.
+
+Die interaktive Erstellung besteht aus zwei Ebenen: zuerst wird eine der
+kanonischen Commit-Familien aus Abschnitt 7 ausgewählt, danach wird nur die
+Beschreibung für den Header eingegeben. Die UI zeigt den abgeleiteten Key und
+die Ticket-ID als feste Information. Vollständige Nachrichten bleiben für
+`commit validate` und den expliziten Kompatibilitätseingang verfügbar, weil
+Body und Footer dort Teil des zu prüfenden Git-Texts sind.
+
 ## 11. Initial Commit
 
 Die alte Fähigkeit, bei leerem Repository automatisch `Initial commit` zu erzeugen, wird nicht übernommen:

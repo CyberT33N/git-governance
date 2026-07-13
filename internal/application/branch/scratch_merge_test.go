@@ -443,4 +443,141 @@ func TestScratchMergerValidatesAndProtectsMutationPaths(t *testing.T) {
 	}
 }
 
+func TestScratchMergerClassifiesAndResumesConflictedSquashes(t *testing.T) {
+	source := mustBranch("scratch/ABC-123-export-exploration")
+	target := mustBranch("feature/ABC-123-add-export")
+	message := mustMessage(t, "feat(ABC-123): add export")
+	request := ScratchMergeRequest{
+		Repository: testRepository(),
+		Source:     source,
+		Message:    message,
+	}
+
+	t.Run("classifies only unresolved squash conflicts as resumable", func(t *testing.T) {
+		squashErr := errors.New("merge conflict")
+		git := newScratchMergeGit(source, target)
+		git.squashErr = squashErr
+		git.unmergedConflicts = true
+		_, err := NewScratchMerger(git, NewService(git, &fakeKeyPolicy{})).Merge(context.Background(), request)
+		assertProblemCode(t, err, problem.CodeScratchMergeConflict)
+		if !errors.Is(err, squashErr) {
+			t.Fatalf("conflict error = %v, want %v", err, squashErr)
+		}
+
+		git = newScratchMergeGit(source, target)
+		git.squashErr = squashErr
+		_, err = NewScratchMerger(git, NewService(git, &fakeKeyPolicy{})).Merge(context.Background(), request)
+		if !errors.Is(err, squashErr) {
+			t.Fatalf("non-conflict squash error = %v, want %v", err, squashErr)
+		}
+
+		conflictInspectionErr := errors.New("conflict inspection failed")
+		git = newScratchMergeGit(source, target)
+		git.squashErr = squashErr
+		git.unmergedConflictsErr = conflictInspectionErr
+		_, err = NewScratchMerger(git, NewService(git, &fakeKeyPolicy{})).Merge(context.Background(), request)
+		if !errors.Is(err, conflictInspectionErr) {
+			t.Fatalf("conflict inspection error = %v, want %v", err, conflictInspectionErr)
+		}
+	})
+
+	t.Run("finishes a resolved squash without merging again", func(t *testing.T) {
+		git := newScratchMergeGit(source, target)
+		merger := NewScratchMerger(git, NewService(git, &fakeKeyPolicy{}))
+		result, err := merger.Resume(context.Background(), request)
+		if err != nil || !result.Committed || len(result.Plan) != 2 {
+			t.Fatalf("Resume() = (%#v, %v)", result, err)
+		}
+		if len(git.squashed) != 0 || len(git.committed) != 1 || git.committed[0].String() != message.String() {
+			t.Fatalf("resume mutations = squashed:%#v committed:%#v", git.squashed, git.committed)
+		}
+	})
+
+	t.Run("keeps retryable conflicts and error paths explicit", func(t *testing.T) {
+		git := newScratchMergeGit(source, target)
+		git.unmergedConflicts = true
+		_, err := NewScratchMerger(git, NewService(git, &fakeKeyPolicy{})).Resume(context.Background(), request)
+		assertProblemCode(t, err, problem.CodeScratchMergeConflict)
+
+		git = newScratchMergeGit(source, target)
+		git.unmergedConflictsErr = errors.New("inspect conflicts")
+		_, err = NewScratchMerger(git, NewService(git, &fakeKeyPolicy{})).Resume(context.Background(), request)
+		if !errors.Is(err, git.unmergedConflictsErr) {
+			t.Fatalf("resume conflict inspection error = %v", err)
+		}
+
+		git = newScratchMergeGit(source, target)
+		git.staged = false
+		_, err = NewScratchMerger(git, NewService(git, &fakeKeyPolicy{})).Resume(context.Background(), request)
+		assertProblemCode(t, err, problem.CodeScratchMergeEmpty)
+
+		git = newScratchMergeGit(source, target)
+		git.stagedErr = errors.New("index failed")
+		_, err = NewScratchMerger(git, NewService(git, &fakeKeyPolicy{})).Resume(context.Background(), request)
+		if !errors.Is(err, git.stagedErr) {
+			t.Fatalf("resume staged error = %v", err)
+		}
+
+		git = newScratchMergeGit(source, target)
+		git.commitErr = errors.New("commit failed")
+		_, err = NewScratchMerger(git, NewService(git, &fakeKeyPolicy{})).Resume(context.Background(), request)
+		if !errors.Is(err, git.commitErr) {
+			t.Fatalf("resume commit error = %v", err)
+		}
+	})
+
+	t.Run("preserves validation guards and dry-run behavior", func(t *testing.T) {
+		_, err := (&ScratchMerger{}).Resume(context.Background(), request)
+		assertProblemCode(t, err, problem.CodeInternal)
+
+		git := newScratchMergeGit(source, target)
+		_, err = NewScratchMerger(git, nil).Resume(context.Background(), request)
+		assertProblemCode(t, err, problem.CodeInternal)
+
+		invalidRepository := request
+		invalidRepository.Repository = port.RepositoryIdentity{}
+		_, err = NewScratchMerger(git, NewService(git, &fakeKeyPolicy{})).Resume(context.Background(), invalidRepository)
+		assertProblemCode(t, err, problem.CodeRepositoryNotFound)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err = NewScratchMerger(git, NewService(git, &fakeKeyPolicy{})).Resume(ctx, request)
+		assertProblemCode(t, err, problem.CodeOperationCancelled)
+
+		dry := request
+		dry.DryRun = true
+		result, err := NewScratchMerger(git, NewService(git, &fakeKeyPolicy{})).Resume(context.Background(), dry)
+		if err != nil || !result.DryRun || result.Committed {
+			t.Fatalf("dry Resume() = (%#v, %v)", result, err)
+		}
+
+		git = newScratchMergeGit(source, target)
+		git.localBranches[source.String()] = false
+		_, err = NewScratchMerger(git, NewService(git, &fakeKeyPolicy{})).Resume(context.Background(), request)
+		assertProblemCode(t, err, problem.CodeScratchSourceBranchMissing)
+
+		invalidMessage := request
+		invalidMessage.Message = commitmsg.Message{}
+		git = newScratchMergeGit(source, target)
+		_, err = NewScratchMerger(git, NewService(git, &fakeKeyPolicy{})).Resume(context.Background(), invalidMessage)
+		assertProblemCode(t, err, problem.CodeCommitHeaderInvalid)
+
+		sourceValidationErr := errors.New("source validation failed")
+		git = newScratchMergeGit(source, target)
+		git.validateRefErr = sourceValidationErr
+		_, err = NewScratchMerger(git, NewService(git, &fakeKeyPolicy{})).Resume(context.Background(), request)
+		if !errors.Is(err, sourceValidationErr) {
+			t.Fatalf("resume source validation error = %v", err)
+		}
+
+		targetValidationErr := errors.New("target validation failed")
+		git = newScratchMergeGit(source, target)
+		git.validateRefErrors = []error{nil, targetValidationErr}
+		_, err = NewScratchMerger(git, NewService(git, &fakeKeyPolicy{})).Resume(context.Background(), request)
+		if !errors.Is(err, targetValidationErr) {
+			t.Fatalf("resume target validation error = %v", err)
+		}
+	})
+}
+
 var _ port.GitRepository = (*scratchMergeGit)(nil)

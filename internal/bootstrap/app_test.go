@@ -534,6 +534,10 @@ func (*prePushGit) Rebase(context.Context, port.RepositoryIdentity, branch.Targe
 	return nil
 }
 
+func (*prePushGit) ContinueRebase(context.Context, port.RepositoryIdentity) error {
+	return nil
+}
+
 func (*prePushGit) Merge(context.Context, port.RepositoryIdentity, branch.TargetBase, commitmsg.Message) error {
 	return nil
 }
@@ -552,6 +556,10 @@ func (*prePushGit) DeleteLocalBranch(context.Context, port.RepositoryIdentity, b
 
 func (*prePushGit) ReleaseTagsAt(context.Context, port.RepositoryIdentity, string) ([]string, error) {
 	return nil, nil
+}
+
+func (*prePushGit) HasUnmergedConflicts(context.Context, port.RepositoryIdentity) (bool, error) {
+	return false, nil
 }
 
 func (*prePushGit) HasStagedChanges(context.Context, port.RepositoryIdentity) (bool, error) {
@@ -684,6 +692,10 @@ func (*commandGit) Rebase(context.Context, port.RepositoryIdentity, branch.Targe
 	return nil
 }
 
+func (*commandGit) ContinueRebase(context.Context, port.RepositoryIdentity) error {
+	return nil
+}
+
 func (*commandGit) Merge(context.Context, port.RepositoryIdentity, branch.TargetBase, commitmsg.Message) error {
 	return nil
 }
@@ -702,6 +714,10 @@ func (*commandGit) DeleteLocalBranch(context.Context, port.RepositoryIdentity, b
 
 func (*commandGit) ReleaseTagsAt(context.Context, port.RepositoryIdentity, string) ([]string, error) {
 	return []string{"v2.8.0"}, nil
+}
+
+func (*commandGit) HasUnmergedConflicts(context.Context, port.RepositoryIdentity) (bool, error) {
+	return false, nil
 }
 
 func (*commandGit) HasStagedChanges(context.Context, port.RepositoryIdentity) (bool, error) {

@@ -249,6 +249,73 @@ func TestScratchSquashMergeAgainstLocalRepository(t *testing.T) {
 	}
 }
 
+func TestGitCLIAdapterContinuesAResolvedRebase(t *testing.T) {
+	t.Parallel()
+
+	local, remote := setupRepository(t)
+	adapter := gitcli.New(gitcli.Options{Timeout: 10 * time.Second})
+	ctx := context.Background()
+	identity, err := adapter.Discover(ctx, local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity.Remote = "origin"
+	if err := adapter.Fetch(ctx, identity); err != nil {
+		t.Fatal(err)
+	}
+
+	develop := mustBranch(t, "develop")
+	base, err := branch.NewTargetBase("origin", develop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	working := mustBranch(t, "fix/ABC-125-resume-rebase")
+	if err := adapter.CreateBranch(ctx, identity, working, base, true); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(local, "conflict.txt"), "local change\n")
+	if err := adapter.Stage(ctx, identity, []string{"conflict.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Commit(ctx, identity, mustMessage(t, "fix(ABC-125): add conflicting change")); err != nil {
+		t.Fatal(err)
+	}
+
+	advanceRemoteDevelop(t, remote, "conflict.txt", "remote change")
+	if err := adapter.Fetch(ctx, identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Rebase(ctx, identity, base); err == nil {
+		t.Fatal("Rebase() unexpectedly completed without a conflict")
+	}
+	operation, active, err := adapter.ActiveOperation(ctx, identity)
+	if err != nil || !active || operation != "rebase" {
+		t.Fatalf("ActiveOperation() after conflict = (%q, %t, %v)", operation, active, err)
+	}
+	if conflicts, err := adapter.HasUnmergedConflicts(ctx, identity); err != nil || !conflicts {
+		t.Fatalf("HasUnmergedConflicts() after conflict = (%t, %v)", conflicts, err)
+	}
+
+	writeFile(t, filepath.Join(local, "conflict.txt"), "resolved change\n")
+	if err := adapter.Stage(ctx, identity, []string{"conflict.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.ContinueRebase(ctx, identity); err != nil {
+		t.Fatalf("ContinueRebase() error = %v", err)
+	}
+	operation, active, err = adapter.ActiveOperation(ctx, identity)
+	if err != nil || active || operation != "" {
+		t.Fatalf("ActiveOperation() after continuation = (%q, %t, %v)", operation, active, err)
+	}
+	if conflicts, err := adapter.HasUnmergedConflicts(ctx, identity); err != nil || conflicts {
+		t.Fatalf("HasUnmergedConflicts() after continuation = (%t, %v)", conflicts, err)
+	}
+	current, err := adapter.CurrentBranch(ctx, identity)
+	if err != nil || current != working {
+		t.Fatalf("CurrentBranch() after continuation = (%q, %v)", current.String(), err)
+	}
+}
+
 func setupRepository(t *testing.T) (string, string) {
 	t.Helper()
 

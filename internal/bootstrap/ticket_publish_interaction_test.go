@@ -1,0 +1,438 @@
+package bootstrap
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	branchapp "github.com/CyberT33N/git-governance/internal/application/branch"
+	"github.com/CyberT33N/git-governance/internal/application/port"
+	"github.com/CyberT33N/git-governance/internal/application/workflow"
+	"github.com/CyberT33N/git-governance/internal/domain/branch"
+	"github.com/CyberT33N/git-governance/internal/domain/commitmsg"
+	"github.com/CyberT33N/git-governance/internal/domain/problem"
+	"github.com/spf13/cobra"
+)
+
+func TestTicketPublishSynchronizationReportPaths(t *testing.T) {
+	t.Parallel()
+
+	name := ticketPublishTestBranch(t)
+	base := ticketPublishTestBase(t)
+	prompt := &commandHelperPrompt{}
+	application := newBranchCommandApplication(newBranchCommandGit(t, name.String()), nil, prompt, "human")
+	command := &cobra.Command{}
+	output := &bytes.Buffer{}
+	command.SetOut(output)
+	command.SetContext(context.Background())
+
+	for _, testCase := range []struct {
+		action string
+		want   string
+	}{
+		{action: "rebased", want: "Rebase completed successfully"},
+		{action: "none", want: "No rebase was performed because the target base has no commits"},
+		{action: "merge", want: "No rebase was performed because the branch is already published"},
+		{action: "other", want: "Target-base synchronization completed without a rebase"},
+	} {
+		if err := application.reportTicketSynchronization(command, branchapp.SyncResult{
+			Name:              name,
+			Base:              base,
+			RecommendedAction: testCase.action,
+		}, false); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(output.String(), testCase.want) {
+			t.Fatalf("synchronization report missing %q: %q", testCase.want, output.String())
+		}
+	}
+
+	before := output.Len()
+	if err := application.reportTicketSynchronization(command, branchapp.SyncResult{}, true); err != nil {
+		t.Fatal(err)
+	}
+	if output.Len() != before {
+		t.Fatalf("dry-run synchronization report wrote output: %q", output.String())
+	}
+}
+
+func TestTicketPublishRebaseRetryInteractionPaths(t *testing.T) {
+	name := ticketPublishTestBranch(t)
+	base := ticketPublishTestBase(t)
+
+	t.Run("returns prompt failures and cancellation", func(t *testing.T) {
+		cancelPrompt := &commandHelperPrompt{
+			selects: []commandHelperStringReply{{value: "cancel"}},
+		}
+		application := newBranchCommandApplication(newBranchCommandGit(t, name.String()), nil, cancelPrompt, "human")
+		_, err := application.resumeTicketPublishAfterRebaseConflict(
+			context.Background(),
+			services{},
+			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
+			name,
+			&base,
+			false,
+		)
+		assertProblemCode(t, err, problem.CodeOperationCancelled)
+
+		promptErr := errors.New("selection unavailable")
+		failingPrompt := &commandHelperPrompt{
+			selects: []commandHelperStringReply{{err: promptErr}},
+		}
+		application = newBranchCommandApplication(newBranchCommandGit(t, name.String()), nil, failingPrompt, "human")
+		_, err = application.resumeTicketPublishAfterRebaseConflict(
+			context.Background(),
+			services{},
+			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
+			name,
+			&base,
+			false,
+		)
+		if !errors.Is(err, promptErr) {
+			t.Fatalf("retry prompt error = %v, want %v", err, promptErr)
+		}
+	})
+
+	t.Run("repeats retry while Git remains conflicted", func(t *testing.T) {
+		git := newBranchCommandGit(t, name.String())
+		git.messages = []string{"feat(ABC-123): add export"}
+		git.publication = branch.PublicationUnpublished
+		git.active = true
+		git.activeOperation = "rebase"
+		git.continueRebaseErrors = []error{errors.New("still conflicted"), nil}
+		prompt := &commandHelperPrompt{
+			selects: []commandHelperStringReply{{value: "retry"}, {value: "retry"}},
+		}
+		application := newBranchCommandApplication(git, nil, prompt, "human")
+		result, err := application.resumeTicketPublishAfterRebaseConflict(
+			context.Background(),
+			application.services(),
+			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
+			name,
+			&base,
+			false,
+		)
+		if err != nil || result.Sync.RecommendedAction != "rebased" || len(prompt.selectRequests) != 2 {
+			t.Fatalf("rebase retry = (%#v, %v), prompts=%#v", result, err, prompt.selectRequests)
+		}
+	})
+
+	t.Run("stops on a non-retryable resume failure", func(t *testing.T) {
+		git := newBranchCommandGit(t, name.String())
+		prompt := &commandHelperPrompt{
+			selects: []commandHelperStringReply{{value: "retry"}},
+		}
+		application := newBranchCommandApplication(git, nil, prompt, "human")
+		_, err := application.resumeTicketPublishAfterRebaseConflict(
+			context.Background(),
+			application.services(),
+			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
+			mustTicketPublishBranch(t, "scratch/ABC-123-experiment"),
+			&base,
+			false,
+		)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+	})
+}
+
+func TestTicketPublishScratchMergeRetryInteractionPaths(t *testing.T) {
+	source := mustTicketPublishBranch(t, "scratch/ABC-123-export-exploration")
+	target := ticketPublishTestBranch(t)
+	message, err := commitmsg.Parse("feat(ABC-123): add export")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("returns prompt failures and cancellation", func(t *testing.T) {
+		cancelPrompt := &commandHelperPrompt{
+			selects: []commandHelperStringReply{{value: "cancel"}},
+		}
+		application := newBranchCommandApplication(newBranchCommandGit(t, source.String()), nil, cancelPrompt, "human")
+		_, err := application.resumeScratchMergeAfterConflict(
+			context.Background(),
+			services{},
+			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
+			source,
+			target,
+			message,
+		)
+		assertProblemCode(t, err, problem.CodeOperationCancelled)
+
+		promptErr := errors.New("selection unavailable")
+		failingPrompt := &commandHelperPrompt{
+			selects: []commandHelperStringReply{{err: promptErr}},
+		}
+		application = newBranchCommandApplication(newBranchCommandGit(t, source.String()), nil, failingPrompt, "human")
+		_, err = application.resumeScratchMergeAfterConflict(
+			context.Background(),
+			services{},
+			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
+			source,
+			target,
+			message,
+		)
+		if !errors.Is(err, promptErr) {
+			t.Fatalf("retry prompt error = %v, want %v", err, promptErr)
+		}
+	})
+
+	t.Run("retries until every scratch conflict is resolved", func(t *testing.T) {
+		git := newBranchCommandGit(t, source.String())
+		git.officialBranches = []branch.BranchName{target}
+		git.localBranches = map[string]bool{
+			source.String(): true,
+			target.String(): true,
+		}
+		git.unmergedStates = []bool{true, false}
+		prompt := &commandHelperPrompt{
+			selects: []commandHelperStringReply{{value: "retry"}, {value: "retry"}},
+		}
+		application := newBranchCommandApplication(git, nil, prompt, "human")
+		result, err := application.resumeScratchMergeAfterConflict(
+			context.Background(),
+			application.services(),
+			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
+			source,
+			target,
+			message,
+		)
+		if err != nil || !result.Committed || len(prompt.selectRequests) != 2 {
+			t.Fatalf("scratch retry = (%#v, %v), prompts=%#v", result, err, prompt.selectRequests)
+		}
+		if len(git.committedMessages) != 1 || git.committedMessages[0].String() != message.String() {
+			t.Fatalf("scratch retry commits = %#v", git.committedMessages)
+		}
+	})
+
+	t.Run("stops on a non-retryable scratch failure", func(t *testing.T) {
+		git := newBranchCommandGit(t, source.String())
+		git.officialBranches = []branch.BranchName{target}
+		git.localBranches = map[string]bool{
+			source.String(): true,
+			target.String(): true,
+		}
+		conflictInspectionErr := errors.New("conflict inspection failed")
+		git.unmergedConflictsErr = conflictInspectionErr
+		prompt := &commandHelperPrompt{
+			selects: []commandHelperStringReply{{value: "retry"}},
+		}
+		application := newBranchCommandApplication(git, nil, prompt, "human")
+		_, err := application.resumeScratchMergeAfterConflict(
+			context.Background(),
+			application.services(),
+			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
+			source,
+			target,
+			message,
+		)
+		if !errors.Is(err, conflictInspectionErr) {
+			t.Fatalf("scratch retry failure = %v, want %v", err, conflictInspectionErr)
+		}
+	})
+}
+
+func TestTicketPublishCompletionInteractionPaths(t *testing.T) {
+	name := ticketPublishTestBranch(t)
+	base := ticketPublishTestBase(t)
+
+	newResult := func() workflow.PublishTicketResult {
+		return workflow.PublishTicketResult{
+			Branch: name,
+			Sync: branchapp.SyncResult{
+				Name: name,
+				Base: base,
+			},
+			PullRequest: port.PullRequest{
+				Source: name,
+				Target: mustTicketPublishBranch(t, "develop"),
+			},
+		}
+	}
+
+	t.Run("ignores nil and dry-run results", func(t *testing.T) {
+		application := newBranchCommandApplication(newBranchCommandGit(t, name.String()), nil, nil, "human")
+		if err := application.completeTicketPublishInteraction(context.Background(), services{}, port.RepositoryIdentity{}, nil, true); err != nil {
+			t.Fatal(err)
+		}
+		dry := newResult()
+		dry.DryRun = true
+		if err := application.completeTicketPublishInteraction(context.Background(), services{}, port.RepositoryIdentity{}, &dry, true); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("honors a declined push and prompt failures", func(t *testing.T) {
+		prompt := &commandHelperPrompt{
+			confirms: []commandHelperConfirmReply{{value: false}},
+		}
+		application := newBranchCommandApplication(newBranchCommandGit(t, name.String()), nil, prompt, "human")
+		result := newResult()
+		if err := application.completeTicketPublishInteraction(context.Background(), services{}, port.RepositoryIdentity{}, &result, false); err != nil {
+			t.Fatal(err)
+		}
+		if result.Pushed {
+			t.Fatal("declined push was performed")
+		}
+
+		promptErr := errors.New("confirmation unavailable")
+		prompt = &commandHelperPrompt{
+			confirms: []commandHelperConfirmReply{{err: promptErr}},
+		}
+		application = newBranchCommandApplication(newBranchCommandGit(t, name.String()), nil, prompt, "human")
+		result = newResult()
+		err := application.completeTicketPublishInteraction(context.Background(), services{}, port.RepositoryIdentity{}, &result, false)
+		if !errors.Is(err, promptErr) {
+			t.Fatalf("push confirmation error = %v, want %v", err, promptErr)
+		}
+	})
+
+	t.Run("pushes without a provider and can decline or create a provider pull request", func(t *testing.T) {
+		git := newBranchCommandGit(t, name.String())
+		prompt := &commandHelperPrompt{
+			confirms: []commandHelperConfirmReply{{value: true}},
+		}
+		application := newBranchCommandApplication(git, nil, prompt, "human")
+		result := newResult()
+		if err := application.completeTicketPublishInteraction(
+			context.Background(),
+			application.services(),
+			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
+			&result,
+			false,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if !result.Pushed || result.PublishedURL != "" {
+			t.Fatalf("intent-only completion = %#v", result)
+		}
+
+		publisher := &workflowRecordingPublisher{result: port.PublishedPullRequest{URL: "https://example.invalid/pr/complete"}}
+		git = newBranchCommandGit(t, name.String())
+		prompt = &commandHelperPrompt{
+			confirms: []commandHelperConfirmReply{{value: true}, {value: false}},
+		}
+		application = newBranchCommandApplication(git, nil, prompt, "human")
+		application.runtime.Publisher = publisher
+		result = newResult()
+		if err := application.completeTicketPublishInteraction(
+			context.Background(),
+			application.services(),
+			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
+			&result,
+			false,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if !result.Pushed || result.PublishedURL != "" || publisher.calls != 0 {
+			t.Fatalf("declined pull request = %#v, publisher=%#v", result, publisher)
+		}
+
+		publisher = &workflowRecordingPublisher{result: port.PublishedPullRequest{URL: "https://example.invalid/pr/complete"}}
+		git = newBranchCommandGit(t, name.String())
+		prompt = &commandHelperPrompt{
+			confirms: []commandHelperConfirmReply{{value: true}, {value: true}},
+		}
+		application = newBranchCommandApplication(git, nil, prompt, "human")
+		application.runtime.Publisher = publisher
+		result = newResult()
+		if err := application.completeTicketPublishInteraction(
+			context.Background(),
+			application.services(),
+			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
+			&result,
+			false,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if result.PublishedURL == "" || publisher.calls != 1 {
+			t.Fatalf("created pull request = %#v, publisher=%#v", result, publisher)
+		}
+	})
+
+	t.Run("returns provider failures", func(t *testing.T) {
+		publishErr := errors.New("publisher failed")
+		git := newBranchCommandGit(t, name.String())
+		prompt := &commandHelperPrompt{
+			confirms: []commandHelperConfirmReply{{value: true}, {value: true}},
+		}
+		application := newBranchCommandApplication(git, nil, prompt, "human")
+		application.runtime.Publisher = &workflowRecordingPublisher{err: publishErr}
+		result := newResult()
+		err := application.completeTicketPublishInteraction(
+			context.Background(),
+			application.services(),
+			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
+			&result,
+			false,
+		)
+		if !errors.Is(err, publishErr) {
+			t.Fatalf("publisher failure = %v, want %v", err, publishErr)
+		}
+	})
+
+	t.Run("returns push and pull-request confirmation failures", func(t *testing.T) {
+		pushErr := errors.New("push failed")
+		git := newBranchCommandGit(t, name.String())
+		git.pushErr = pushErr
+		prompt := &commandHelperPrompt{
+			confirms: []commandHelperConfirmReply{{value: true}},
+		}
+		application := newBranchCommandApplication(git, nil, prompt, "human")
+		result := newResult()
+		err := application.completeTicketPublishInteraction(
+			context.Background(),
+			application.services(),
+			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
+			&result,
+			false,
+		)
+		if !errors.Is(err, pushErr) {
+			t.Fatalf("push failure = %v, want %v", err, pushErr)
+		}
+
+		confirmationErr := errors.New("pull request confirmation failed")
+		git = newBranchCommandGit(t, name.String())
+		prompt = &commandHelperPrompt{
+			confirms: []commandHelperConfirmReply{{value: true}, {err: confirmationErr}},
+		}
+		application = newBranchCommandApplication(git, nil, prompt, "human")
+		application.runtime.Publisher = &workflowRecordingPublisher{}
+		result = newResult()
+		err = application.completeTicketPublishInteraction(
+			context.Background(),
+			application.services(),
+			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
+			&result,
+			false,
+		)
+		if !errors.Is(err, confirmationErr) {
+			t.Fatalf("pull request confirmation failure = %v, want %v", err, confirmationErr)
+		}
+	})
+}
+
+func ticketPublishTestBranch(t *testing.T) branch.BranchName {
+	t.Helper()
+	return mustTicketPublishBranch(t, "feature/ABC-123-add-export")
+}
+
+func ticketPublishTestBase(t *testing.T) branch.TargetBase {
+	t.Helper()
+	develop := mustTicketPublishBranch(t, "develop")
+	base, err := branch.NewTargetBase("origin", develop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base
+}
+
+func mustTicketPublishBranch(t *testing.T, raw string) branch.BranchName {
+	t.Helper()
+	name, err := branch.ParseName(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return name
+}

@@ -539,6 +539,17 @@ func (repository *Repository) Rebase(ctx context.Context, identity port.Reposito
 	return nil
 }
 
+// ContinueRebase advances an already started rebase after the user resolves
+// and stages its conflicts. A non-interactive editor avoids blocking the retry
+// interaction while preserving Git's existing commit message.
+func (repository *Repository) ContinueRebase(ctx context.Context, identity port.RepositoryIdentity) error {
+	result := repository.invoke(ctx, identity.Root, nil, "-c", "core.editor=true", "rebase", "--continue")
+	if result.err != nil {
+		return repository.commandProblem(problem.CodeGitCommandFailed, identity, "continue the resolved rebase", result)
+	}
+	return nil
+}
+
 // Merge merges the target base with an explicit governed merge message.
 func (repository *Repository) Merge(ctx context.Context, identity port.RepositoryIdentity, base branch.TargetBase, message commitmsg.Message) error {
 	result := repository.invoke(ctx, identity.Root, nil, "merge", "--no-ff", "--no-edit", "-m", message.String(), base.String())
@@ -598,6 +609,16 @@ func (repository *Repository) ReleaseTagsAt(ctx context.Context, identity port.R
 		}
 	}
 	return tags, nil
+}
+
+// HasUnmergedConflicts reports whether the index contains unresolved conflict
+// entries left by an interrupted merge, squash merge, rebase, or cherry-pick.
+func (repository *Repository) HasUnmergedConflicts(ctx context.Context, identity port.RepositoryIdentity) (bool, error) {
+	result := repository.invoke(ctx, identity.Root, nil, "diff", "--name-only", "--diff-filter=U")
+	if result.err != nil {
+		return false, repository.commandProblem(problem.CodeGitCommandFailed, identity, "inspect unresolved Git conflicts", result)
+	}
+	return strings.TrimSpace(result.stdout) != "", nil
 }
 
 // HasStagedChanges reports whether the Git index contains changes.

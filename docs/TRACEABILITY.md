@@ -50,16 +50,18 @@ does not rely on any external governance repository or unpublished rule set.
 | First-push publication detection | VERIFIED | real local Git integration test |
 | Base delta, merge, and rebase paths | VERIFIED | real local Git integration test |
 | Scratch-to-official squash transfer | VERIFIED | whitebox, CLI-contract, Git-adapter, and real local Git integration tests |
+| Structured commit-family composition | VERIFIED | canonical commit application module and same-package whitebox tests |
+| Rebase and scratch-squash continuation after conflict resolution | VERIFIED | synchronizer, scratch merger, workflow, CLI interaction, and Git adapter whitebox tests |
 | No automatic amend or force push | VERIFIED | absent from public command tree and application APIs |
 
 ## User-facing commands
 
 | Command area | Status | Notes |
 |---|---|---|
-| `branch list`, `validate`, `create`, `merge-scratch`, `sync-base` | IMPLEMENTED | CLI contract tests cover help, JSON, flags, and dry-run behavior |
-| `commit create`, `validate` | IMPLEMENTED | explicit staging and ticket consistency are enforced |
+| `branch list`, `validate`, `create`, `merge-scratch`, `sync-base` | IMPLEMENTED | CLI contract tests cover help, JSON, flags, dry-run behavior, and structured commit composition |
+| `commit create`, `validate` | IMPLEMENTED | explicit staging, branch-derived ticket context, and canonical family selection are enforced |
 | `workflow ticket start` | IMPLEMENTED | optional scratch branch and provider-neutral PR intent |
-| `workflow ticket publish` | IMPLEMENTED | regular flow and confirmed Scratch-to-official squash transfer rerun branch, commit-series, and quality checks after a mutation |
+| `workflow ticket publish` | VERIFIED | reports conditional rebase state, resumes a resolved conflict through Retry, asks before push, and creates a PR only through a configured provider adapter |
 | `workflow hotfix start` | IMPLEMENTED | affected-line selection is mandatory |
 | hotfix publish and propagation | IMPLEMENTED | affected-line publish plus `cherry-pick -x` forward/backport workflow |
 | `workflow release cut`, `stabilize`, `promote`, `backmerge`, `support`, `cleanup` | IMPLEMENTED | stabilization constraints, release-to-main intent, cleanup, and support-tag provenance are enforced |
@@ -83,6 +85,7 @@ does not rely on any external governance repository or unpublished rule set.
 | Specialized workflow base metadata | VERIFIED | local Git metadata records hotfix, stabilization, and propagation bases for later sync and pre-push validation |
 | First push checks basis freshness | VERIFIED | push is blocked when an unpublished branch misses base commits |
 | Unpublished branch rebase | VERIFIED | only after a real base delta |
+| Interactive conflict status and retry | VERIFIED | no-op/rebase rationale is displayed; an unresolved rebase or scratch squash is resumed without restarting publication |
 | Published branch synchronization | VERIFIED | recommends or performs explicit merge, never routine rebase |
 | Scratch branch | VERIFIED | private local branch from the same-ticket official local branch; transfer resolves an existing local official target by ticket ID and squashes to one governed commit |
 | Release stabilization and completion | IMPLEMENTED | constrained stabilization, promotion intent, backmerge, cleanup, and support-tag provenance are present |

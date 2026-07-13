@@ -224,7 +224,8 @@ Arbeitsbranch wechseln: ja
 git governance branch merge-scratch \
   [--branch scratch/<ticket>-<slug>] \
   [--target <official-ticket-branch>] \
-  --message "<Conventional Commit>"
+  [--type <commit-family> --subject <description> | \
+   --message "<complete Conventional Commit>"]
 ```
 
 Ohne `--branch` ist der aktuelle Branch die Scratch-Quelle. Das Kommando
@@ -244,18 +245,31 @@ Die Zielauflösung verwendet die Ticket-ID, nicht den Branch-Slug:
 - Bei mehreren lokalen Kandidaten ist `--target` Pflicht; der Command rät
   nicht zwischen Branch-Familien.
 
-Interaktiv zeigt die Bestätigung Scratch-Quelle, Zielbranch und Commit. Für
-Automation sind die vorhandenen globalen Optionen maßgeblich:
+Interaktiv zeigt zuerst Scratch-Quelle und Zielbranch sowie den daraus
+abgeleiteten, nicht editierbaren Ticket-Key und die Ticket-ID. Danach zeigt es
+die vollständige kanonische Commit-Familienansicht (`build`, `chore`, `ci`,
+`docs`, `feat`, `fix`, `perf`, `refactor`, `revert`, `style`, `test`) und fragt
+anschließend nur die Beschreibung ab. Die Beschreibung ist genau der
+nichtleere, ungepolsterte Text nach `: ` im erzeugten Header; sie darf keine
+Steuerzeichen enthalten und höchstens 200 Unicode-Codepoints lang sein.
+
+Für Automation sind die vorhandenen globalen Optionen maßgeblich:
 
 ```text
 git governance --interactive never --yes branch merge-scratch \
-  --message "feat(ABC-123): add export button"
+  --type feat \
+  --subject "add export button"
 ```
 
 Die Ausführung wechselt auf das Ziel, führt `git merge --squash` aus und
-erstellt den angegebenen, ticket-konsistenten Conventional Commit. Sie führt
-nie `git add .`, Push oder Scratch-Löschung aus. Bei einem Konflikt bleibt der
-normale Git-Konfliktzustand für explizite Auflösung erhalten.
+erstellt den daraus erzeugten, ticket-konsistenten Conventional Commit. Sie
+führt nie `git add .`, Push oder Scratch-Löschung aus. `--message` ist ein
+vollständiger Kompatibilitätseingang für bestehende Automation und darf nicht
+mit `--type` oder `--subject` kombiniert werden. Bei einem Konflikt bleibt der
+normale Git-Konfliktzustand für explizite Auflösung erhalten. Der direkte
+Command setzt keinen automatischen Merge fort; innerhalb von `workflow ticket
+publish` wird derselbe Konfliktzustand dagegen über eine Retry-Auswahl
+fortgesetzt, nachdem der Benutzer ihn aufgelöst und gestaged hat.
 
 ## 6. `branch validate`
 
@@ -285,6 +299,12 @@ git governance branch sync-base \
   --strategy check|auto|rebase|merge
 ```
 
+Für `--strategy merge` erzeugt die interaktive Oberfläche denselben
+strukturierten Commit-Ablauf mit festem Branch-Ticket. Nicht-interaktive Aufrufe
+verwenden `--merge-type <family>` und `--merge-subject <description>`;
+`--merge-message` bleibt ausschließlich als vollständiger
+Kompatibilitätseingang erhalten.
+
 ### 7.2 Entscheidungslogik
 
 1. aktuellen Branch parsen
@@ -308,7 +328,7 @@ git governance branch sync-base \
 - unveröffentlicht: nur bei Delta rebasen
 - veröffentlicht: ohne explizite Merge-Freigabe nur Handlungsplan ausgeben
 
-Nach einer Mutation laufen Governance-Checks und konfigurierte Quality Checks erneut. Schlägt ein Rebase konfliktbedingt fehl, bleibt Git im normalen Rebase-Zustand; die CLI zeigt `--continue`-, `--abort`- und Diagnoseanweisungen und versteckt den Zustand nicht.
+Nach einer Mutation laufen Governance-Checks und konfigurierte Quality Checks erneut. Schlägt ein direkter `branch sync-base`-Rebase konfliktbedingt fehl, bleibt Git im normalen Rebase-Zustand und wird nicht verborgen. Im `workflow ticket publish` wird derselbe Zustand zusätzlich als Retry-Schritt dargestellt: Nach Auflösung und Staging setzt Retry den bestehenden Rebase fort.
 
 ## 8. `commit create`
 
@@ -316,8 +336,8 @@ Nach einer Mutation laufen Governance-Checks und konfigurierte Quality Checks er
 
 ```text
 --type build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test
---ticket <KEY-NUMBER>
---subject <text>
+--ticket <KEY-NUMBER>            Kompatibilitätsprüfung gegen den Branch
+--subject <text>                 Commit-Beschreibung
 --body <text>
 --breaking
 --breaking-description <text>
@@ -329,10 +349,14 @@ Nach einer Mutation laufen Governance-Checks und konfigurierte Quality Checks er
 ### 8.2 Defaults und Ableitungen
 
 - Das Ticket wird auf einem Ticket-Branch aus dem Branch-Namen abgeleitet.
-- Ein explizites `--ticket` muss exakt zum Branch passen.
+- Ein explizites `--ticket` muss exakt zum Branch passen und ändert den
+  abgeleiteten Scope nicht.
 - Der Commit-Typ wird aus der Branch-Familie vorgeschlagen, aber nicht blind erzwungen.
 - `feature` schlägt `feat`, `fix` und `hotfix` schlagen `fix` vor.
 - `docs`, `refactor`, `chore`, `test` und `perf` schlagen den gleichnamigen Typ vor.
+- Interaktiv zeigt die feste Branch-, Key- und Ticket-ID-Kontextzeile, dann die
+  kanonische Commit-Familienansicht und zuletzt die Beschreibung. Key und
+  Ticket sind in diesem Ablauf nicht auswählbar.
 - Das Kommando prüft, ob Änderungen gestaged sind.
 - Ohne `--stage` wird niemals automatisch `git add .` ausgeführt.
 - `--stage` akzeptiert explizite Pfade und zeigt sie vor der Mutation.
@@ -441,25 +465,38 @@ Ablauf:
 5. Branch- und Commit-Serie validieren
 6. projektdefinierte Quality Checks ausführen
 7. Basisfrische prüfen
-8. bei unveröffentlichtem Branch und Basisdelta nach Bestätigung rebasen
+8. bei unveröffentlichtem Branch und Basisdelta rebasen
 9. nach einem Rebase Branch-/Policy-Prüfung, Commit-Serie und Quality Gates erneut ausführen
-10. ersten Push ausführen
-11. PR-Payload mit Head, Base `develop`, Ticket und vorgeschlagenem Titel erzeugen
+10. in der interaktiven Ansicht anzeigen, ob ein Rebase erfolgt ist oder warum
+    er nicht erfolgt ist
+11. bei einem pausierten Scratch-Squash oder Rebase Konflikte lösen und
+    stagen; die passende Retry-Auswahl setzt exakt diese Git-Operation fort,
+    statt den Workflow von vorn zu starten
+12. vor dem ersten Push interaktiv bestätigen oder `--push` nicht-interaktiv
+    explizit setzen
+13. nach einem Push bei konfiguriertem Provider interaktiv die PR-Erstellung
+    bestätigen; ohne Provider nur den providerneutralen PR-Intent ausgeben
 
-Für einen Scratch-Start benötigt der nicht-interaktive Modus eine vollständige
-Commit-Nachricht und die bestehende Mutationsfreigabe:
+Für einen Scratch-Start benötigt der nicht-interaktive Modus eine
+Commit-Familie, eine Beschreibung und die bestehende Mutationsfreigabe:
 
 ```text
 git governance --interactive never --yes workflow ticket publish \
-  --message "feat(ABC-123): add export button" \
+  --type feat \
+  --subject "add export button" \
   --push
 ```
 
 `--target <official-ticket-branch>` ist nur auf `scratch/*` zulässig und löst
 manuelle Mehrdeutigkeit auf. Auf einem offiziellen Branch bleiben `--target`
-und `--message` dieses Scratch-Transfers ungültig.
+und die Scratch-Transfer-Eingaben `--type`, `--subject` und `--message`
+ungültig. `--message` bleibt als vollständiger Kompatibilitätseingang
+erhalten und darf nicht mit den strukturierten Eingaben kombiniert werden.
 
-Ohne Provider-Adapter wird kein Hosting-API-Aufruf erfunden. Die JSON-Ausgabe ist eine stabile Übergabeoberfläche für GitHub-, GitLab-, Bitbucket- oder andere Adapter.
+Ohne Provider-Adapter wird kein Hosting-API-Aufruf erfunden. Die JSON-Ausgabe
+ist eine stabile Übergabeoberfläche für GitHub-, GitLab-, Bitbucket- oder
+andere Adapter. Eine Benutzerbestätigung kann deshalb nur dann einen echten PR
+erzeugen, wenn ein solcher Adapter zur Laufzeit konfiguriert ist.
 
 ## 12. `workflow hotfix start`
 

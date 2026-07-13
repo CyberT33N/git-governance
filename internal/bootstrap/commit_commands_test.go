@@ -85,7 +85,7 @@ func TestCommitCreateRetriesInteractiveSubjectAndBreakingDescription(t *testing.
 		t.Fatalf("commit output = %q", output)
 	}
 	for _, expected := range []string{
-		"Invalid value for Commit subject.",
+		"Invalid value for Commit description.",
 		"Invalid value for Breaking change impact.",
 		"Enter a new value.",
 	} {
@@ -395,8 +395,6 @@ func TestCommitValidateCommandFailureContracts(t *testing.T) {
 }
 
 func TestResolveCommitTicketContracts(t *testing.T) {
-	command := &cobra.Command{}
-	command.SetContext(context.Background())
 	current, err := branch.ParseName("feature/ABC-123-add-export")
 	if err != nil {
 		t.Fatal(err)
@@ -406,164 +404,87 @@ func TestResolveCommitTicketContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	application := newCommitCommandApplication(newCommitCommandGit(t, current.String()), nil)
-	fromFlag, err := resolveCommitTicket(application, command, current, "XYZ-456")
-	if err != nil || fromFlag.String() != "XYZ-456" {
-		t.Fatalf("explicit ticket = (%q, %v)", fromFlag.String(), err)
-	}
-	fromBranch, err := resolveCommitTicket(application, command, current, "")
+	fromBranch, err := resolveCommitTicket(current, "")
 	if err != nil || fromBranch.String() != "ABC-123" {
 		t.Fatalf("branch ticket = (%q, %v)", fromBranch.String(), err)
 	}
-	if _, err := resolveCommitTicket(application, command, current, "ABC123"); err == nil {
+	fromMatchingFlag, err := resolveCommitTicket(current, "ABC-123")
+	if err != nil || fromMatchingFlag.String() != "ABC-123" {
+		t.Fatalf("matching explicit ticket = (%q, %v)", fromMatchingFlag.String(), err)
+	}
+	if _, err := resolveCommitTicket(current, "ABC123"); err == nil {
 		t.Fatal("invalid explicit ticket was accepted")
 	}
-	_, err = resolveCommitTicket(application, command, main, "")
-	assertProblemCode(t, err, problem.CodeInvalidInput)
-
-	keyErr := errors.New("ticket key prompt failed")
-	keyPrompt := &commitCommandPrompt{
-		inputs: []commitStringReply{{err: keyErr}},
-	}
-	keyApplication := newCommitCommandApplication(newCommitCommandGit(t, main.String()), keyPrompt)
-	enableCommitPrompt(keyApplication, keyPrompt)
-	if _, err := resolveCommitTicket(keyApplication, command, main, ""); !errors.Is(err, keyErr) {
-		t.Fatalf("ticket key error = %v, want %v", err, keyErr)
-	}
-
-	numberErr := errors.New("ticket number prompt failed")
-	numberPrompt := &commitCommandPrompt{
-		inputs: []commitStringReply{{value: "XYZ"}, {err: numberErr}},
-	}
-	numberApplication := newCommitCommandApplication(newCommitCommandGit(t, main.String()), numberPrompt)
-	enableCommitPrompt(numberApplication, numberPrompt)
-	if _, err := resolveCommitTicket(numberApplication, command, main, ""); !errors.Is(err, numberErr) {
-		t.Fatalf("ticket number error = %v, want %v", err, numberErr)
-	}
-
-	prompt := &commitCommandPrompt{
-		inputs: []commitStringReply{{value: "XYZ"}, {value: "456"}},
-	}
-	promptApplication := newCommitCommandApplication(newCommitCommandGit(t, main.String()), prompt)
-	enableCommitPrompt(promptApplication, prompt)
-	fromPrompt, err := resolveCommitTicket(promptApplication, command, main, "")
-	if err != nil || fromPrompt.String() != "XYZ-456" {
-		t.Fatalf("prompt ticket = (%q, %v)", fromPrompt.String(), err)
-	}
-	if got := []string{prompt.inputRequests[0].Label, prompt.inputRequests[1].Label}; strings.Join(got, ",") != "Ticket key,Ticket number" {
-		t.Fatalf("prompt labels = %v", got)
-	}
+	_, err = resolveCommitTicket(current, "XYZ-456")
+	assertProblemCode(t, err, problem.CodeCommitTicketMismatch)
+	_, err = resolveCommitTicket(main, "")
+	assertProblemCode(t, err, problem.CodeSharedLineMutationForbidden)
 }
 
-func TestResolveCommitTypeContracts(t *testing.T) {
-	command := &cobra.Command{}
-	command.SetContext(context.Background())
+func TestResolveStructuredCommitMessageContracts(t *testing.T) {
 	feature, err := branch.ParseName("feature/ABC-123-add-export")
 	if err != nil {
 		t.Fatal(err)
 	}
-	main, err := branch.ParseName("main")
-	if err != nil {
-		t.Fatal(err)
-	}
-	application := newCommitCommandApplication(newCommitCommandGit(t, feature.String()), nil)
 
-	fromFlag, err := resolveCommitType(application, command, feature, "fix")
-	if err != nil || fromFlag != commitmsg.TypeFix {
-		t.Fatalf("explicit type = (%q, %v)", fromFlag, err)
-	}
-	if _, err := resolveCommitType(application, command, feature, "feature"); err == nil {
-		t.Fatal("invalid explicit type was accepted")
-	}
-	defaultType, err := resolveCommitType(application, command, feature, "")
-	if err != nil || defaultType != commitmsg.TypeFeat {
-		t.Fatalf("non-interactive type = (%q, %v)", defaultType, err)
+	noninteractive := newCommitCommandApplication(newCommitCommandGit(t, feature.String()), nil)
+	message, err := noninteractive.resolveCommitMessage(context.Background(), commitMessageInput{
+		Branch:           feature,
+		Family:           "fix",
+		Description:      "correct export validation",
+		RequireFamily:    true,
+		DescriptionLabel: "Commit description",
+		Operation:        "this commit",
+	})
+	if err != nil || message.Header().String() != "fix(ABC-123): correct export validation" {
+		t.Fatalf("resolveCommitMessage() = (%q, %v)", message.String(), err)
 	}
 
-	selectErr := errors.New("type selection failed")
-	failingPrompt := &commitCommandPrompt{
-		selects: []commitStringReply{{err: selectErr}},
-	}
-	failingApplication := newCommitCommandApplication(newCommitCommandGit(t, main.String()), failingPrompt)
-	enableCommitPrompt(failingApplication, failingPrompt)
-	if _, err := resolveCommitType(failingApplication, command, main, ""); !errors.Is(err, selectErr) {
-		t.Fatalf("selection error = %v, want %v", err, selectErr)
-	}
+	_, err = noninteractive.resolveCommitMessage(context.Background(), commitMessageInput{
+		Branch:        feature,
+		Description:   "add export",
+		RequireFamily: true,
+	})
+	assertProblemCode(t, err, problem.CodeInvalidInput)
 
-	invalidPrompt := &commitCommandPrompt{
-		selects: []commitStringReply{{value: "feature"}},
-	}
-	invalidApplication := newCommitCommandApplication(newCommitCommandGit(t, main.String()), invalidPrompt)
-	enableCommitPrompt(invalidApplication, invalidPrompt)
-	if _, err := resolveCommitType(invalidApplication, command, main, ""); err == nil {
-		t.Fatal("invalid selected type was accepted")
-	}
+	_, err = noninteractive.resolveCommitMessage(context.Background(), commitMessageInput{
+		Branch:           feature,
+		Family:           "feature",
+		Description:      "add export",
+		RequireFamily:    true,
+		DescriptionLabel: "Commit description",
+	})
+	assertProblemCode(t, err, problem.CodeCommitTypeInvalid)
 
 	prompt := &commitCommandPrompt{
-		selects: []commitStringReply{{value: "revert"}},
+		selects: []commitStringReply{{value: "docs"}},
+		inputs:  []commitStringReply{{value: "document export workflow"}},
 	}
-	promptApplication := newCommitCommandApplication(newCommitCommandGit(t, main.String()), prompt)
-	enableCommitPrompt(promptApplication, prompt)
-	selected, err := resolveCommitType(promptApplication, command, main, "")
-	if err != nil || selected != commitmsg.TypeRevert {
-		t.Fatalf("selected type = (%q, %v)", selected, err)
+	interactive := newCommitCommandApplication(newCommitCommandGit(t, feature.String()), prompt)
+	enableCommitPrompt(interactive, prompt)
+	message, err = interactive.resolveCommitMessage(context.Background(), commitMessageInput{
+		Branch:           feature,
+		RequireFamily:    true,
+		DescriptionLabel: "Commit description",
+		Operation:        "this commit",
+	})
+	if err != nil || message.Header().String() != "docs(ABC-123): document export workflow" {
+		t.Fatalf("interactive resolveCommitMessage() = (%q, %v)", message.String(), err)
 	}
-	if len(prompt.selectRequests) != 1 {
-		t.Fatalf("select requests = %d, want 1", len(prompt.selectRequests))
+	if len(prompt.selectRequests) != 1 || len(prompt.inputRequests) != 1 {
+		t.Fatalf("commit prompts = selects:%#v inputs:%#v", prompt.selectRequests, prompt.inputRequests)
 	}
-	request := prompt.selectRequests[0]
-	if request.Label != "Commit type" || request.Default != "chore" || len(request.Options) != len(commitmsg.Types()) {
-		t.Fatalf("select request = %#v", request)
+	selection := prompt.selectRequests[0]
+	if selection.Label != "Commit family" || selection.Default != "feat" || len(selection.Options) != len(commitapp.Families()) {
+		t.Fatalf("commit family selection = %#v", selection)
 	}
-	if request.Options[0].Value != "build" || request.Options[0].Description != "Build system or dependency change." {
-		t.Fatalf("first type option = %#v", request.Options[0])
+	if selection.Options[0].Value != "build" || selection.Options[4].Label != "Feature" {
+		t.Fatalf("commit family options = %#v", selection.Options)
 	}
-	if request.Options[len(request.Options)-1].Value != "test" || request.Options[len(request.Options)-1].Description != "Test work." {
-		t.Fatalf("last type option = %#v", request.Options[len(request.Options)-1])
-	}
-}
-
-func TestCommitTypeHelpersDescribeBranchTaxonomy(t *testing.T) {
-	type defaultCase struct {
-		family branch.Family
-		want   commitmsg.Type
-	}
-	for _, testCase := range []defaultCase{
-		{branch.FamilyFeature, commitmsg.TypeFeat},
-		{branch.FamilyFix, commitmsg.TypeFix},
-		{branch.FamilyHotfix, commitmsg.TypeFix},
-		{branch.FamilyDocs, commitmsg.TypeDocs},
-		{branch.FamilyRefactor, commitmsg.TypeRefactor},
-		{branch.FamilyChore, commitmsg.TypeChore},
-		{branch.FamilyTest, commitmsg.TypeTest},
-		{branch.FamilyPerf, commitmsg.TypePerf},
-		{branch.FamilyMain, commitmsg.TypeChore},
-	} {
-		if got := defaultCommitType(testCase.family); got != testCase.want {
-			t.Fatalf("defaultCommitType(%q) = %q, want %q", testCase.family, got, testCase.want)
-		}
-	}
-
-	descriptions := map[commitmsg.Type]string{
-		commitmsg.TypeFeat:     "New product functionality.",
-		commitmsg.TypeFix:      "A defect correction.",
-		commitmsg.TypeDocs:     "Documentation-only change.",
-		commitmsg.TypeRefactor: "Internal restructuring without a feature or fix.",
-		commitmsg.TypeTest:     "Test work.",
-		commitmsg.TypePerf:     "Measured performance improvement.",
-		commitmsg.TypeBuild:    "Build system or dependency change.",
-		commitmsg.TypeCI:       "Continuous-integration configuration.",
-		commitmsg.TypeStyle:    "Formatting with no semantic effect.",
-		commitmsg.TypeRevert:   "A deliberate revert with a commit reference.",
-		commitmsg.TypeChore:    "Maintenance or tooling work.",
-	}
-	for kind, want := range descriptions {
-		if got := commitTypeDescription(kind); got != want {
-			t.Fatalf("commitTypeDescription(%q) = %q, want %q", kind, got, want)
-		}
-	}
-	if got := commitTypeDescription(commitmsg.Type("unknown")); got != "Maintenance or tooling work." {
-		t.Fatalf("unknown commit type description = %q", got)
+	if prompt.inputRequests[0].Label != "Commit description" ||
+		!strings.Contains(prompt.inputRequests[0].Description, "ABC-123") ||
+		!strings.Contains(prompt.inputRequests[0].Description, "docs(ABC-123): <description>") {
+		t.Fatalf("commit description prompt = %#v", prompt.inputRequests[0])
 	}
 }
 

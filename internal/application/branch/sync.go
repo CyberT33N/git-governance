@@ -3,6 +3,7 @@ package branchapp
 import (
 	"context"
 
+	commitapp "github.com/CyberT33N/git-governance/internal/application/commit"
 	"github.com/CyberT33N/git-governance/internal/application/port"
 	"github.com/CyberT33N/git-governance/internal/domain/branch"
 	"github.com/CyberT33N/git-governance/internal/domain/commitmsg"
@@ -168,7 +169,7 @@ func (synchronizer *Synchronizer) Sync(ctx context.Context, request SyncRequest)
 			return result, nil
 		}
 		if err := synchronizer.git.Rebase(ctx, repository, base); err != nil {
-			return SyncResult{}, err
+			return SyncResult{}, synchronizer.classifyRebaseFailure(ctx, repository, base, err)
 		}
 		quality, err := synchronizer.validateAfterMutation(ctx, repository, request.Name)
 		if err != nil {
@@ -189,7 +190,7 @@ func (synchronizer *Synchronizer) Sync(ctx context.Context, request SyncRequest)
 			return result, nil
 		}
 		if err := synchronizer.git.Rebase(ctx, repository, base); err != nil {
-			return SyncResult{}, err
+			return SyncResult{}, synchronizer.classifyRebaseFailure(ctx, repository, base, err)
 		}
 		quality, err := synchronizer.validateAfterMutation(ctx, repository, request.Name)
 		if err != nil {
@@ -216,6 +217,9 @@ func (synchronizer *Synchronizer) Sync(ctx context.Context, request SyncRequest)
 			Remediation: "supply a validated merge message matching the branch ticket",
 		})
 	}
+	if err := commitapp.ValidateMessageForBranch(request.Name, *request.MergeMessage); err != nil {
+		return SyncResult{}, err
+	}
 	if request.DryRun {
 		result.RecommendedAction = "merge"
 		return result, nil
@@ -231,6 +235,90 @@ func (synchronizer *Synchronizer) Sync(ctx context.Context, request SyncRequest)
 	result.Mutated = true
 	result.RecommendedAction = "merged"
 	return result, nil
+}
+
+// ResumeRebaseRequest describes a previously interrupted policy-approved
+// rebase. It deliberately contains no mutation strategy: the only permitted
+// action is to continue the in-progress rebase after user conflict resolution.
+type ResumeRebaseRequest struct {
+	Repository      port.RepositoryIdentity
+	Name            branch.BranchName
+	Base            *branch.TargetBase
+	WorkflowManaged bool
+}
+
+// ResumeRebase continues a user-resolved rebase or verifies an externally
+// completed one, then reruns branch and quality validation before publication
+// can continue.
+func (synchronizer *Synchronizer) ResumeRebase(ctx context.Context, request ResumeRebaseRequest) (SyncResult, error) {
+	repository, err := normalizeRepository(request.Repository)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	if err := contextError(ctx); err != nil {
+		return SyncResult{}, err
+	}
+	if synchronizer.validator == nil {
+		return SyncResult{}, internalDependencyError("branch validator")
+	}
+	if synchronizer.git == nil {
+		return SyncResult{}, internalDependencyError("Git repository")
+	}
+	if _, err := synchronizer.validator.Validate(ctx, ValidateRequest{Repository: repository, Name: request.Name}); err != nil {
+		return SyncResult{}, err
+	}
+	if !request.Name.Family().IsOfficialWorkingBranch() {
+		return SyncResult{}, unsupportedSyncFamily(request.Name)
+	}
+
+	baseInput, err := synchronizer.workflowBase(ctx, repository, request.Name, request.Base)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	base, err := resolveSyncBase(request.Name, repository, baseInput, request.WorkflowManaged)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	publication, err := synchronizer.git.PublicationState(ctx, repository, request.Name)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	if publication != branch.PublicationUnpublished {
+		return SyncResult{}, rebaseAfterPublishForbidden(request.Name, base)
+	}
+
+	operation, active, err := synchronizer.git.ActiveOperation(ctx, repository)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	if active {
+		if operation != "rebase" {
+			return SyncResult{}, rebaseResumeUnavailable(operation)
+		}
+		if err := synchronizer.git.ContinueRebase(ctx, repository); err != nil {
+			return SyncResult{}, synchronizer.classifyRebaseFailure(ctx, repository, base, err)
+		}
+	}
+
+	missing, err := synchronizer.git.HasMissingBaseCommits(ctx, repository, base)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	if missing {
+		return SyncResult{}, rebaseConflict(base, nil)
+	}
+	quality, err := synchronizer.validateAfterMutation(ctx, repository, request.Name)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	return SyncResult{
+		Name:              request.Name,
+		Base:              base,
+		Publication:       publication,
+		Mutated:           true,
+		RecommendedAction: "rebased",
+		Quality:           &quality,
+	}, nil
 }
 
 // PrePushRequest describes the local governance data checked before a push.
@@ -407,6 +495,19 @@ func (synchronizer *Synchronizer) validateAfterMutation(
 	return synchronizer.runQuality(ctx, repository, name.Family())
 }
 
+func (synchronizer *Synchronizer) classifyRebaseFailure(
+	ctx context.Context,
+	repository port.RepositoryIdentity,
+	base branch.TargetBase,
+	cause error,
+) error {
+	operation, active, err := synchronizer.git.ActiveOperation(ctx, repository)
+	if err != nil || !active || operation != "rebase" {
+		return cause
+	}
+	return rebaseConflict(base, cause)
+}
+
 func recommendedAction(publication branch.PublicationState) string {
 	if publication == branch.PublicationUnpublished {
 		return "rebase"
@@ -462,6 +563,31 @@ func rebaseAfterPublishForbidden(name branch.BranchName, base branch.TargetBase)
 		Rule:        "published official branches are append-only and synchronize with an explicit merge",
 		Example:     "chore(ABC-123): merge " + base.String(),
 		Remediation: "use --strategy merge with a governed merge message",
+	})
+}
+
+func rebaseConflict(base branch.TargetBase, cause error) error {
+	return problem.Wrap(problem.Details{
+		Code:        problem.CodeRebaseConflict,
+		Category:    problem.CategoryGit,
+		Field:       "rebase",
+		Actual:      base.String(),
+		Expected:    "a completed rebase without unresolved conflicts",
+		Rule:        "the workflow pauses when Git requires the developer to resolve a rebase conflict",
+		Example:     "resolve conflicts, stage the resolutions, then select Retry",
+		Remediation: "resolve and stage every conflicting file, then select Retry to continue the existing rebase",
+	}, cause)
+}
+
+func rebaseResumeUnavailable(operation string) error {
+	return problem.New(problem.Details{
+		Code:        problem.CodeRebaseConflict,
+		Category:    problem.CategoryGit,
+		Field:       "Git operation state",
+		Actual:      operation,
+		Expected:    "an in-progress rebase",
+		Rule:        "a rebase retry can continue only the paused rebase created by this workflow",
+		Remediation: "complete or abort the active Git operation, then restart ticket publication",
 	})
 }
 

@@ -189,7 +189,80 @@ func (merger *ScratchMerger) Merge(ctx context.Context, request ScratchMergeRequ
 		return ScratchMergeResult{}, err
 	}
 	if err := merger.git.SquashMerge(ctx, repository, request.Source); err != nil {
+		conflicted, conflictErr := merger.git.HasUnmergedConflicts(ctx, repository)
+		if conflictErr != nil {
+			return ScratchMergeResult{}, conflictErr
+		}
+		if conflicted {
+			return ScratchMergeResult{}, scratchMergeConflict(request.Source, target, err)
+		}
 		return ScratchMergeResult{}, err
+	}
+	staged, err := merger.git.HasStagedChanges(ctx, repository)
+	if err != nil {
+		return ScratchMergeResult{}, err
+	}
+	if !staged {
+		return ScratchMergeResult{}, scratchMergeEmpty(request.Source, target)
+	}
+	if err := merger.git.Commit(ctx, repository, request.Message); err != nil {
+		return ScratchMergeResult{}, err
+	}
+	result.Committed = true
+	return result, nil
+}
+
+// Resume finishes a previously conflicted scratch squash transfer after the
+// user resolves and stages every conflicting file. It never runs a second
+// squash merge and therefore preserves the original workflow context.
+func (merger *ScratchMerger) Resume(ctx context.Context, request ScratchMergeRequest) (ScratchMergeResult, error) {
+	repository, err := normalizeRepository(request.Repository)
+	if err != nil {
+		return ScratchMergeResult{}, err
+	}
+	if err := contextError(ctx); err != nil {
+		return ScratchMergeResult{}, err
+	}
+	if merger == nil || merger.git == nil {
+		return ScratchMergeResult{}, internalDependencyError("Git repository")
+	}
+	if merger.validator == nil {
+		return ScratchMergeResult{}, internalDependencyError("branch validator")
+	}
+
+	target, err := merger.ResolveTarget(ctx, repository, request.Source, request.Target)
+	if err != nil {
+		return ScratchMergeResult{}, err
+	}
+	if err := ValidateScratchMergeMessage(target, request.Message); err != nil {
+		return ScratchMergeResult{}, err
+	}
+	if _, err := merger.validator.Validate(ctx, ValidateRequest{Repository: repository, Name: request.Source}); err != nil {
+		return ScratchMergeResult{}, err
+	}
+	if _, err := merger.validator.Validate(ctx, ValidateRequest{Repository: repository, Name: target}); err != nil {
+		return ScratchMergeResult{}, err
+	}
+
+	result := ScratchMergeResult{
+		Source:  request.Source,
+		Target:  target,
+		Message: request.Message,
+		DryRun:  request.DryRun,
+		Plan: []PlanStep{
+			{Action: "resolve-conflicts", Detail: "resolve and stage conflicts from " + request.Source.String()},
+			{Action: "commit", Detail: request.Message.Header().String()},
+		},
+	}
+	if request.DryRun {
+		return result, nil
+	}
+	conflicted, err := merger.git.HasUnmergedConflicts(ctx, repository)
+	if err != nil {
+		return ScratchMergeResult{}, err
+	}
+	if conflicted {
+		return ScratchMergeResult{}, scratchMergeConflict(request.Source, target, nil)
 	}
 	staged, err := merger.git.HasStagedChanges(ctx, repository)
 	if err != nil {
@@ -334,6 +407,19 @@ func scratchTargetAmbiguous(ticketID string, candidates []string) error {
 		Example:     "--target feature/" + ticketID + "-add-export",
 		Remediation: "supply --target with the intended local official branch",
 	})
+}
+
+func scratchMergeConflict(source, target branch.BranchName, cause error) error {
+	return problem.Wrap(problem.Details{
+		Code:        problem.CodeScratchMergeConflict,
+		Category:    problem.CategoryGit,
+		Field:       "scratch merge",
+		Actual:      source.String() + " into " + target.String(),
+		Expected:    "a squash merge without unresolved conflicts",
+		Rule:        "scratch publication pauses while Git requires manual conflict resolution",
+		Example:     "resolve conflicts, stage the resolutions, then select Retry",
+		Remediation: "resolve and stage every conflicting file, then select Retry to finish the existing squash transfer",
+	}, cause)
 }
 
 func scratchMergeEmpty(source, target branch.BranchName) error {

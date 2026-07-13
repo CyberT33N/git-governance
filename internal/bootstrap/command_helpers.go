@@ -171,29 +171,23 @@ func (application *application) resolveSlug(ctx context.Context, raw string, lab
 
 func (application *application) resolveScratchMergeMessage(
 	ctx context.Context,
-	raw string,
+	completeMessage string,
+	family string,
+	description string,
 	target branch.BranchName,
 ) (commitmsg.Message, error) {
-	targetTicket, _ := target.Ticket()
-	return resolveValidatedInput(
-		application,
-		ctx,
-		raw,
-		"Squash commit message",
-		"Enter the complete Conventional Commit message that will become one commit on "+
-			target.String()+". It must use ticket "+targetTicket.String()+
-			". Example: feat("+targetTicket.String()+"): add export button.",
-		func(value string) (commitmsg.Message, error) {
-			message, err := commitmsg.Parse(value)
-			if err != nil {
-				return commitmsg.Message{}, err
-			}
-			if err := branchapp.ValidateScratchMergeMessage(target, message); err != nil {
-				return commitmsg.Message{}, err
-			}
-			return message, nil
+	return application.resolveCommitMessage(ctx, commitMessageInput{
+		Branch:           target,
+		CompleteMessage:  completeMessage,
+		Family:           family,
+		Description:      description,
+		RequireFamily:    true,
+		DescriptionLabel: "Squash commit description",
+		Operation:        "the scratch squash transfer",
+		Validate: func(message commitmsg.Message) error {
+			return branchapp.ValidateScratchMergeMessage(target, message)
 		},
-	)
+	})
 }
 
 func (application *application) resolveFamily(ctx context.Context, raw string, includeSpecial bool) (branch.Family, error) {
