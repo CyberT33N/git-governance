@@ -1,0 +1,161 @@
+//go:build linux
+
+package github
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"os/exec"
+	"strings"
+)
+
+const (
+	linuxSecretServiceName   = "git-governance"
+	linuxSecretActiveAccount = "__git_governance_active__"
+	linuxSecretSessionLabel  = "git-governance GitHub App session"
+)
+
+type linuxSecretServiceStore struct {
+	runner linuxSecretToolRunner
+}
+
+type linuxSecretToolRunner interface {
+	run(context.Context, []byte, ...string) ([]byte, error)
+}
+
+type linuxSecretTool struct{}
+
+func newPlatformSessionStore() SessionStore {
+	return &linuxSecretServiceStore{runner: linuxSecretTool{}}
+}
+
+func (store *linuxSecretServiceStore) LoadActive(ctx context.Context, host string) (Session, error) {
+	if err := sessionStoreContextError(ctx); err != nil {
+		return Session{}, err
+	}
+	account, err := store.lookup(ctx, host, linuxSecretActiveAccount)
+	if err != nil {
+		return Session{}, err
+	}
+	encoded, err := store.lookup(ctx, host, strings.TrimSpace(string(account)))
+	if err != nil {
+		return Session{}, err
+	}
+	var session Session
+	if err := json.Unmarshal(encoded, &session); err != nil {
+		return Session{}, errors.New("Secret Service GitHub App session has an invalid format")
+	}
+	if err := validateStoredSession(session); err != nil {
+		return Session{}, err
+	}
+	return session, nil
+}
+
+func (store *linuxSecretServiceStore) SaveActive(ctx context.Context, session Session) error {
+	if err := sessionStoreContextError(ctx); err != nil {
+		return err
+	}
+	if err := validateStoredSession(session); err != nil {
+		return err
+	}
+	encoded, _ := json.Marshal(session)
+	if err := store.store(ctx, session.Host, session.Account, encoded); err != nil {
+		return err
+	}
+	return store.store(ctx, session.Host, linuxSecretActiveAccount, []byte(session.Account))
+}
+
+func (store *linuxSecretServiceStore) DeleteActive(ctx context.Context, host string) error {
+	if err := sessionStoreContextError(ctx); err != nil {
+		return err
+	}
+	account, err := store.lookup(ctx, host, linuxSecretActiveAccount)
+	if err != nil {
+		return err
+	}
+	if err := store.clear(ctx, host, strings.TrimSpace(string(account))); err != nil {
+		return err
+	}
+	return store.clear(ctx, host, linuxSecretActiveAccount)
+}
+
+func (store *linuxSecretServiceStore) lookup(ctx context.Context, host, account string) ([]byte, error) {
+	value, err := store.runner.run(
+		ctx,
+		nil,
+		"lookup",
+		"service",
+		linuxSecretServiceName,
+		"host",
+		linuxSecretHost(host),
+		"account",
+		account,
+	)
+	if errors.Is(err, errSessionStoreUnavailable) {
+		return nil, err
+	}
+	if err != nil || strings.TrimSpace(string(value)) == "" {
+		return nil, errSessionNotFound
+	}
+	return value, nil
+}
+
+func (store *linuxSecretServiceStore) store(ctx context.Context, host, account string, value []byte) error {
+	_, err := store.runner.run(
+		ctx,
+		value,
+		"store",
+		"--label="+linuxSecretSessionLabel,
+		"service",
+		linuxSecretServiceName,
+		"host",
+		linuxSecretHost(host),
+		"account",
+		account,
+	)
+	if err != nil {
+		return errors.New("Secret Service could not store the GitHub App session")
+	}
+	return nil
+}
+
+func (store *linuxSecretServiceStore) clear(ctx context.Context, host, account string) error {
+	_, err := store.runner.run(
+		ctx,
+		nil,
+		"clear",
+		"service",
+		linuxSecretServiceName,
+		"host",
+		linuxSecretHost(host),
+		"account",
+		account,
+	)
+	if err != nil {
+		return errors.New("Secret Service could not delete the GitHub App session")
+	}
+	return nil
+}
+
+func (linuxSecretTool) run(ctx context.Context, input []byte, arguments ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, "secret-tool", arguments...)
+	command.Stdin = bytes.NewReader(input)
+	output, err := command.Output()
+	if errors.Is(err, exec.ErrNotFound) {
+		return nil, errSessionStoreUnavailable
+	}
+	return output, err
+}
+
+func linuxSecretHost(host string) string {
+	return strings.ToLower(strings.TrimSpace(host))
+}
+
+func sessionStoreContextError(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Err()
+}

@@ -237,7 +237,7 @@ func pullRequestPublisherUnavailable() error {
 		Field:       "pull request publisher",
 		Expected:    "a configured hosting-provider adapter",
 		Rule:        "a real pull request can be created only through an explicit provider adapter",
-		Remediation: "set --pull-request-provider github and configure GIT_GOVERNANCE_GITHUB_TOKEN",
+		Remediation: "set --pull-request-provider github and complete auth login github or configure the managed credential broker",
 	})
 }
 

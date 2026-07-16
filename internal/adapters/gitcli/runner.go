@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"os/exec"
 )
 
@@ -21,15 +22,38 @@ type processRunner interface {
 	run(ctx context.Context, directory string, stdin io.Reader, arguments ...string) processResult
 }
 
+type environmentProcessRunner interface {
+	runWithEnvironment(
+		ctx context.Context,
+		directory string,
+		stdin io.Reader,
+		environment []string,
+		arguments ...string,
+	) processResult
+}
+
 type execRunner struct {
 	binary         string
 	maxOutputBytes int
 }
 
 func (runner execRunner) run(ctx context.Context, directory string, stdin io.Reader, arguments ...string) processResult {
+	return runner.runWithEnvironment(ctx, directory, stdin, nil, arguments...)
+}
+
+func (runner execRunner) runWithEnvironment(
+	ctx context.Context,
+	directory string,
+	stdin io.Reader,
+	environment []string,
+	arguments ...string,
+) processResult {
 	command := exec.CommandContext(ctx, runner.binary, arguments...)
 	command.Dir = directory
 	command.Stdin = stdin
+	if len(environment) > 0 {
+		command.Env = append(os.Environ(), environment...)
+	}
 
 	stdout := newBoundedBuffer(runner.maxOutputBytes)
 	stderr := newBoundedBuffer(runner.maxOutputBytes)

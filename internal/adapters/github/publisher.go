@@ -21,10 +21,10 @@ const (
 	maxResponseBytes  = 1 << 20
 )
 
-// Options configures a GitHub REST publisher. Token must be supplied from
-// external configuration; it is intentionally never accepted as a CLI flag.
+// Options configures a GitHub REST publisher. Resolver obtains short-lived
+// GitHub App user-access tokens immediately before API calls.
 type Options struct {
-	Token      string
+	Resolver   CredentialResolver
 	APIBaseURL string
 	APIVersion string
 	Timeout    time.Duration
@@ -34,16 +34,18 @@ type Options struct {
 // Publisher creates or returns an existing GitHub pull request for a
 // provider-neutral application intent.
 type Publisher struct {
-	token      string
-	apiBaseURL string
-	apiVersion string
-	client     *http.Client
+	resolver      CredentialResolver
+	apiBaseURL    string
+	deriveAPIBase bool
+	apiVersion    string
+	client        *http.Client
 }
 
 // New constructs a GitHub pull-request publisher. Configuration is validated
 // on publication so unrelated CLI commands do not require GitHub credentials.
 func New(options Options) *Publisher {
 	apiBaseURL := options.APIBaseURL
+	deriveAPIBase := apiBaseURL == ""
 	if apiBaseURL == "" {
 		apiBaseURL = defaultAPIBaseURL
 	}
@@ -60,10 +62,11 @@ func New(options Options) *Publisher {
 		client = &http.Client{Timeout: timeout}
 	}
 	return &Publisher{
-		token:      options.Token,
-		apiBaseURL: apiBaseURL,
-		apiVersion: apiVersion,
-		client:     client,
+		resolver:      options.Resolver,
+		apiBaseURL:    apiBaseURL,
+		deriveAPIBase: deriveAPIBase,
+		apiVersion:    apiVersion,
+		client:        client,
 	}
 }
 
@@ -85,10 +88,18 @@ func (publisher *Publisher) Publish(
 	return publisher.createPullRequest(ctx, apiBase, repository, publication.PullRequest)
 }
 
-// Validate verifies adapter configuration and remote routing without calling
-// the hosting API. It is used before a requested publication pushes Git state.
-func (publisher *Publisher) Validate(_ context.Context, publication port.PullRequestPublication) error {
-	_, _, err := publisher.publicationTarget(publication)
+// Validate verifies adapter routing, credentials, and exact repository
+// authorization before a requested publication pushes Git state.
+func (publisher *Publisher) Validate(ctx context.Context, publication port.PullRequestPublication) error {
+	return publisher.validate(ctx, publication)
+}
+
+func (publisher *Publisher) validate(ctx context.Context, publication port.PullRequestPublication) error {
+	_, repository, err := publisher.publicationTarget(publication)
+	if err != nil {
+		return err
+	}
+	_, err = publisher.resolveCredential(ctx, repository)
 	return err
 }
 
@@ -102,11 +113,11 @@ func (publisher *Publisher) publicationTarget(
 			"configure --pull-request-provider github before requesting pull-request creation",
 		)
 	}
-	if strings.TrimSpace(publisher.token) == "" {
+	if publisher.resolver == nil {
 		return nil, repositoryRef{}, configurationProblem(
-			"GitHub token",
-			"a non-empty GIT_GOVERNANCE_GITHUB_TOKEN environment variable",
-			"set a fine-grained GitHub token with pull request write permission outside the command line",
+			"GitHub App session",
+			"a configured GitHub App credential resolver",
+			"run auth login github in an interactive terminal before requesting pull-request creation",
 		)
 	}
 	if publication.PullRequest.Source.IsZero() || publication.PullRequest.Target.IsZero() ||
@@ -117,11 +128,15 @@ func (publisher *Publisher) publicationTarget(
 			"publish only a fully prepared provider-neutral pull-request intent",
 		)
 	}
-	apiBase, err := parseAPIBaseURL(publisher.apiBaseURL)
+	repository, err := parseRepositoryRemote(publication.RemoteURL)
 	if err != nil {
 		return nil, repositoryRef{}, err
 	}
-	repository, err := parseRepositoryRemote(publication.RemoteURL)
+	apiBaseURL := publisher.apiBaseURL
+	if publisher.deriveAPIBase {
+		apiBaseURL = apiBaseURLForGitHost(repository.host)
+	}
+	apiBase, err := parseAPIBaseURL(apiBaseURL)
 	if err != nil {
 		return nil, repositoryRef{}, err
 	}
@@ -129,7 +144,7 @@ func (publisher *Publisher) publicationTarget(
 		return nil, repositoryRef{}, configurationProblem(
 			"GitHub remote",
 			"a remote hosted by "+expectedGitHost(apiBase.Hostname()),
-			"select a GitHub remote that matches GIT_GOVERNANCE_GITHUB_API_URL",
+			"select a remote hosted by the configured GitHub App host",
 		)
 	}
 	return apiBase, repository, nil
@@ -164,7 +179,7 @@ func (publisher *Publisher) findOpenPullRequest(
 	query.Set("base", request.Target.String())
 	endpoint := repositoryEndpoint(apiBase, repository, "pulls", query)
 
-	response, err := publisher.request(ctx, http.MethodGet, endpoint, nil)
+	response, err := publisher.request(ctx, repository, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", false, err
 	}
@@ -199,7 +214,7 @@ func (publisher *Publisher) createPullRequest(
 		Draft: request.Draft,
 	})
 	endpoint := repositoryEndpoint(apiBase, repository, "pulls", nil)
-	response, err := publisher.request(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	response, err := publisher.request(ctx, repository, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return port.PublishedPullRequest{}, err
 	}
@@ -220,10 +235,15 @@ func (publisher *Publisher) createPullRequest(
 
 func (publisher *Publisher) request(
 	ctx context.Context,
+	repository repositoryRef,
 	method string,
 	endpoint *url.URL,
 	body io.Reader,
 ) (*http.Response, error) {
+	token, err := publisher.resolveCredential(ctx, repository)
+	if err != nil {
+		return nil, err
+	}
 	request, err := http.NewRequestWithContext(ctx, method, endpoint.String(), body)
 	if err != nil {
 		return nil, problem.Wrap(problem.Details{
@@ -232,11 +252,11 @@ func (publisher *Publisher) request(
 			Field:       "GitHub API URL",
 			Expected:    "a valid HTTPS API endpoint",
 			Rule:        "GitHub API requests must use a valid configured endpoint",
-			Remediation: "set GIT_GOVERNANCE_GITHUB_API_URL to a valid HTTPS URL",
+			Remediation: "repair the GitHub App API endpoint configuration",
 		}, err)
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
-	request.Header.Set("Authorization", "Bearer "+publisher.token)
+	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("X-GitHub-Api-Version", publisher.apiVersion)
 	request.Header.Set("User-Agent", "git-governance")
 	if body != nil {
@@ -250,10 +270,25 @@ func (publisher *Publisher) request(
 			Field:       "GitHub pull request",
 			Expected:    "a reachable GitHub API endpoint",
 			Rule:        "pull-request publication must complete through the configured hosting adapter",
-			Remediation: "check network access, GitHub credentials, and the configured API URL",
+			Remediation: "check network access, GitHub App authorization, and the selected repository",
 		}, err)
 	}
 	return response, nil
+}
+
+func (publisher *Publisher) resolveCredential(ctx context.Context, repository repositoryRef) (string, error) {
+	if publisher == nil || publisher.resolver == nil {
+		return "", configurationProblem(
+			"GitHub App session",
+			"a configured GitHub App credential resolver",
+			"run auth login github in an interactive terminal before requesting pull-request creation",
+		)
+	}
+	return publisher.resolver.Resolve(ctx, CredentialTarget{
+		Host:       repository.host,
+		Owner:      repository.owner,
+		Repository: repository.name,
+	})
 }
 
 func parseAPIBaseURL(raw string) (*url.URL, error) {
@@ -263,7 +298,7 @@ func parseAPIBaseURL(raw string) (*url.URL, error) {
 		return nil, configurationProblem(
 			"GitHub API URL",
 			"an HTTPS URL without credentials, query, or fragment",
-			"set GIT_GOVERNANCE_GITHUB_API_URL to https://api.github.com or the GitHub Enterprise API root",
+			"use the GitHub App API endpoint for the selected host",
 		)
 	}
 	return parsed, nil
@@ -340,6 +375,13 @@ func expectedGitHost(apiHost string) string {
 		return "github.com"
 	}
 	return apiHost
+}
+
+func apiBaseURLForGitHost(host string) string {
+	if sameHost(host, defaultGitHubHost) {
+		return defaultAPIBaseURL
+	}
+	return "https://" + strings.TrimSpace(host) + "/api/v3"
 }
 
 func sameHost(left, right string) bool {

@@ -8,10 +8,18 @@ git governance completion powershell > git-governance.ps1
 
 Generate scripts for `bash`, `zsh`, `fish`, or `powershell`.
 
-`doctor` is read-only. It reports the Git version, repository and history
-state, selected remote availability, active rebase/merge/cherry-pick state,
-Lefthook binary/configuration status, local policy mode, and user
-configuration status.
+`doctor` is read-only with respect to Git refs and the worktree. It reports the
+Git version, repository and history state, selected remote availability, active
+rebase/merge/cherry-pick state, Git transport authentication, Lefthook
+binary/configuration status, local policy mode, and user configuration status.
+
+The Git authentication check performs a non-interactive
+`git push --dry-run --no-verify --porcelain` for the current branch and
+selected remote. It disables terminal prompts and skips hooks, validates real push authorization rather than
+anonymous public read access, and never updates a remote ref. A missing,
+expired, or unauthorized Git transport credential makes `doctor` return a
+classified error. GitHub App API authentication remains separate; inspect it
+with `auth status github` and see [GitHub App authentication](authentication.md).
 
 ## Errors and exit codes
 

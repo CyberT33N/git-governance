@@ -3,6 +3,7 @@
 - [Overview](overview.md)
 - [Getting started](getting-started.md)
 - [CLI usage guide](usage/index.md)
+- [GitHub App authentication](usage/authentication.md)
 - [Development verification](development/verification.md)
 - [Architecture decision record](architecture/ADR-0001-GO-CLI-ZIELARCHITEKTUR.md)
 - [CLI contract](specification/CLI-VERTRAG.md)

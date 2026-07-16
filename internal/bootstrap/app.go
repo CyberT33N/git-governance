@@ -91,6 +91,7 @@ func NewWithRuntime(build BuildInfo, runtime Runtime) *cobra.Command {
 		newCommitCommand(application),
 		newWorkflowCommand(application),
 		newValidateCommand(application),
+		newAuthCommand(application),
 		newConfigCommand(application),
 		newPolicyCommand(application),
 		newDoctorCommand(application),

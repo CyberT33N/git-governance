@@ -29,6 +29,12 @@ const (
 	maxDiagnosticBytes     = 4096
 )
 
+var noPromptGitEnvironment = []string{
+	"GIT_TERMINAL_PROMPT=0",
+	"GCM_INTERACTIVE=Never",
+	"SSH_ASKPASS_REQUIRE=never",
+}
+
 var (
 	urlCredentialsPattern   = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/\s@]+@`)
 	secretAssignmentPattern = regexp.MustCompile(`(?i)\b(token|password|secret|authorization)=\S+`)
@@ -138,6 +144,46 @@ func (repository *Repository) RemoteURL(ctx context.Context, identity port.Repos
 		})
 	}
 	return url, nil
+}
+
+// CheckTransportAuthentication verifies that the selected Git transport can
+// authenticate and authorize a dry-run update of the currently checked-out
+// branch. Git does not mutate refs for --dry-run, and the command disables
+// terminal prompts so doctor remains non-interactive.
+func (repository *Repository) CheckTransportAuthentication(
+	ctx context.Context,
+	identity port.RepositoryIdentity,
+) error {
+	current := repository.invokeNoPrompt(ctx, identity.Root, nil, "branch", "--show-current")
+	if current.err != nil {
+		return repository.gitAuthenticationProblem(identity, "identify the checked-out branch", current)
+	}
+	branchName := strings.TrimSpace(current.stdout)
+	if branchName == "" {
+		return problem.New(problem.Details{
+			Code:        problem.CodeGitCommandFailed,
+			Category:    problem.CategoryGit,
+			Field:       "Git authentication",
+			Expected:    "a checked-out branch for a dry-run authenticated push",
+			Rule:        "doctor verifies Git transport authentication without mutating remote references",
+			Remediation: "check out a branch, authenticate Git transport, and retry doctor",
+		})
+	}
+	result := repository.invokeNoPrompt(
+		ctx,
+		identity.Root,
+		nil,
+		"push",
+		"--dry-run",
+		"--no-verify",
+		"--porcelain",
+		identity.Remote,
+		"HEAD:refs/heads/"+branchName,
+	)
+	if result.err != nil {
+		return repository.gitAuthenticationProblem(identity, "perform an authenticated dry-run push", result)
+	}
+	return nil
 }
 
 // ActiveOperation reports an in-progress rebase, merge, or cherry-pick without
@@ -735,6 +781,40 @@ func (repository *Repository) invoke(ctx context.Context, directory string, stdi
 	return repository.runner.run(contextWithTimeout, directory, stdin, arguments...)
 }
 
+func (repository *Repository) invokeNoPrompt(ctx context.Context, directory string, stdin io.Reader, arguments ...string) processResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	contextWithTimeout, cancel := context.WithTimeout(ctx, repository.timeout)
+	defer cancel()
+	if runner, ok := repository.runner.(environmentProcessRunner); ok {
+		return runner.runWithEnvironment(contextWithTimeout, directory, stdin, noPromptGitEnvironment, arguments...)
+	}
+	return repository.runner.run(contextWithTimeout, directory, stdin, arguments...)
+}
+
+func (repository *Repository) gitAuthenticationProblem(
+	identity port.RepositoryIdentity,
+	action string,
+	result processResult,
+) error {
+	code := problem.CodeGitCommandFailed
+	category := problem.CategoryGit
+	if result.err != nil && isContextError(result.err) {
+		code = problem.CodeExternalCommandFailed
+		category = problem.CategoryExternal
+	}
+	return problem.Wrap(problem.Details{
+		Code:        code,
+		Category:    category,
+		Field:       "Git authentication",
+		Context:     strings.Join(commandSummary(identity, action), " "),
+		Expected:    "a non-interactive credential capable of an authenticated dry-run push",
+		Rule:        "doctor verifies Git transport authentication without mutating remote references",
+		Remediation: "authenticate Git transport with SSH or Git Credential Manager and retry doctor",
+	}, commandCause(result))
+}
+
 func (repository *Repository) commandProblem(code problem.Code, identity port.RepositoryIdentity, action string, result processResult) error {
 	category := problem.CategoryGit
 	if code == problem.CodeBranchPublicationUnknown || code == problem.CodeBranchBaseInvalid {
@@ -936,3 +1016,4 @@ func parseWorkflowBase(remote, raw string) (branch.TargetBase, error) {
 }
 
 var _ port.GitRepository = (*Repository)(nil)
+var _ port.GitTransportAuthenticator = (*Repository)(nil)

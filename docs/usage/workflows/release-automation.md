@@ -31,4 +31,6 @@ git governance --interactive never --output json --yes workflow release support 
 
 For an actual GitHub PR during stabilization, promotion, or backmerge, add
 `--pull-request-provider github --create-pull-request`. Stabilization also
-requires `--push`; promotion and backmerge do not.
+requires `--push`; promotion and backmerge do not. Automation must use a
+managed credential broker; it never starts a browser login. See
+[GitHub App authentication](../authentication.md).

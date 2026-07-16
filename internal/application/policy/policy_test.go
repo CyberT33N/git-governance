@@ -46,6 +46,7 @@ type doctorGit struct {
 	activeName  string
 	active      bool
 	activeErr   error
+	authErr     error
 }
 
 type doctorTools struct {
@@ -117,6 +118,10 @@ func (git doctorGit) RemoteURL(context.Context, port.RepositoryIdentity) (string
 
 func (git doctorGit) ActiveOperation(context.Context, port.RepositoryIdentity) (string, bool, error) {
 	return git.activeName, git.active, git.activeErr
+}
+
+func (git doctorGit) CheckTransportAuthentication(context.Context, port.RepositoryIdentity) error {
+	return git.authErr
 }
 
 func (git doctorGit) HasCommits(context.Context, port.RepositoryIdentity) (bool, error) {
@@ -386,7 +391,7 @@ func TestDoctorIsReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Repository.Root != "C:/repo" || len(result.Checks) != 10 {
+	if result.Repository.Root != "C:/repo" || len(result.Checks) != 11 {
 		t.Fatalf("Doctor.Run() = %#v", result)
 	}
 	for _, check := range result.Checks {
@@ -423,7 +428,7 @@ func TestDoctorWhiteboxDiagnostics(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(result.Checks) != 6 {
+		if len(result.Checks) != 7 {
 			t.Fatalf("minimal doctor checks = %#v", result.Checks)
 		}
 		for _, check := range result.Checks {
@@ -446,6 +451,7 @@ func TestDoctorWhiteboxDiagnostics(t *testing.T) {
 				commits:    false,
 				remoteErr:  errors.New("remote missing"),
 				activeErr:  errors.New("operation unknown"),
+				authErr:    errors.New("authentication missing"),
 			},
 			store,
 			doctorPolicy{err: errors.New("policy unavailable")},
@@ -454,7 +460,7 @@ func TestDoctorWhiteboxDiagnostics(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if result.Repository.Root == "" || len(result.Checks) != 10 {
+		if result.Repository.Root == "" || len(result.Checks) != 11 {
 			t.Fatalf("doctor failure result = %#v", result)
 		}
 		for _, name := range []string{
@@ -462,6 +468,7 @@ func TestDoctorWhiteboxDiagnostics(t *testing.T) {
 			"repository history",
 			"selected remote",
 			"Git operation state",
+			"Git authentication",
 			"runtime platform",
 			"Lefthook executable",
 			"Lefthook configuration",
@@ -502,11 +509,61 @@ func TestDoctorWhiteboxDiagnostics(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(result.Checks) != 10 {
+		if len(result.Checks) != 11 {
 			t.Fatalf("doctor checks = %#v", result.Checks)
 		}
-		if result.Checks[4].OK || result.Checks[5].OK || result.Checks[7].OK {
+		if checkByName(t, result.Checks, "Git operation state").OK ||
+			checkByName(t, result.Checks, "runtime platform").OK ||
+			checkByName(t, result.Checks, "Lefthook configuration").OK {
 			t.Fatalf("expected active operation/platform/configuration failures: %#v", result.Checks)
+		}
+	})
+
+	t.Run("Git authentication is required and fails closed", func(t *testing.T) {
+		authErr := errors.New("Git credentials unavailable")
+		result, err := NewDoctorServiceWithDependencies(
+			doctorGit{commits: true, authErr: authErr},
+			&memoryStore{preferences: port.Preferences{SchemaVersion: schemaVersion}},
+			nil,
+			nil,
+		).Run(context.Background(), "C:/repo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		check := checkByName(t, result.Checks, "Git authentication")
+		if check.OK || !errors.Is(result.AuthenticationError(), authErr) {
+			t.Fatalf("authentication check = %#v, error = %v", check, result.AuthenticationError())
+		}
+
+		withoutInspector := doctorGitWithoutAuth{GitRepository: doctorGit{commits: true}}
+		result, err = NewDoctorServiceWithDependencies(
+			withoutInspector,
+			&memoryStore{preferences: port.Preferences{SchemaVersion: schemaVersion}},
+			nil,
+			nil,
+		).Run(context.Background(), "C:/repo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		check = checkByName(t, result.Checks, "Git authentication")
+		if check.OK || result.AuthenticationError() == nil {
+			t.Fatalf("missing-inspector authentication check = %#v, error = %v", check, result.AuthenticationError())
+		}
+	})
+
+	t.Run("uses the explicitly selected remote for Git authentication", func(t *testing.T) {
+		git := &remoteDoctorGit{doctorGit: doctorGit{commits: true}}
+		result, err := NewDoctorServiceWithDependencies(
+			git,
+			&memoryStore{preferences: port.Preferences{SchemaVersion: schemaVersion}},
+			nil,
+			nil,
+		).RunForRemote(context.Background(), "C:/repo", "upstream")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Repository.Remote != "upstream" || git.authenticatedRemote != "upstream" {
+			t.Fatalf("selected remote = result %#v, Git remote %q", result.Repository, git.authenticatedRemote)
 		}
 	})
 
@@ -525,6 +582,20 @@ func TestDoctorWhiteboxDiagnostics(t *testing.T) {
 			t.Fatalf("absent detail = %q", got)
 		}
 	})
+}
+
+type doctorGitWithoutAuth struct {
+	port.GitRepository
+}
+
+type remoteDoctorGit struct {
+	doctorGit
+	authenticatedRemote string
+}
+
+func (git *remoteDoctorGit) CheckTransportAuthentication(_ context.Context, repository port.RepositoryIdentity) error {
+	git.authenticatedRemote = repository.Remote
+	return git.authErr
 }
 
 func checkByName(t *testing.T, checks []Check, name string) Check {
@@ -562,5 +633,6 @@ func assertProblemCode(t *testing.T, err error, expected problem.Code) {
 }
 
 var _ port.GitRepository = doctorGit{}
+var _ port.GitTransportAuthenticator = doctorGit{}
 var _ port.PreferencesStore = (*memoryStore)(nil)
 var _ port.ToolInspector = doctorTools{}

@@ -274,8 +274,15 @@ func newDoctorCommand(application *application) *cobra.Command {
 		Use:   "doctor",
 		Short: "Run read-only local diagnostics",
 		RunE: func(command *cobra.Command, _ []string) error {
-			result, err := application.services().doctor.Run(command.Context(), application.options.repository)
+			result, err := application.services().doctor.RunForRemote(
+				command.Context(),
+				application.options.repository,
+				application.options.remote,
+			)
 			if err != nil {
+				return err
+			}
+			if err := result.AuthenticationError(); err != nil {
 				return err
 			}
 			fields := make(map[string]string, len(result.Checks))

@@ -70,6 +70,13 @@ type GitRepository interface {
 	) (PushUpdateInspection, error)
 }
 
+// GitTransportAuthenticator is an optional diagnostic capability. It verifies
+// that the configured Git transport can perform a non-interactive dry-run push
+// without mutating remote references.
+type GitTransportAuthenticator interface {
+	CheckTransportAuthentication(context.Context, RepositoryIdentity) error
+}
+
 // CherryPickContinuator is consumed only by workflows that must resume a
 // user-resolved cherry-pick. Keeping it separate avoids forcing unrelated Git
 // adapters and test fakes to implement a mutation they never invoke.
