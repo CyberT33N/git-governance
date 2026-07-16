@@ -83,7 +83,7 @@ func TestDPAPISessionStoreHandlesCorruptionCancellationAndHelpers(t *testing.T) 
 	if err := store.DeleteActive(ctx, "github.com"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled DeleteActive() error = %v", err)
 	}
-	if contextFailure(nil) != nil || contextFailure(context.Background()) != nil {
+	if contextFailure(testNilContext()) != nil || contextFailure(context.Background()) != nil {
 		t.Fatal("context helper reported an active context as failed")
 	}
 

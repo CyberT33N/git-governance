@@ -13,6 +13,8 @@ import (
 
 const macOSKeychainActiveAccount = "__git_governance_active__"
 
+var errSessionStoreUnavailable = errors.New("native GitHub App secret store is unavailable")
+
 type macOSKeychainStore struct {
 	runner macOSKeychainRunner
 }

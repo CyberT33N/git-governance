@@ -537,7 +537,7 @@ func TestAuthServiceClassifiesOAuthAndContextFailures(t *testing.T) {
 	} {
 		assertAuthProblem(t, call(), problem.CodeOperationCancelled)
 	}
-	_, err := service.Status(nil)
+	_, err := service.Status(testNilContext())
 	assertAuthProblem(t, err, problem.CodeInvalidInput)
 
 	t.Run("callback error is preserved", func(t *testing.T) {
@@ -964,7 +964,7 @@ func TestAuthServiceWhiteboxFailurePaths(t *testing.T) {
 		service.apiBaseURL = defaultAPIBaseURL
 		err = service.githubAPIRequest(context.Background(), "\n", "/user", "token", &userResponse{})
 		assertAuthProblem(t, err, problem.CodeConfigurationInvalid)
-		err = service.oauthFormRequest(nil, "/login/device/code", url.Values{}, &deviceCodeResponse{})
+		err = service.oauthFormRequest(testNilContext(), "/login/device/code", url.Values{}, &deviceCodeResponse{})
 		assertAuthProblem(t, err, problem.CodeConfigurationInvalid)
 		service.oauthBaseURL = "http://invalid"
 		_, err = service.pollForTokens(context.Background(), "client", DeviceAuthorization{
@@ -1020,6 +1020,10 @@ func testStoredSession(host, account string) Session {
 		RefreshToken:          "ghr-test-refresh-token-" + account,
 		RefreshTokenExpiresAt: time.Date(2026, time.December, 31, 23, 59, 59, 0, time.UTC),
 	}
+}
+
+func testNilContext() context.Context {
+	return nil
 }
 
 func newTestAuthService(t *testing.T, options AuthOptions) *AuthService {

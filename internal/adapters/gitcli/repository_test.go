@@ -299,7 +299,7 @@ func TestCheckTransportAuthenticationUsesNonInteractiveDryRunPush(t *testing.T) 
 func TestInvokeNoPromptUsesBackgroundForNilContext(t *testing.T) {
 	runner := &fakeRunner{results: []processResult{{stdout: "ok"}}}
 	repository := &Repository{runner: runner, timeout: time.Second}
-	result := repository.invokeNoPrompt(nil, "C:/repo", nil, "--version")
+	result := repository.invokeNoPrompt(testNilContext(), "C:/repo", nil, "--version")
 	if result.stdout != "ok" || len(runner.calls) != 1 {
 		t.Fatalf("invokeNoPrompt() = %#v, calls=%#v", result, runner.calls)
 	}
