@@ -111,7 +111,7 @@ does not rely on any external governance repository or unpublished rule set.
 | Bounded fuzzing | VERIFIED | ticket, branch, commit, and configuration targets passed |
 | Race detection | VERIFIED | `CGO_ENABLED=1 go test -race ./...` passed locally with GCC 16.1.0 |
 | Vulnerability scan | VERIFIED | `govulncheck` v1.5.0 reported no vulnerabilities |
-| Windows amd64 native smoke | VERIFIED | version, policy, branch catalog, and doctor commands passed |
+| Windows amd64 native smoke | VERIFIED | version, policy, and branch-catalog commands passed; `doctor` is intentionally excluded because detached CI checkouts have no branch-bound Git credential |
 | Windows/macOS/Linux cross-builds | VERIFIED | all six promised OS/architecture binaries compiled with `CGO_ENABLED=0` |
 | Native primary-OS full-quality matrix | IMPLEMENTED | CI runs `cmd/build` natively on Linux, macOS, and Windows; each OS independently enforces lint, tests, uncached 100%-coverage, race, fuzz, and security gates |
 | Native ARM64 smoke tests | IMPLEMENTED | CI matrix contains Ubuntu ARM64, Windows ARM64, and macOS ARM64 runners; remote execution requires the first push |
