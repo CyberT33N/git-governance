@@ -253,12 +253,12 @@ func TestTicketPublishCompletionInteractionPaths(t *testing.T) {
 
 	t.Run("ignores nil and dry-run results", func(t *testing.T) {
 		application := newBranchCommandApplication(newBranchCommandGit(t, name.String()), nil, nil, "human")
-		if err := application.completeTicketPublishInteraction(context.Background(), services{}, port.RepositoryIdentity{}, nil, true); err != nil {
+		if err := application.completeTicketPublishInteraction(context.Background(), services{}, port.RepositoryIdentity{}, nil, true, false, false); err != nil {
 			t.Fatal(err)
 		}
 		dry := newResult()
 		dry.DryRun = true
-		if err := application.completeTicketPublishInteraction(context.Background(), services{}, port.RepositoryIdentity{}, &dry, true); err != nil {
+		if err := application.completeTicketPublishInteraction(context.Background(), services{}, port.RepositoryIdentity{}, &dry, true, false, false); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -269,7 +269,7 @@ func TestTicketPublishCompletionInteractionPaths(t *testing.T) {
 		}
 		application := newBranchCommandApplication(newBranchCommandGit(t, name.String()), nil, prompt, "human")
 		result := newResult()
-		if err := application.completeTicketPublishInteraction(context.Background(), services{}, port.RepositoryIdentity{}, &result, false); err != nil {
+		if err := application.completeTicketPublishInteraction(context.Background(), services{}, port.RepositoryIdentity{}, &result, false, false, false); err != nil {
 			t.Fatal(err)
 		}
 		if result.Pushed {
@@ -282,7 +282,7 @@ func TestTicketPublishCompletionInteractionPaths(t *testing.T) {
 		}
 		application = newBranchCommandApplication(newBranchCommandGit(t, name.String()), nil, prompt, "human")
 		result = newResult()
-		err := application.completeTicketPublishInteraction(context.Background(), services{}, port.RepositoryIdentity{}, &result, false)
+		err := application.completeTicketPublishInteraction(context.Background(), services{}, port.RepositoryIdentity{}, &result, false, false, false)
 		if !errors.Is(err, promptErr) {
 			t.Fatalf("push confirmation error = %v, want %v", err, promptErr)
 		}
@@ -300,6 +300,8 @@ func TestTicketPublishCompletionInteractionPaths(t *testing.T) {
 			application.services(),
 			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
 			&result,
+			false,
+			false,
 			false,
 		); err != nil {
 			t.Fatal(err)
@@ -322,6 +324,8 @@ func TestTicketPublishCompletionInteractionPaths(t *testing.T) {
 			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
 			&result,
 			false,
+			false,
+			false,
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -342,6 +346,8 @@ func TestTicketPublishCompletionInteractionPaths(t *testing.T) {
 			application.services(),
 			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
 			&result,
+			false,
+			false,
 			false,
 		); err != nil {
 			t.Fatal(err)
@@ -366,6 +372,8 @@ func TestTicketPublishCompletionInteractionPaths(t *testing.T) {
 			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
 			&result,
 			false,
+			false,
+			false,
 		)
 		if !errors.Is(err, publishErr) {
 			t.Fatalf("publisher failure = %v, want %v", err, publishErr)
@@ -387,6 +395,8 @@ func TestTicketPublishCompletionInteractionPaths(t *testing.T) {
 			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
 			&result,
 			false,
+			false,
+			false,
 		)
 		if !errors.Is(err, pushErr) {
 			t.Fatalf("push failure = %v, want %v", err, pushErr)
@@ -406,11 +416,158 @@ func TestTicketPublishCompletionInteractionPaths(t *testing.T) {
 			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
 			&result,
 			false,
+			false,
+			false,
 		)
 		if !errors.Is(err, confirmationErr) {
 			t.Fatalf("pull request confirmation failure = %v, want %v", err, confirmationErr)
 		}
 	})
+}
+
+func TestPullRequestPublicationSilentContracts(t *testing.T) {
+	name := ticketPublishTestBranch(t)
+	base := ticketPublishTestBase(t)
+	request := port.PullRequest{
+		Source: name,
+		Target: mustTicketPublishBranch(t, "develop"),
+		Title:  "ABC-123: add export",
+	}
+	newResult := func() workflow.PublishTicketResult {
+		return workflow.PublishTicketResult{
+			Branch: name,
+			Sync: branchapp.SyncResult{
+				Name: name,
+				Base: base,
+			},
+			PullRequest: request,
+		}
+	}
+
+	t.Run("preflights explicit provider publication", func(t *testing.T) {
+		application := newBranchCommandApplication(newBranchCommandGit(t, name.String()), nil, nil, "human")
+		if err := application.validatePullRequestPublication(application.services(), false, true); err == nil {
+			t.Fatal("provider publication without a push unexpectedly succeeded")
+		}
+		if err := application.validatePullRequestPublication(application.services(), true, true); err == nil {
+			t.Fatal("provider publication without an adapter unexpectedly succeeded")
+		}
+		application.options.dryRun = true
+		if err := application.validatePullRequestPublication(application.services(), true, true); err != nil {
+			t.Fatalf("dry-run provider plan failed: %v", err)
+		}
+	})
+
+	t.Run("requires explicit confirmation outside an interactive terminal", func(t *testing.T) {
+		application := newBranchCommandApplication(newBranchCommandGit(t, name.String()), nil, nil, "human")
+		application.runtime.Publisher = &workflowRecordingPublisher{}
+		_, err := application.resolvePullRequestPublication(context.Background(), application.services(), request, true)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+	})
+
+	t.Run("publishes silently only with --yes and explicit request", func(t *testing.T) {
+		git := newBranchCommandGit(t, name.String())
+		publisher := &workflowRecordingPublisher{result: port.PublishedPullRequest{URL: "https://example.invalid/pr/silent"}}
+		application := newBranchCommandApplication(git, nil, nil, "human")
+		application.options.yes = true
+		application.runtime.Publisher = publisher
+		result := newResult()
+
+		if err := application.completeTicketPublishInteraction(
+			context.Background(),
+			application.services(),
+			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
+			&result,
+			true,
+			true,
+			false,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if !result.Pushed || result.PublishedURL != "https://example.invalid/pr/silent" || publisher.calls != 1 {
+			t.Fatalf("silent publication = %#v, publisher=%#v", result, publisher)
+		}
+	})
+
+	t.Run("reports an unavailable adapter only for an explicit request", func(t *testing.T) {
+		application := newBranchCommandApplication(newBranchCommandGit(t, name.String()), nil, nil, "human")
+		published, err := application.resolvePullRequestPublication(context.Background(), application.services(), request, false)
+		if err != nil || published {
+			t.Fatalf("intent-only publication = (%t, %v)", published, err)
+		}
+		_, err = application.resolvePullRequestPublication(context.Background(), application.services(), request, true)
+		assertProblemCode(t, err, problem.CodeExternalCommandFailed)
+		assertProblemCode(t, pullRequestPublisherUnavailable(), problem.CodeExternalCommandFailed)
+		assertProblemCode(t, pullRequestConfirmationRequired(), problem.CodeInvalidInput)
+	})
+
+	t.Run("preflights an interactively selected pull request before publication", func(t *testing.T) {
+		preflightErr := errors.New("provider configuration is invalid")
+		prompt := &commandHelperPrompt{
+			confirms: []commandHelperConfirmReply{{value: true}, {value: true}},
+		}
+		application := newBranchCommandApplication(newBranchCommandGit(t, name.String()), nil, prompt, "human")
+		application.runtime.Publisher = workflowPreflightFailurePublisher{err: preflightErr}
+		result := newResult()
+		err := application.completeTicketPublishInteraction(
+			context.Background(),
+			application.services(),
+			port.RepositoryIdentity{Root: "C:/repo", Remote: "origin"},
+			&result,
+			false,
+			false,
+			false,
+		)
+		if !errors.Is(err, preflightErr) {
+			t.Fatalf("interactive preflight error = %v, want %v", err, preflightErr)
+		}
+	})
+}
+
+func TestTicketPublishResumesScratchTransferWithoutPrompts(t *testing.T) {
+	source := "scratch/ABC-123-export-exploration"
+	target := ticketPublishTestBranch(t)
+	git := newBranchCommandGit(t, source)
+	git.messages = []string{"feat(ABC-123): add export"}
+	git.officialBranches = []branch.BranchName{target}
+	git.localBranches = map[string]bool{
+		source:          true,
+		target.String(): true,
+	}
+	application := newBranchCommandApplication(git, nil, nil, "json")
+	application.options.yes = true
+
+	stdout, stderr, err := executeBranchCommand(
+		t,
+		newTicketPublishCommand(application),
+		context.Background(),
+		"--message", "feat(ABC-123): add export",
+		"--resume",
+	)
+	if err != nil || stderr != "" {
+		t.Fatalf("silent scratch resume = (%q, %q, %v)", stdout, stderr, err)
+	}
+	if !strings.Contains(stdout, "squashMerged") || len(git.committedMessages) != 1 {
+		t.Fatalf("silent scratch resume output=%q commits=%#v", stdout, git.committedMessages)
+	}
+
+	git = newBranchCommandGit(t, source)
+	git.officialBranches = []branch.BranchName{target}
+	git.localBranches = map[string]bool{
+		source:          true,
+		target.String(): true,
+	}
+	git.unmergedConflicts = true
+	application = newBranchCommandApplication(git, nil, nil, "json")
+	application.options.yes = true
+	_, _, err = executeBranchCommand(
+		t,
+		newTicketPublishCommand(application),
+		context.Background(),
+		"--message", "feat(ABC-123): add export",
+		"--resume",
+	)
+	assertProblemCode(t, err, problem.CodeScratchMergeConflict)
 }
 
 func ticketPublishTestBranch(t *testing.T) branch.BranchName {

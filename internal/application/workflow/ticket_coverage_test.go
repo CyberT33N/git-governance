@@ -40,6 +40,28 @@ type scratchTicketWorkflowGit struct {
 	committed []string
 }
 
+type ticketPreflightPublisher struct {
+	publishErr   error
+	validateErr  error
+	publications []port.PullRequestPublication
+}
+
+func (publisher *ticketPreflightPublisher) Publish(
+	_ context.Context,
+	publication port.PullRequestPublication,
+) (port.PublishedPullRequest, error) {
+	publisher.publications = append(publisher.publications, publication)
+	return port.PublishedPullRequest{URL: "https://example.invalid/pr/preflight"}, publisher.publishErr
+}
+
+func (publisher *ticketPreflightPublisher) Validate(
+	_ context.Context,
+	publication port.PullRequestPublication,
+) error {
+	publisher.publications = append(publisher.publications, publication)
+	return publisher.validateErr
+}
+
 func newScratchTicketWorkflowGit(source, target branch.BranchName) *scratchTicketWorkflowGit {
 	return &scratchTicketWorkflowGit{
 		fakeGitRepository: &fakeGitRepository{
@@ -357,6 +379,7 @@ func TestTicketServiceCoveragePublishFailuresAndBranches(t *testing.T) {
 		publishErr := errors.New("publisher failed")
 		request := validRequest()
 		request.Push = true
+		request.CreatePullRequest = true
 		_, err := newTicketServiceWithGit(
 			newTicketCoverageGit(),
 			nil,
@@ -488,6 +511,70 @@ func TestPublishTicketScratchTransferFailurePaths(t *testing.T) {
 		if !errors.Is(err, squashErr) {
 			t.Fatalf("PublishTicket() error = %v, want %v", err, squashErr)
 		}
+	})
+}
+
+func TestTicketServiceExplicitPullRequestPublicationContracts(t *testing.T) {
+	t.Run("requires a push before provider publication", func(t *testing.T) {
+		request := PublishTicketRequest{
+			Repository:        testRepository(),
+			Branch:            mustBranch("feature/ABC-123-add-export"),
+			CreatePullRequest: true,
+		}
+		_, err := newTicketServiceWithGit(newTicketCoverageGit(), nil, &fakePublisher{}).PublishTicket(context.Background(), request)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+	})
+
+	t.Run("validates publication dependencies and remote lookup", func(t *testing.T) {
+		request := port.PullRequest{
+			Source: mustBranch("feature/ABC-123-add-export"),
+			Target: mustBranch("develop"),
+			Title:  "ABC-123: add export",
+		}
+		var nilService *TicketService
+		_, err := nilService.PublishPullRequest(context.Background(), testRepository(), request)
+		assertProblemCode(t, err, problem.CodeExternalCommandFailed)
+
+		_, err = (&TicketService{publisher: &fakePublisher{}}).PublishPullRequest(context.Background(), testRepository(), request)
+		assertProblemCode(t, err, problem.CodeExternalCommandFailed)
+
+		remoteErr := errors.New("remote URL unavailable")
+		git := &fakeGitRepository{err: remoteErr}
+		_, err = (&TicketService{git: git, publisher: &fakePublisher{}}).PublishPullRequest(context.Background(), testRepository(), request)
+		if !errors.Is(err, remoteErr) {
+			t.Fatalf("remote lookup error = %v, want %v", err, remoteErr)
+		}
+	})
+
+	t.Run("preflights provider routing before a push", func(t *testing.T) {
+		request := port.PullRequest{
+			Source: mustBranch("feature/ABC-123-add-export"),
+			Target: mustBranch("develop"),
+			Title:  "ABC-123: add export",
+		}
+		git := &fakeGitRepository{}
+		service := &TicketService{git: git, publisher: &fakePublisher{}}
+		if err := service.PreflightPullRequest(context.Background(), testRepository(), request); err != nil {
+			t.Fatalf("generic provider preflight error = %v", err)
+		}
+
+		preflightErr := errors.New("invalid provider configuration")
+		publisher := &ticketPreflightPublisher{validateErr: preflightErr}
+		service = &TicketService{git: git, publisher: publisher}
+		err := service.PreflightPullRequest(context.Background(), testRepository(), request)
+		if !errors.Is(err, preflightErr) || len(publisher.publications) != 1 {
+			t.Fatalf("provider preflight = (%v, %#v)", err, publisher.publications)
+		}
+
+		remoteErr := errors.New("remote URL unavailable")
+		service = &TicketService{git: &fakeGitRepository{err: remoteErr}, publisher: &ticketPreflightPublisher{}}
+		err = service.PreflightPullRequest(context.Background(), testRepository(), request)
+		if !errors.Is(err, remoteErr) {
+			t.Fatalf("preflight remote lookup error = %v, want %v", err, remoteErr)
+		}
+
+		err = (&TicketService{}).PreflightPullRequest(context.Background(), testRepository(), request)
+		assertProblemCode(t, err, problem.CodeExternalCommandFailed)
 	})
 }
 

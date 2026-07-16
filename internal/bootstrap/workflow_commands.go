@@ -149,7 +149,9 @@ func newTicketPublishCommand(application *application) *cobra.Command {
 		scratchFamilyRaw  string
 		scratchSubjectRaw string
 		push              bool
+		createPullRequest bool
 		draft             bool
+		resume            bool
 	)
 	command := &cobra.Command{
 		Use:   "publish",
@@ -207,29 +209,75 @@ func newTicketPublishCommand(application *application) *cobra.Command {
 			if base != nil {
 				inputs.add("target base", base.String())
 			}
+			if resume && application.options.dryRun {
+				return invalidOption("resume", "true", "a non-dry-run invocation")
+			}
+			if err := application.validatePullRequestPublication(services, push, createPullRequest); err != nil {
+				return err
+			}
 			label := "Publish ticket workflow"
 			description := "Validate the commit series, synchronize safely, and optionally push the branch?"
+			if resume {
+				label = "Resume ticket publication"
+				description = "Continue the resolved Git operation, revalidate the official branch, and optionally push it?"
+			}
 			if scratchTarget != nil && scratchMessage != nil {
 				label = "Publish ticket workflow from scratch"
 				description = "You are on private scratch branch " + name.String() +
 					". Squash-merge it into " + scratchTarget.String() + " as " +
 					scratchMessage.Header().String() +
 					", then validate, synchronize safely, and optionally push the official branch?"
+				if resume {
+					label = "Resume ticket publication from scratch"
+					description = "Commit the resolved scratch transfer into " + scratchTarget.String() +
+						", then validate, synchronize safely, and optionally push the official branch?"
+				}
 			}
 			if err := application.confirmMutation(command.Context(), label, description); err != nil {
 				return err
 			}
-			result, err := services.tickets.PublishTicket(command.Context(), workflow.PublishTicketRequest{
-				Repository:     repository,
-				Branch:         name,
-				Base:           base,
-				ScratchTarget:  scratchTarget,
-				ScratchMessage: scratchMessage,
-				Draft:          draft,
-				DryRun:         application.options.dryRun,
-			})
+			var result workflow.PublishTicketResult
+			if resume {
+				if name.Family() == branch.FamilyScratch {
+					scratchMerge, resumeErr := services.scratch.Resume(command.Context(), branchapp.ScratchMergeRequest{
+						Repository: repository,
+						Source:     name,
+						Target:     scratchTarget,
+						Message:    *scratchMessage,
+					})
+					if resumeErr != nil {
+						return resumeErr
+					}
+					result, err = services.tickets.PublishTicket(command.Context(), workflow.PublishTicketRequest{
+						Repository: repository,
+						Branch:     scratchMerge.Target,
+						Base:       base,
+						Draft:      draft,
+					})
+					if err == nil {
+						result.ScratchMerge = &scratchMerge
+					}
+				} else {
+					result, err = services.tickets.ResumeTicketPublish(command.Context(), workflow.ResumeTicketPublishRequest{
+						Repository: repository,
+						Branch:     name,
+						Base:       base,
+						Draft:      draft,
+					})
+				}
+			} else {
+				result, err = services.tickets.PublishTicket(command.Context(), workflow.PublishTicketRequest{
+					Repository:     repository,
+					Branch:         name,
+					Base:           base,
+					ScratchTarget:  scratchTarget,
+					ScratchMessage: scratchMessage,
+					Draft:          draft,
+					DryRun:         application.options.dryRun,
+				})
+			}
 			if err != nil {
-				if isScratchMergeConflict(err) && application.promptAvailable() && scratchTarget != nil && scratchMessage != nil {
+				if !resume && isScratchMergeConflict(err) && application.promptAvailable() && scratchTarget != nil && scratchMessage != nil {
 					scratchMerge, resumeErr := application.resumeScratchMergeAfterConflict(
 						command.Context(),
 						services,
@@ -254,7 +302,7 @@ func newTicketPublishCommand(application *application) *cobra.Command {
 				}
 			}
 			if err != nil {
-				if !application.promptAvailable() || !isRebaseConflict(err) {
+				if resume || !application.promptAvailable() || !isRebaseConflict(err) {
 					return err
 				}
 				resumeBranch := name
@@ -290,6 +338,8 @@ func newTicketPublishCommand(application *application) *cobra.Command {
 				repository,
 				&result,
 				push,
+				createPullRequest,
+				false,
 			); err != nil {
 				return err
 			}
@@ -335,7 +385,9 @@ func newTicketPublishCommand(application *application) *cobra.Command {
 	command.Flags().StringVar(&scratchSubjectRaw, "subject", "", "commit description for a scratch squash transfer")
 	command.Flags().StringVar(&scratchMessageRaw, "message", "", "complete commit message compatibility input for a scratch squash transfer")
 	command.Flags().BoolVar(&push, "push", false, "push the branch after validation")
+	command.Flags().BoolVar(&createPullRequest, "create-pull-request", false, "create the pull request through the configured provider after pushing")
 	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
+	command.Flags().BoolVar(&resume, "resume", false, "continue a manually resolved rebase or scratch transfer")
 	return command
 }
 
@@ -466,56 +518,18 @@ func (application *application) completeTicketPublishInteraction(
 	repository port.RepositoryIdentity,
 	result *workflow.PublishTicketResult,
 	requestedPush bool,
+	requestedPullRequest bool,
+	workflowManaged bool,
 ) error {
-	if result == nil || result.DryRun {
-		return nil
-	}
-	push := requestedPush
-	if application.promptAvailable() && !application.options.yes {
-		confirmed, err := application.prompt().Confirm(ctx, port.ConfirmRequest{
-			Label:       "Push official ticket branch",
-			Description: "Push " + result.Branch.String() + " after the completed synchronization? The first push configures its matching upstream branch.",
-			Default:     requestedPush,
-		})
-		if err != nil {
-			return err
-		}
-		push = confirmed
-	}
-	if !push {
-		return nil
-	}
-	base := result.Sync.Base
-	if err := services.tickets.PushPreparedTicket(ctx, repository, result.Branch, &base); err != nil {
-		return err
-	}
-	result.Pushed = true
-	if !services.tickets.HasPullRequestPublisher() {
-		return nil
-	}
-
-	createPullRequest := requestedPush
-	if application.promptAvailable() && !application.options.yes {
-		confirmed, err := application.prompt().Confirm(ctx, port.ConfirmRequest{
-			Label: "Create pull request",
-			Description: "Create the pull request from " + result.PullRequest.Source.String() +
-				" to " + result.PullRequest.Target.String() + " now?",
-			Default: false,
-		})
-		if err != nil {
-			return err
-		}
-		createPullRequest = confirmed
-	}
-	if !createPullRequest {
-		return nil
-	}
-	publishedURL, err := services.tickets.PublishPullRequest(ctx, result.PullRequest)
-	if err != nil {
-		return err
-	}
-	result.PublishedURL = publishedURL
-	return nil
+	return application.completePreparedPublication(
+		ctx,
+		services,
+		repository,
+		result,
+		requestedPush,
+		requestedPullRequest,
+		workflowManaged,
+	)
 }
 
 func isRebaseConflict(err error) bool {
@@ -610,10 +624,12 @@ func newHotfixWorkflowCommand(application *application) *cobra.Command {
 
 func newHotfixPublishCommand(application *application) *cobra.Command {
 	var (
-		branchRaw   string
-		affectedRaw string
-		push        bool
-		draft       bool
+		branchRaw         string
+		affectedRaw       string
+		push              bool
+		createPullRequest bool
+		draft             bool
+		resume            bool
 	)
 	command := &cobra.Command{
 		Use:   "publish",
@@ -641,22 +657,54 @@ func newHotfixPublishCommand(application *application) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if resume && application.options.dryRun {
+				return invalidOption("resume", "true", "a non-dry-run invocation")
+			}
+			if err := application.validatePullRequestPublication(services, push, createPullRequest); err != nil {
+				return err
+			}
+			label := "Publish hotfix"
+			description := "Validate the hotfix and prepare its pull request for " + affected.String() + "?"
+			if resume {
+				label = "Resume hotfix publication"
+				description = "Continue the resolved hotfix rebase, revalidate the branch, and optionally push it?"
+			}
 			if err := application.confirmMutation(
 				command.Context(),
-				"Publish hotfix",
-				"Validate the hotfix and prepare its pull request for "+affected.String()+"?",
+				label,
+				description,
 			); err != nil {
 				return err
 			}
-			result, err := services.tickets.PublishTicket(command.Context(), workflow.PublishTicketRequest{
-				Repository: repository,
-				Branch:     name,
-				Base:       &base,
-				Push:       push,
-				Draft:      draft,
-				DryRun:     application.options.dryRun,
-			})
+			var result workflow.PublishTicketResult
+			if resume {
+				result, err = services.tickets.ResumeTicketPublish(command.Context(), workflow.ResumeTicketPublishRequest{
+					Repository: repository,
+					Branch:     name,
+					Base:       &base,
+					Draft:      draft,
+				})
+			} else {
+				result, err = services.tickets.PublishTicket(command.Context(), workflow.PublishTicketRequest{
+					Repository: repository,
+					Branch:     name,
+					Base:       &base,
+					Draft:      draft,
+					DryRun:     application.options.dryRun,
+				})
+			}
 			if err != nil {
+				return err
+			}
+			if err := application.completePreparedPublication(
+				command.Context(),
+				services,
+				repository,
+				&result,
+				push,
+				createPullRequest,
+				false,
+			); err != nil {
 				return err
 			}
 			fields := map[string]string{
@@ -684,18 +732,23 @@ func newHotfixPublishCommand(application *application) *cobra.Command {
 	command.Flags().StringVar(&branchRaw, "branch", "", "hotfix branch; defaults to the current branch")
 	command.Flags().StringVar(&affectedRaw, "affected-line", "", "main, release/<semver>, or support/<major.minor>")
 	command.Flags().BoolVar(&push, "push", false, "push the hotfix branch after validation")
+	command.Flags().BoolVar(&createPullRequest, "create-pull-request", false, "create the pull request through the configured provider after pushing")
 	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
+	command.Flags().BoolVar(&resume, "resume", false, "continue a manually resolved rebase")
 	return command
 }
 
 func newHotfixPropagateCommand(application *application) *cobra.Command {
 	var (
-		sourceRaw string
-		targetRaw string
-		commitID  string
-		slugRaw   string
-		push      bool
-		draft     bool
+		sourceRaw         string
+		targetRaw         string
+		commitID          string
+		slugRaw           string
+		branchRaw         string
+		push              bool
+		createPullRequest bool
+		draft             bool
+		resume            bool
 	)
 	command := &cobra.Command{
 		Use:   "propagate",
@@ -705,6 +758,15 @@ func newHotfixPropagateCommand(application *application) *cobra.Command {
 			repository, err := application.discover(command.Context(), services)
 			if err != nil {
 				return err
+			}
+			if resume && application.options.dryRun {
+				return invalidOption("resume", "true", "a non-dry-run invocation")
+			}
+			if err := application.validatePullRequestPublication(services, push, createPullRequest); err != nil {
+				return err
+			}
+			if resume && sourceRaw == "" {
+				return missingInput("hotfix source branch")
 			}
 			source, err := currentOrSpecified(command.Context(), services, sourceRaw, repository)
 			if err != nil {
@@ -719,6 +781,63 @@ func newHotfixPropagateCommand(application *application) *cobra.Command {
 				return err
 			}
 			inputs.add("target line", target.String())
+			if resume {
+				if branchRaw == "" {
+					return missingInput("propagation branch")
+				}
+				propagationBranch, err := branch.ParseName(branchRaw)
+				if err != nil {
+					return err
+				}
+				inputs.add("propagation branch", propagationBranch.String())
+				if err := application.confirmMutation(
+					command.Context(),
+					"Resume hotfix propagation",
+					"Continue the resolved cherry-pick on "+propagationBranch.String()+", then validate and optionally push it?",
+				); err != nil {
+					return err
+				}
+				result, err := services.releases.ResumeHotfixPropagation(command.Context(), workflow.ResumeHotfixPropagationRequest{
+					Repository: repository,
+					Source:     source,
+					TargetLine: target,
+					Branch:     propagationBranch,
+					Draft:      draft,
+				})
+				if err != nil {
+					return err
+				}
+				if err := application.completePreparedPublication(
+					command.Context(),
+					services,
+					repository,
+					&result.Publication,
+					push,
+					createPullRequest,
+					true,
+				); err != nil {
+					return err
+				}
+				return application.report(command, port.Report{
+					Operation: "workflow.hotfix.propagate",
+					Summary: application.withInteractiveFetchSummary(
+						"Hotfix propagation workflow resumed.",
+						repository.Remote,
+						true,
+					),
+					Fields: map[string]string{
+						"source":               source.String(),
+						"target":               target.String(),
+						"branch":               result.Branch.Name.String(),
+						"cherryPicked":         boolString(result.CherryPicked),
+						"pushed":               boolString(result.Publication.Pushed),
+						"pullRequestSource":    result.Publication.PullRequest.Source.String(),
+						"pullRequestTarget":    result.Publication.PullRequest.Target.String(),
+						"publishedPullRequest": result.Publication.PublishedURL,
+					},
+					Data: result.Publication.PullRequest,
+				})
+			}
 			commitID, err = application.resolveReviewedCommit(command.Context(), commitID)
 			if err != nil {
 				return err
@@ -745,11 +864,21 @@ func newHotfixPropagateCommand(application *application) *cobra.Command {
 				TargetLine: target,
 				CommitID:   commitID,
 				Slug:       slug,
-				Push:       push,
 				Draft:      draft,
 				DryRun:     application.options.dryRun,
 			})
 			if err != nil {
+				return err
+			}
+			if err := application.completePreparedPublication(
+				command.Context(),
+				services,
+				repository,
+				&result.Publication,
+				push,
+				createPullRequest,
+				true,
+			); err != nil {
 				return err
 			}
 			return application.report(command, port.Report{
@@ -764,6 +893,7 @@ func newHotfixPropagateCommand(application *application) *cobra.Command {
 					"target":               target.String(),
 					"branch":               result.Branch.Name.String(),
 					"cherryPicked":         boolString(result.CherryPicked),
+					"pushed":               boolString(result.Publication.Pushed),
 					"pullRequestSource":    result.Publication.PullRequest.Source.String(),
 					"pullRequestTarget":    result.Publication.PullRequest.Target.String(),
 					"publishedPullRequest": result.Publication.PublishedURL,
@@ -776,8 +906,11 @@ func newHotfixPropagateCommand(application *application) *cobra.Command {
 	command.Flags().StringVar(&targetRaw, "target-line", "", "main, develop, release/<semver>, or support/<major.minor>")
 	command.Flags().StringVar(&commitID, "commit", "", "reviewed source commit SHA")
 	command.Flags().StringVar(&slugRaw, "slug", "", "optional kebab-case propagation branch description")
+	command.Flags().StringVar(&branchRaw, "branch", "", "generated propagation branch; required with --resume")
 	command.Flags().BoolVar(&push, "push", false, "push the propagation branch after validation")
+	command.Flags().BoolVar(&createPullRequest, "create-pull-request", false, "create the pull request through the configured provider after pushing")
 	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
+	command.Flags().BoolVar(&resume, "resume", false, "continue a manually resolved cherry-pick")
 	return command
 }
 
@@ -996,10 +1129,12 @@ func newReleaseStabilizeCommand(application *application) *cobra.Command {
 
 func newReleasePublishStabilizationCommand(application *application) *cobra.Command {
 	var (
-		branchRaw  string
-		releaseRaw string
-		push       bool
-		draft      bool
+		branchRaw         string
+		releaseRaw        string
+		push              bool
+		createPullRequest bool
+		draft             bool
+		resume            bool
 	)
 	command := &cobra.Command{
 		Use:   "publish-stabilization",
@@ -1034,23 +1169,56 @@ func newReleasePublishStabilizationCommand(application *application) *cobra.Comm
 			if err != nil {
 				return err
 			}
+			if resume && application.options.dryRun {
+				return invalidOption("resume", "true", "a non-dry-run invocation")
+			}
+			if err := application.validatePullRequestPublication(services, push, createPullRequest); err != nil {
+				return err
+			}
+			label := "Publish release stabilization"
+			description := "Validate the stabilization branch and prepare its pull request for " + release.String() + "?"
+			if resume {
+				label = "Resume release stabilization publication"
+				description = "Continue the resolved stabilization rebase, revalidate the branch, and optionally push it?"
+			}
 			if err := application.confirmMutation(
 				command.Context(),
-				"Publish release stabilization",
-				"Validate the stabilization branch and prepare its pull request for "+release.String()+"?",
+				label,
+				description,
 			); err != nil {
 				return err
 			}
-			result, err := services.tickets.PublishTicket(command.Context(), workflow.PublishTicketRequest{
-				Repository:      repository,
-				Branch:          name,
-				Base:            &base,
-				WorkflowManaged: true,
-				Push:            push,
-				Draft:           draft,
-				DryRun:          application.options.dryRun,
-			})
+			var result workflow.PublishTicketResult
+			if resume {
+				result, err = services.tickets.ResumeTicketPublish(command.Context(), workflow.ResumeTicketPublishRequest{
+					Repository:      repository,
+					Branch:          name,
+					Base:            &base,
+					WorkflowManaged: true,
+					Draft:           draft,
+				})
+			} else {
+				result, err = services.tickets.PublishTicket(command.Context(), workflow.PublishTicketRequest{
+					Repository:      repository,
+					Branch:          name,
+					Base:            &base,
+					WorkflowManaged: true,
+					Draft:           draft,
+					DryRun:          application.options.dryRun,
+				})
+			}
 			if err != nil {
+				return err
+			}
+			if err := application.completePreparedPublication(
+				command.Context(),
+				services,
+				repository,
+				&result,
+				push,
+				createPullRequest,
+				true,
+			); err != nil {
 				return err
 			}
 			fields := map[string]string{
@@ -1077,14 +1245,17 @@ func newReleasePublishStabilizationCommand(application *application) *cobra.Comm
 	command.Flags().StringVar(&branchRaw, "branch", "", "stabilization branch; defaults to the current branch")
 	command.Flags().StringVar(&releaseRaw, "release", "", "release/<semver> target line")
 	command.Flags().BoolVar(&push, "push", false, "push the stabilization branch after validation")
+	command.Flags().BoolVar(&createPullRequest, "create-pull-request", false, "create the pull request through the configured provider after pushing")
 	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
+	command.Flags().BoolVar(&resume, "resume", false, "continue a manually resolved rebase")
 	return command
 }
 
 func newReleasePromotionCommand(application *application) *cobra.Command {
 	var (
-		releaseRaw string
-		draft      bool
+		releaseRaw        string
+		createPullRequest bool
+		draft             bool
 	)
 	command := &cobra.Command{
 		Use:   "promote",
@@ -1114,6 +1285,25 @@ func newReleasePromotionCommand(application *application) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			create, err := application.resolvePullRequestPublication(
+				command.Context(),
+				services,
+				result.PullRequest,
+				createPullRequest,
+			)
+			if err != nil {
+				return err
+			}
+			if create {
+				if err := services.tickets.PreflightPullRequest(command.Context(), repository, result.PullRequest); err != nil {
+					return err
+				}
+				publishedURL, err := services.tickets.PublishPullRequest(command.Context(), repository, result.PullRequest)
+				if err != nil {
+					return err
+				}
+				result.PublishedURL = publishedURL
+			}
 			return application.report(command, port.Report{
 				Operation: "workflow.release.promote",
 				Summary:   "Release promotion pull request prepared.",
@@ -1128,12 +1318,14 @@ func newReleasePromotionCommand(application *application) *cobra.Command {
 		}),
 	}
 	command.Flags().StringVar(&releaseRaw, "release", "", "release/<semver> branch")
+	command.Flags().BoolVar(&createPullRequest, "create-pull-request", false, "create the pull request through the configured provider")
 	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
 	return command
 }
 
 func newReleaseBackmergeCommand(application *application) *cobra.Command {
 	var releaseRaw string
+	var createPullRequest bool
 	var draft bool
 	command := &cobra.Command{
 		Use:   "backmerge",
@@ -1163,6 +1355,25 @@ func newReleaseBackmergeCommand(application *application) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			create, err := application.resolvePullRequestPublication(
+				command.Context(),
+				services,
+				result.PullRequest,
+				createPullRequest,
+			)
+			if err != nil {
+				return err
+			}
+			if create {
+				if err := services.tickets.PreflightPullRequest(command.Context(), repository, result.PullRequest); err != nil {
+					return err
+				}
+				publishedURL, err := services.tickets.PublishPullRequest(command.Context(), repository, result.PullRequest)
+				if err != nil {
+					return err
+				}
+				result.PublishedURL = publishedURL
+			}
 			return application.report(command, port.Report{
 				Operation: "workflow.release.backmerge",
 				Summary:   "Release backmerge pull request prepared.",
@@ -1177,6 +1388,7 @@ func newReleaseBackmergeCommand(application *application) *cobra.Command {
 		}),
 	}
 	command.Flags().StringVar(&releaseRaw, "release", "", "release/<semver> branch")
+	command.Flags().BoolVar(&createPullRequest, "create-pull-request", false, "create the pull request through the configured provider")
 	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
 	return command
 }

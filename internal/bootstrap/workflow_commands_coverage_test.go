@@ -138,6 +138,452 @@ func TestWorkflowCommandsDryRunHappyPaths(t *testing.T) {
 	}
 }
 
+func TestWorkflowCommandsResumeSilentlyAndPublishExplicitly(t *testing.T) {
+	t.Run("resumes ticket, hotfix, and stabilization publication without prompts", func(t *testing.T) {
+		testCases := []struct {
+			name     string
+			current  string
+			messages []string
+			args     []string
+		}{
+			{
+				name:     "ticket",
+				current:  "feature/ABC-123-add-export",
+				messages: []string{"feat(ABC-123): add export"},
+				args: []string{
+					"workflow", "ticket", "publish",
+					"--branch", "feature/ABC-123-add-export",
+					"--resume",
+				},
+			},
+			{
+				name:     "hotfix",
+				current:  "hotfix/ABC-999-payment-timeout",
+				messages: []string{"fix(ABC-999): resolve payment timeout"},
+				args: []string{
+					"workflow", "hotfix", "publish",
+					"--branch", "hotfix/ABC-999-payment-timeout",
+					"--affected-line", "main",
+					"--resume",
+				},
+			},
+			{
+				name:     "release stabilization",
+				current:  "fix/ABC-999-release-blocker",
+				messages: []string{"fix(ABC-999): resolve release blocker"},
+				args: []string{
+					"workflow", "release", "publish-stabilization",
+					"--branch", "fix/ABC-999-release-blocker",
+					"--release", "release/2.8.0",
+					"--resume",
+				},
+			},
+		}
+		for _, testCase := range testCases {
+			testCase := testCase
+			t.Run(testCase.name, func(t *testing.T) {
+				command := NewWithRuntime(BuildInfo{Version: "test"}, commandRuntime(newCommandGit(t, testCase.current, testCase.messages)))
+				output, err := executeBootstrapCommand(
+					t,
+					command,
+					append([]string{"--interactive", "never", "--output", "json", "--yes"}, testCase.args...)...,
+				)
+				if err != nil || !strings.Contains(output, `"ok":true`) {
+					t.Fatalf("resume %s = (%q, %v)", testCase.name, output, err)
+				}
+			})
+		}
+	})
+
+	t.Run("resumes a manually completed hotfix propagation", func(t *testing.T) {
+		git := newCommandGit(t, "fix/ABC-999-forward-port-payment-timeout", []string{"fix(ABC-999): resolve payment timeout"})
+		develop, err := branch.ParseName("develop")
+		if err != nil {
+			t.Fatal(err)
+		}
+		base, err := branch.NewTargetBase("origin", develop)
+		if err != nil {
+			t.Fatal(err)
+		}
+		git.workflowBases = map[string]branch.TargetBase{
+			"fix/ABC-999-forward-port-payment-timeout": base,
+		}
+		command := NewWithRuntime(BuildInfo{Version: "test"}, commandRuntime(git))
+		output, err := executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never", "--output", "json", "--yes",
+			"workflow", "hotfix", "propagate",
+			"--source", "hotfix/ABC-999-payment-timeout",
+			"--target-line", "develop",
+			"--branch", "fix/ABC-999-forward-port-payment-timeout",
+			"--resume",
+		)
+		if err != nil || !strings.Contains(output, `"ok":true`) {
+			t.Fatalf("propagation resume = (%q, %v)", output, err)
+		}
+	})
+
+	t.Run("requires explicit push and provider selection for silent PR creation", func(t *testing.T) {
+		git := newCommandGit(t, "feature/ABC-123-add-export", []string{"feat(ABC-123): add export"})
+		runtime := commandRuntime(git)
+		publisher := &workflowRecordingPublisher{result: port.PublishedPullRequest{URL: "https://example.invalid/pr/explicit"}}
+		runtime.Publisher = publisher
+		command := NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+		output, err := executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never", "--output", "json", "--yes",
+			"workflow", "ticket", "publish",
+			"--branch", "feature/ABC-123-add-export",
+			"--push",
+			"--create-pull-request",
+		)
+		if err != nil || !strings.Contains(output, "https://example.invalid/pr/explicit") || publisher.calls != 1 {
+			t.Fatalf("explicit PR publication = (%q, %v), publisher=%#v", output, err, publisher)
+		}
+
+		command = NewWithRuntime(BuildInfo{Version: "test"}, commandRuntime(newCommandGit(t, "feature/ABC-123-add-export", []string{"feat(ABC-123): add export"})))
+		_, err = executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never", "--output", "json", "--yes",
+			"workflow", "ticket", "publish",
+			"--branch", "feature/ABC-123-add-export",
+			"--create-pull-request",
+		)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+
+		command = NewWithRuntime(BuildInfo{Version: "test"}, commandRuntime(newCommandGit(t, "feature/ABC-123-add-export", []string{"feat(ABC-123): add export"})))
+		_, err = executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never", "--output", "json", "--yes",
+			"workflow", "ticket", "publish",
+			"--branch", "feature/ABC-123-add-export",
+			"--push",
+			"--create-pull-request",
+		)
+		assertProblemCode(t, err, problem.CodeExternalCommandFailed)
+	})
+
+	t.Run("rejects dry-run resume", func(t *testing.T) {
+		command := NewWithRuntime(BuildInfo{Version: "test"}, commandRuntime(newCommandGit(t, "feature/ABC-123-add-export", []string{"feat(ABC-123): add export"})))
+		_, err := executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never", "--output", "json", "--yes", "--dry-run",
+			"workflow", "ticket", "publish",
+			"--branch", "feature/ABC-123-add-export",
+			"--resume",
+		)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+	})
+
+	t.Run("creates release pull requests only after an explicit request", func(t *testing.T) {
+		for _, commandPath := range [][]string{
+			{"workflow", "release", "promote"},
+			{"workflow", "release", "backmerge"},
+		} {
+			commandPath := commandPath
+			t.Run(commandPath[2], func(t *testing.T) {
+				runtime := commandRuntime(newCommandGit(t, "release/2.8.0", nil))
+				publisher := &workflowRecordingPublisher{result: port.PublishedPullRequest{URL: "https://example.invalid/pr/release"}}
+				runtime.Publisher = publisher
+				command := NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+				output, err := executeBootstrapCommand(
+					t,
+					command,
+					append([]string{"--interactive", "never", "--output", "json", "--yes"}, append(commandPath, "--release", "release/2.8.0", "--create-pull-request")...)...,
+				)
+				if err != nil || !strings.Contains(output, "https://example.invalid/pr/release") || publisher.calls != 1 {
+					t.Fatalf("release publication = (%q, %v), publisher=%#v", output, err, publisher)
+				}
+			})
+		}
+
+		for _, commandPath := range [][]string{
+			{"workflow", "release", "promote"},
+			{"workflow", "release", "backmerge"},
+		} {
+			runtime := commandRuntime(newCommandGit(t, "release/2.8.0", nil))
+			runtime.Publisher = &workflowRecordingPublisher{}
+			command := NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+			_, err := executeBootstrapCommand(
+				t,
+				command,
+				append([]string{"--interactive", "never", "--output", "json"}, append(commandPath, "--release", "release/2.8.0", "--create-pull-request")...)...,
+			)
+			assertProblemCode(t, err, problem.CodeInvalidInput)
+		}
+	})
+
+	t.Run("validates silent resume arguments before mutation", func(t *testing.T) {
+		testCases := [][]string{
+			{
+				"--interactive", "never", "--output", "json", "--yes", "--dry-run",
+				"workflow", "hotfix", "publish",
+				"--affected-line", "main", "--resume",
+			},
+			{
+				"--interactive", "never", "--output", "json", "--yes", "--dry-run",
+				"workflow", "release", "publish-stabilization",
+				"--release", "release/2.8.0", "--resume",
+			},
+			{
+				"--interactive", "never", "--output", "json", "--yes",
+				"workflow", "hotfix", "propagate",
+				"--target-line", "develop", "--resume",
+			},
+			{
+				"--interactive", "never", "--output", "json", "--yes",
+				"workflow", "hotfix", "propagate",
+				"--source", "hotfix/ABC-999-payment-timeout",
+				"--target-line", "develop", "--resume",
+			},
+			{
+				"--interactive", "never", "--output", "json", "--yes",
+				"workflow", "hotfix", "propagate",
+				"--source", "hotfix/ABC-999-payment-timeout",
+				"--target-line", "develop",
+				"--branch", "invalid", "--resume",
+			},
+			{
+				"--interactive", "never", "--output", "json",
+				"workflow", "hotfix", "propagate",
+				"--source", "hotfix/ABC-999-payment-timeout",
+				"--target-line", "develop",
+				"--branch", "fix/ABC-999-forward-port-payment-timeout",
+				"--resume",
+			},
+		}
+		for _, arguments := range testCases {
+			command := NewWithRuntime(BuildInfo{Version: "test"}, commandRuntime(newCommandGit(t, "hotfix/ABC-999-payment-timeout", []string{"fix(ABC-999): resolve payment timeout"})))
+			_, err := executeBootstrapCommand(t, command, arguments...)
+			if err == nil {
+				t.Fatalf("invalid resume arguments unexpectedly succeeded: %v", arguments)
+			}
+		}
+
+		for _, arguments := range [][]string{
+			{
+				"--interactive", "never", "--output", "json", "--yes", "--dry-run",
+				"workflow", "release", "publish-stabilization",
+				"--release", "release/2.8.0", "--resume",
+			},
+			{
+				"--interactive", "never", "--output", "json", "--yes",
+				"workflow", "release", "publish-stabilization",
+				"--release", "release/2.8.0", "--create-pull-request",
+			},
+		} {
+			command := NewWithRuntime(
+				BuildInfo{Version: "test"},
+				commandRuntime(newCommandGit(t, "fix/ABC-999-release-blocker", []string{"fix(ABC-999): resolve release blocker"})),
+			)
+			_, err := executeBootstrapCommand(t, command, arguments...)
+			assertProblemCode(t, err, problem.CodeInvalidInput)
+		}
+	})
+}
+
+func TestWorkflowCommandsCoverSilentContinuationFailurePaths(t *testing.T) {
+	t.Run("rejects incomplete publication flags before mutation", func(t *testing.T) {
+		for _, arguments := range [][]string{
+			{
+				"workflow", "hotfix", "publish",
+				"--affected-line", "main",
+				"--create-pull-request",
+			},
+			{
+				"workflow", "release", "publish-stabilization",
+				"--release", "release/2.8.0",
+				"--create-pull-request",
+			},
+		} {
+			command := NewWithRuntime(
+				BuildInfo{Version: "test"},
+				commandRuntime(newCommandGit(t, "hotfix/ABC-999-payment-timeout", []string{"fix(ABC-999): resolve payment timeout"})),
+			)
+			_, err := executeBootstrapCommand(t, command, append([]string{"--interactive", "never", "--output", "json", "--yes"}, arguments...)...)
+			assertProblemCode(t, err, problem.CodeInvalidInput)
+		}
+	})
+
+	t.Run("surfaces post-resume publication failures", func(t *testing.T) {
+		publisherErr := errors.New("publisher failed")
+		for _, testCase := range []struct {
+			current  string
+			messages []string
+			args     []string
+		}{
+			{
+				current:  "hotfix/ABC-999-payment-timeout",
+				messages: []string{"fix(ABC-999): resolve payment timeout"},
+				args: []string{
+					"workflow", "hotfix", "publish",
+					"--affected-line", "main",
+					"--resume", "--push", "--create-pull-request",
+				},
+			},
+			{
+				current:  "fix/ABC-999-release-blocker",
+				messages: []string{"fix(ABC-999): resolve release blocker"},
+				args: []string{
+					"workflow", "release", "publish-stabilization",
+					"--release", "release/2.8.0",
+					"--resume", "--push", "--create-pull-request",
+				},
+			},
+		} {
+			runtime := commandRuntime(newCommandGit(t, testCase.current, testCase.messages))
+			runtime.Publisher = workflowFailurePublisher{err: publisherErr}
+			command := NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+			_, err := executeBootstrapCommand(
+				t,
+				command,
+				append([]string{"--interactive", "never", "--output", "json", "--yes"}, testCase.args...)...,
+			)
+			if !errors.Is(err, publisherErr) {
+				t.Fatalf("publication error = %v, want %v", err, publisherErr)
+			}
+		}
+	})
+
+	t.Run("covers propagation resume guards and publisher failures", func(t *testing.T) {
+		baseArguments := []string{
+			"workflow", "hotfix", "propagate",
+			"--source", "hotfix/ABC-999-payment-timeout",
+			"--target-line", "develop",
+			"--branch", "fix/ABC-999-forward-port-payment-timeout",
+			"--resume",
+		}
+		command := NewWithRuntime(
+			BuildInfo{Version: "test"},
+			commandRuntime(newCommandGit(t, "hotfix/ABC-999-payment-timeout", []string{"fix(ABC-999): resolve payment timeout"})),
+		)
+		_, err := executeBootstrapCommand(
+			t,
+			command,
+			append([]string{"--interactive", "never", "--output", "json", "--yes", "--dry-run"}, baseArguments...)...,
+		)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+
+		command = NewWithRuntime(
+			BuildInfo{Version: "test"},
+			commandRuntime(newCommandGit(t, "hotfix/ABC-999-payment-timeout", []string{"fix(ABC-999): resolve payment timeout"})),
+		)
+		_, err = executeBootstrapCommand(
+			t,
+			command,
+			append([]string{"--interactive", "never", "--output", "json", "--yes"}, append(baseArguments, "--create-pull-request")...)...,
+		)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+
+		command = NewWithRuntime(
+			BuildInfo{Version: "test"},
+			commandRuntime(newCommandGit(t, "fix/ABC-999-forward-port-payment-timeout", []string{"fix(ABC-999): resolve payment timeout"})),
+		)
+		_, err = executeBootstrapCommand(
+			t,
+			command,
+			append([]string{"--interactive", "never", "--output", "json", "--yes"}, baseArguments...)...,
+		)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+
+		git := newCommandGit(t, "fix/ABC-999-forward-port-payment-timeout", []string{"fix(ABC-999): resolve payment timeout"})
+		develop, parseErr := branch.ParseName("develop")
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		base, baseErr := branch.NewTargetBase("origin", develop)
+		if baseErr != nil {
+			t.Fatal(baseErr)
+		}
+		git.workflowBases = map[string]branch.TargetBase{"fix/ABC-999-forward-port-payment-timeout": base}
+		runtime := commandRuntime(git)
+		publisherErr := errors.New("propagation publisher failed")
+		runtime.Publisher = workflowFailurePublisher{err: publisherErr}
+		command = NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+		_, err = executeBootstrapCommand(
+			t,
+			command,
+			append([]string{"--interactive", "never", "--output", "json", "--yes"}, append(baseArguments, "--push", "--create-pull-request")...)...,
+		)
+		if !errors.Is(err, publisherErr) {
+			t.Fatalf("propagation publisher error = %v", err)
+		}
+	})
+
+	t.Run("surfaces propagation publication failures after a new cherry-pick", func(t *testing.T) {
+		runtime := commandRuntime(newCommandGit(t, "hotfix/ABC-999-payment-timeout", []string{"fix(ABC-999): resolve payment timeout"}))
+		publisherErr := errors.New("new propagation publisher failed")
+		runtime.Publisher = workflowFailurePublisher{err: publisherErr}
+		command := NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+		_, err := executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never", "--output", "json", "--yes",
+			"workflow", "hotfix", "propagate",
+			"--target-line", "develop",
+			"--commit", strings.Repeat("a", 40),
+			"--push", "--create-pull-request",
+		)
+		if !errors.Is(err, publisherErr) {
+			t.Fatalf("new propagation publisher error = %v, want %v", err, publisherErr)
+		}
+	})
+
+	t.Run("surfaces release publication preparation failures", func(t *testing.T) {
+		identity := port.RepositoryIdentity{Remote: "origin"}
+		for _, commandPath := range [][]string{
+			{"workflow", "release", "promote", "--release", "release/2.8.0"},
+			{"workflow", "release", "backmerge", "--release", "release/2.8.0"},
+		} {
+			git := newWorkflowCommandCoverageGit(t, "release/2.8.0", nil)
+			git.identity = &identity
+			command := NewWithRuntime(BuildInfo{Version: "test"}, commandRuntime(git))
+			_, err := executeBootstrapCommand(t, command, append([]string{"--interactive", "never", "--output", "json"}, commandPath...)...)
+			assertProblemCode(t, err, problem.CodeRepositoryNotFound)
+		}
+	})
+
+	t.Run("preflights provider configuration before Git publication", func(t *testing.T) {
+		preflightErr := errors.New("GitHub token is unavailable")
+		runtime := commandRuntime(newCommandGit(t, "feature/ABC-123-add-export", []string{"feat(ABC-123): add export"}))
+		runtime.Publisher = workflowPreflightFailurePublisher{err: preflightErr}
+		command := NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+		_, err := executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never", "--output", "json", "--yes",
+			"workflow", "ticket", "publish",
+			"--branch", "feature/ABC-123-add-export",
+			"--push", "--create-pull-request",
+		)
+		if !errors.Is(err, preflightErr) {
+			t.Fatalf("ticket preflight error = %v, want %v", err, preflightErr)
+		}
+
+		for _, commandPath := range [][]string{
+			{"workflow", "release", "promote"},
+			{"workflow", "release", "backmerge"},
+		} {
+			runtime := commandRuntime(newCommandGit(t, "release/2.8.0", nil))
+			runtime.Publisher = workflowPreflightFailurePublisher{err: preflightErr}
+			command := NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+			_, err := executeBootstrapCommand(
+				t,
+				command,
+				append([]string{"--interactive", "never", "--output", "json", "--yes"}, append(commandPath, "--release", "release/2.8.0", "--create-pull-request")...)...,
+			)
+			if !errors.Is(err, preflightErr) {
+				t.Fatalf("release preflight error = %v, want %v", err, preflightErr)
+			}
+		}
+	})
+}
+
 func TestInteractiveTicketStartReportsRemoteRefresh(t *testing.T) {
 	git := newBranchCommandGit(t, "feature/ABC-123-add-export")
 	application := newBranchCommandApplication(git, nil, &commandHelperPrompt{}, "human")
@@ -582,9 +1028,12 @@ type workflowRecordingPublisher struct {
 	err     error
 }
 
-func (publisher *workflowRecordingPublisher) Publish(_ context.Context, request port.PullRequest) (port.PublishedPullRequest, error) {
+func (publisher *workflowRecordingPublisher) Publish(
+	_ context.Context,
+	publication port.PullRequestPublication,
+) (port.PublishedPullRequest, error) {
 	publisher.calls++
-	publisher.request = request
+	publisher.request = publication.PullRequest
 	return publisher.result, publisher.err
 }
 

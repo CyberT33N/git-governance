@@ -31,6 +31,7 @@ Die alten Namen `mkbranch` und `mkcommit` werden nicht zur Zieloberfläche. Ein 
 --repo <path>                    Standard: aktuelles Verzeichnis
 --config <path>                  explizite Konfigurationsdatei
 --quality-config <path>          explizite Repository-Quality-Gate-Datei
+--pull-request-provider none|github
 --dry-run                        Plan anzeigen, nichts mutieren
 --yes                            bestätigbare Schritte freigeben
 --timeout <duration>             Grenze für externe Prozesse
@@ -48,6 +49,11 @@ Regeln:
   ANSI-Farbe und `never` verwendet reine Textausgabe.
 - Im JSON-Modus sind Prompts verboten; bei `--interactive=auto` verhält sich JSON deshalb wie `never`.
 - Secrets werden weder über Flags noch über diese Konfigurationsdatei verwaltet.
+- `--pull-request-provider=github` aktiviert ausschließlich den GitHub-Adapter;
+  der Token stammt aus `GIT_GOVERNANCE_GITHUB_TOKEN`.
+- `--create-pull-request` ist ein expliziter Workflow-Flag, verlangt bei
+  Publish-Workflows zusätzlich `--push` und erzeugt ohne Provider keinen
+  stillen Fallback.
 
 Interaktive Textfelder zeigen vor der Eingabe ihren vollständigen kanonischen
 Vertrag. Bei einer fachlich ungültigen Eingabe bleibt die UI auf diesem Feld:
@@ -475,7 +481,8 @@ Ablauf:
 12. vor dem ersten Push interaktiv bestätigen oder `--push` nicht-interaktiv
     explizit setzen
 13. nach einem Push bei konfiguriertem Provider interaktiv die PR-Erstellung
-    bestätigen; ohne Provider nur den providerneutralen PR-Intent ausgeben
+    bestätigen; nicht-interaktiv `--create-pull-request` explizit setzen;
+    ohne Provider nur den providerneutralen PR-Intent ausgeben
 
 Für einen Scratch-Start benötigt der nicht-interaktive Modus eine
 Commit-Familie, eine Beschreibung und die bestehende Mutationsfreigabe:
@@ -497,6 +504,24 @@ Ohne Provider-Adapter wird kein Hosting-API-Aufruf erfunden. Die JSON-Ausgabe
 ist eine stabile Übergabeoberfläche für GitHub-, GitLab-, Bitbucket- oder
 andere Adapter. Eine Benutzerbestätigung kann deshalb nur dann einen echten PR
 erzeugen, wenn ein solcher Adapter zur Laufzeit konfiguriert ist.
+
+Für einen GitHub-PR setzt die Automation `--pull-request-provider github`,
+`--push` und `--create-pull-request`; der Token kommt ausschließlich aus
+`GIT_GOVERNANCE_GITHUB_TOKEN`. Der Adapter leitet Owner und Repository aus dem
+ausgewählten Git-Remote ab und gibt einen bereits offenen gleichartigen PR
+idempotent zurück.
+
+Nach manueller Konfliktauflösung und Staging ist die Fortsetzung auch ohne TTY
+verfügbar:
+
+```text
+git governance --interactive never --yes workflow ticket publish \
+  --branch feature/ABC-123-add-export \
+  --resume --push
+```
+
+Auf `scratch/*` bleiben die ursprünglichen `--type`/`--subject`- oder
+`--message`-Eingaben erforderlich; bei Mehrdeutigkeit bleibt `--target` Pflicht.
 
 ## 12. `workflow hotfix start`
 
@@ -530,6 +555,9 @@ git governance workflow hotfix publish \
 Der Befehl verlangt die tatsächlich betroffene Linie erneut, validiert den
 Hotfix gegen dieselbe Basis und erzeugt den PR-Intent auf genau diese Linie.
 Ein Hotfix wird niemals stillschweigend nach `develop` umgeleitet.
+`--create-pull-request` ist nur zusammen mit `--push` zulässig. Nach
+manueller Rebase-Konfliktauflösung setzt `--resume` dieselbe Hotfix-Publikation
+ohne interaktive Eingaben fort.
 
 ### 12.2 `workflow hotfix propagate`
 
@@ -543,6 +571,9 @@ git governance workflow hotfix propagate \
 Der Befehl erzeugt einen kontrollierten `fix/*`-Branch aus der Ziel-Linie,
 führt `git cherry-pick -x <sha>` aus und bereitet den PR gegen diese Ziel-Linie
 vor. Damit bleibt die Herkunft eines Forward- oder Backports nachweisbar.
+Bei einem pausierten Cherry-Pick löst der Benutzer die Konflikte und setzt
+anschließend mit `--source`, `--target-line`, dem erzeugten `--branch` und
+`--resume` fort. `--commit` ist beim Fortsetzen nicht erneut erforderlich.
 
 ## 13. Release-Kommandos
 
@@ -579,7 +610,8 @@ keine auswählbare Stabilisierungskategorie.
 
 Dieser Befehl validiert einen Stabilisierung-Branch gegen
 `origin/release/<semver>` und erzeugt seinen PR-Intent auf dieselbe
-Release-Linie.
+Release-Linie. `--create-pull-request` verlangt `--push`; nach manueller
+Rebase-Konfliktauflösung setzt `--resume` die vorhandene Stabilisierung fort.
 
 ### 13.4 `workflow release promote`
 
@@ -592,7 +624,9 @@ release/<semver> -> main
 Tagging und Artefakterstellung folgen erst nach dem geschützten Merge in der
 Release-Pipeline. Der CI-Workflow erzeugt `v<semver>` direkt auf dem
 Merge-Commit und startet anschließend den Artefaktworkflow für genau diesen
-unveränderlichen Tag.
+unveränderlichen Tag. Ein echter Provider-PR ist nur mit
+`--pull-request-provider github --create-pull-request` und der expliziten
+Mutationsfreigabe möglich.
 
 ### 13.5 `workflow release backmerge`
 
@@ -603,6 +637,8 @@ release/<semver> -> develop
 ```
 
 Die Freigabe nach `main`, Tagging und Artefakterstellung bleiben Release-/CI-Verantwortung.
+Ein echter Provider-PR folgt derselben expliziten GitHub-Adapter-Konfiguration
+wie die Promotion.
 
 ### 13.6 `workflow release support`
 

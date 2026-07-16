@@ -192,6 +192,28 @@ func TestDoctorGitOperations(t *testing.T) {
 	})
 }
 
+func TestContinueCherryPick(t *testing.T) {
+	t.Parallel()
+
+	t.Run("continues with a non-interactive editor", func(t *testing.T) {
+		runner := &fakeRunner{results: []processResult{{}}}
+		repository := &Repository{runner: runner, timeout: time.Second}
+		if err := repository.ContinueCherryPick(context.Background(), testIdentity()); err != nil {
+			t.Fatal(err)
+		}
+		assertCall(t, runner.calls[0], "C:/repo", "", "-c", "core.editor=true", "cherry-pick", "--continue")
+	})
+
+	t.Run("classifies continuation failures", func(t *testing.T) {
+		repository := &Repository{
+			runner:  &fakeRunner{results: []processResult{{err: errors.New("continue failed"), exitCode: 1}}},
+			timeout: time.Second,
+		}
+		err := repository.ContinueCherryPick(context.Background(), testIdentity())
+		assertProblemCode(t, err, problem.CodeGitCommandFailed)
+	})
+}
+
 func TestBranchStateOperations(t *testing.T) {
 	t.Parallel()
 

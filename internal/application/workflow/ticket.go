@@ -137,16 +137,17 @@ func (service *TicketService) StartTicket(ctx context.Context, request StartTick
 // PublishTicketRequest describes the handoff from completed local work to a
 // push and provider-neutral pull request.
 type PublishTicketRequest struct {
-	Repository      port.RepositoryIdentity
-	Branch          branch.BranchName
-	Base            *branch.TargetBase
-	Target          *branch.BranchName
-	ScratchTarget   *branch.BranchName
-	ScratchMessage  *commitmsg.Message
-	WorkflowManaged bool
-	Push            bool
-	Draft           bool
-	DryRun          bool
+	Repository        port.RepositoryIdentity
+	Branch            branch.BranchName
+	Base              *branch.TargetBase
+	Target            *branch.BranchName
+	ScratchTarget     *branch.BranchName
+	ScratchMessage    *commitmsg.Message
+	WorkflowManaged   bool
+	Push              bool
+	CreatePullRequest bool
+	Draft             bool
+	DryRun            bool
 }
 
 // PublishTicketResult contains the push status and provider-neutral PR intent.
@@ -163,8 +164,8 @@ type PublishTicketResult struct {
 }
 
 // PublishTicket validates the complete local commit series, runs quality
-// gates, synchronizes the base safely, and emits a pull request intent. It
-// stops at the pull request boundary.
+// gates, synchronizes the base safely, and emits a pull request intent.
+// Programmatic callers may explicitly request its push and provider publication.
 func (service *TicketService) PublishTicket(ctx context.Context, request PublishTicketRequest) (PublishTicketResult, error) {
 	if service.branches == nil || service.sync == nil || service.git == nil {
 		return PublishTicketResult{}, internalDependencyError("ticket workflow services")
@@ -179,6 +180,12 @@ func (service *TicketService) PublishTicket(ctx context.Context, request Publish
 		return PublishTicketResult{}, invalidWorkflowInput(
 			"ticket publish requires an official ticket branch",
 			"run this workflow from feature, fix, docs, refactor, chore, test, perf, or hotfix work",
+		)
+	}
+	if request.CreatePullRequest && !request.Push {
+		return PublishTicketResult{}, invalidWorkflowInput(
+			"pull-request creation requires an explicit branch push",
+			"set Push before requesting provider pull-request creation",
 		)
 	}
 
@@ -324,12 +331,12 @@ func (service *TicketService) PublishTicket(ctx context.Context, request Publish
 		}
 		result.Pushed = true
 	}
-	if request.Push && service.publisher != nil {
-		published, err := service.publisher.Publish(ctx, pullRequest)
+	if request.CreatePullRequest {
+		publishedURL, err := service.PublishPullRequest(ctx, repository, pullRequest)
 		if err != nil {
 			return PublishTicketResult{}, err
 		}
-		result.PublishedURL = published.URL
+		result.PublishedURL = publishedURL
 	}
 	return result, nil
 }
@@ -422,6 +429,7 @@ func (service *TicketService) PushPreparedTicket(
 	repository port.RepositoryIdentity,
 	name branch.BranchName,
 	base *branch.TargetBase,
+	workflowManaged bool,
 ) error {
 	if service.sync == nil || service.git == nil {
 		return internalDependencyError("ticket publication services")
@@ -433,9 +441,10 @@ func (service *TicketService) PushPreparedTicket(
 		)
 	}
 	validation, err := service.sync.ValidatePrePush(ctx, branchapp.PrePushRequest{
-		Repository: repository,
-		Name:       name,
-		Base:       base,
+		Repository:      repository,
+		Name:            name,
+		Base:            base,
+		WorkflowManaged: workflowManaged,
 	})
 	if err != nil {
 		return err
@@ -450,23 +459,87 @@ func (service *TicketService) HasPullRequestPublisher() bool {
 }
 
 // PublishPullRequest invokes the configured provider adapter for an already
-// prepared pull-request intent.
-func (service *TicketService) PublishPullRequest(ctx context.Context, request port.PullRequest) (string, error) {
-	if service == nil || service.publisher == nil {
-		return "", problem.New(problem.Details{
-			Code:        problem.CodeExternalCommandFailed,
-			Category:    problem.CategoryExternal,
-			Field:       "pull request publisher",
-			Expected:    "a configured hosting-provider adapter",
-			Rule:        "a real pull request can be created only through an explicit provider adapter",
-			Remediation: "configure a supported hosting-provider adapter or create the displayed provider-neutral pull-request intent manually",
-		})
+// prepared pull-request intent and the selected Git remote.
+func (service *TicketService) PublishPullRequest(
+	ctx context.Context,
+	repository port.RepositoryIdentity,
+	request port.PullRequest,
+) (string, error) {
+	if service == nil {
+		return "", pullRequestPublisherUnavailable()
 	}
-	published, err := service.publisher.Publish(ctx, request)
+	return publishPullRequest(ctx, service.git, service.publisher, repository, request)
+}
+
+func publishPullRequest(
+	ctx context.Context,
+	git port.GitRepository,
+	publisher port.PullRequestPublisher,
+	repository port.RepositoryIdentity,
+	request port.PullRequest,
+) (string, error) {
+	if publisher == nil || git == nil {
+		return "", pullRequestPublisherUnavailable()
+	}
+	publication, err := pullRequestPublication(ctx, git, repository, request)
+	if err != nil {
+		return "", err
+	}
+	published, err := publisher.Publish(ctx, publication)
 	if err != nil {
 		return "", err
 	}
 	return published.URL, nil
+}
+
+// PreflightPullRequest validates optional hosting configuration before a
+// publication-affecting Git push. Adapters without a preflight capability
+// remain supported and are invoked only during actual publication.
+func (service *TicketService) PreflightPullRequest(
+	ctx context.Context,
+	repository port.RepositoryIdentity,
+	request port.PullRequest,
+) error {
+	if service == nil || service.publisher == nil || service.git == nil {
+		return pullRequestPublisherUnavailable()
+	}
+	publication, err := pullRequestPublication(ctx, service.git, repository, request)
+	if err != nil {
+		return err
+	}
+	validator, ok := service.publisher.(port.PullRequestPublisherPreflight)
+	if !ok {
+		return nil
+	}
+	return validator.Validate(ctx, publication)
+}
+
+func pullRequestPublication(
+	ctx context.Context,
+	git port.GitRepository,
+	repository port.RepositoryIdentity,
+	request port.PullRequest,
+) (port.PullRequestPublication, error) {
+	remoteURL, err := git.RemoteURL(ctx, repository)
+	if err != nil {
+		return port.PullRequestPublication{}, err
+	}
+	return port.PullRequestPublication{
+		Repository:  repository,
+		RemoteURL:   remoteURL,
+		PullRequest: request,
+	}, nil
+}
+
+func pullRequestPublisherUnavailable() error {
+	return problem.New(problem.Details{
+		Code:        problem.CodeExternalCommandFailed,
+		Category:    problem.CategoryExternal,
+		Field:       "pull request publisher",
+		Expected:    "a configured hosting-provider adapter",
+		Rule:        "a real pull request can be created only through an explicit provider adapter",
+		Remediation: "configure a supported hosting-provider adapter or create the displayed provider-neutral pull-request intent manually",
+	})
 }
 
 func newTicketPullRequest(name, target branch.BranchName, draft bool) port.PullRequest {

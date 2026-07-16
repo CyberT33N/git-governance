@@ -32,6 +32,11 @@ func (application *application) validateOptions() error {
 	default:
 		return invalidOption("color", application.options.color, "auto, always, or never")
 	}
+	switch application.options.pullRequestProvider {
+	case "", "none", "github":
+	default:
+		return invalidOption("pull-request-provider", application.options.pullRequestProvider, "none or github")
+	}
 	if application.options.timeout <= 0 {
 		return invalidOption("timeout", application.options.timeout.String(), "a positive duration")
 	}
@@ -119,6 +124,132 @@ func (application *application) confirmMutation(ctx context.Context, label, desc
 		Expected:    "an explicit yes",
 		Rule:        "the user declined the mutation",
 		Remediation: "rerun the command and confirm the planned operation",
+	})
+}
+
+func (application *application) validatePullRequestPublication(
+	services services,
+	push, createPullRequest bool,
+) error {
+	if createPullRequest && !push {
+		return invalidOption("create-pull-request", "true", "--push")
+	}
+	if createPullRequest && !application.options.dryRun && !services.tickets.HasPullRequestPublisher() {
+		return pullRequestPublisherUnavailable()
+	}
+	return nil
+}
+
+func (application *application) completePreparedPublication(
+	ctx context.Context,
+	services services,
+	repository port.RepositoryIdentity,
+	result *workflow.PublishTicketResult,
+	requestedPush, requestedPullRequest bool,
+	workflowManaged bool,
+) error {
+	if result == nil || result.DryRun {
+		return nil
+	}
+	if requestedPullRequest {
+		if err := services.tickets.PreflightPullRequest(ctx, repository, result.PullRequest); err != nil {
+			return err
+		}
+	}
+	push := requestedPush
+	if application.promptAvailable() && !application.options.yes {
+		confirmed, err := application.prompt().Confirm(ctx, port.ConfirmRequest{
+			Label:       "Push official ticket branch",
+			Description: "Push " + result.Branch.String() + " after the completed synchronization? The first push configures its matching upstream branch.",
+			Default:     requestedPush,
+		})
+		if err != nil {
+			return err
+		}
+		push = confirmed
+	}
+	if !push {
+		return nil
+	}
+	base := result.Sync.Base
+	if err := services.tickets.PushPreparedTicket(ctx, repository, result.Branch, &base, workflowManaged); err != nil {
+		return err
+	}
+	result.Pushed = true
+
+	createPullRequest, err := application.resolvePullRequestPublication(
+		ctx,
+		services,
+		result.PullRequest,
+		requestedPullRequest,
+	)
+	if err != nil {
+		return err
+	}
+	if !createPullRequest {
+		return nil
+	}
+	if err := services.tickets.PreflightPullRequest(ctx, repository, result.PullRequest); err != nil {
+		return err
+	}
+	publishedURL, err := services.tickets.PublishPullRequest(ctx, repository, result.PullRequest)
+	if err != nil {
+		return err
+	}
+	result.PublishedURL = publishedURL
+	return nil
+}
+
+func (application *application) resolvePullRequestPublication(
+	ctx context.Context,
+	services services,
+	request port.PullRequest,
+	requested bool,
+) (bool, error) {
+	if !services.tickets.HasPullRequestPublisher() {
+		if requested && !application.options.dryRun {
+			return false, pullRequestPublisherUnavailable()
+		}
+		return false, nil
+	}
+	if application.promptAvailable() && !application.options.yes {
+		confirmed, err := application.prompt().Confirm(ctx, port.ConfirmRequest{
+			Label: "Create pull request",
+			Description: "Create the pull request from " + request.Source.String() +
+				" to " + request.Target.String() + " now?",
+			Default: requested,
+		})
+		if err != nil {
+			return false, err
+		}
+		return confirmed, nil
+	}
+	if requested && !application.options.dryRun && !application.options.yes {
+		return false, pullRequestConfirmationRequired()
+	}
+	return requested, nil
+}
+
+func pullRequestPublisherUnavailable() error {
+	return problem.New(problem.Details{
+		Code:        problem.CodeExternalCommandFailed,
+		Category:    problem.CategoryExternal,
+		Field:       "pull request publisher",
+		Expected:    "a configured hosting-provider adapter",
+		Rule:        "a real pull request can be created only through an explicit provider adapter",
+		Remediation: "set --pull-request-provider github and configure GIT_GOVERNANCE_GITHUB_TOKEN",
+	})
+}
+
+func pullRequestConfirmationRequired() error {
+	return problem.New(problem.Details{
+		Code:        problem.CodeInvalidInput,
+		Category:    problem.CategoryUsage,
+		Field:       "confirmation",
+		Expected:    "--yes for non-interactive pull-request creation",
+		Rule:        "external pull-request creation requires explicit confirmation",
+		Example:     "--yes --create-pull-request",
+		Remediation: "pass --yes or run in an interactive terminal",
 	})
 }
 

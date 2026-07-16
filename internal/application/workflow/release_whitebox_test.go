@@ -196,9 +196,16 @@ type releaseWhiteboxPublisher struct {
 	requests []port.PullRequest
 }
 
-func (publisher *releaseWhiteboxPublisher) Publish(ctx context.Context, request port.PullRequest) (port.PublishedPullRequest, error) {
+type nonContinuingGit struct {
+	port.GitRepository
+}
+
+func (publisher *releaseWhiteboxPublisher) Publish(
+	ctx context.Context,
+	publication port.PullRequestPublication,
+) (port.PublishedPullRequest, error) {
 	publisher.contexts = append(publisher.contexts, ctx)
-	publisher.requests = append(publisher.requests, request)
+	publisher.requests = append(publisher.requests, publication.PullRequest)
 	return publisher.result, publisher.err
 }
 
@@ -765,19 +772,21 @@ func TestReleaseWhiteboxPromotionAndBackmergePublication(t *testing.T) {
 	t.Run("promotion propagates publisher errors and emits a complete PR intent", func(t *testing.T) {
 		publishFailure := errors.New("publish promotion")
 		publisher := &releaseWhiteboxPublisher{err: publishFailure}
-		_, err := (&ReleaseService{publisher: publisher}).PrepareReleasePromotion(context.Background(), PrepareReleasePromotionRequest{
-			Repository: testRepository(),
-			Release:    release,
+		_, err := (&ReleaseService{git: &fakeGitRepository{}, publisher: publisher}).PrepareReleasePromotion(context.Background(), PrepareReleasePromotionRequest{
+			Repository:        testRepository(),
+			Release:           release,
+			CreatePullRequest: true,
 		})
 		assertReleaseErrorIs(t, err, publishFailure)
 
 		type contextKey struct{}
 		ctx := context.WithValue(context.Background(), contextKey{}, "promotion")
 		publisher = &releaseWhiteboxPublisher{result: port.PublishedPullRequest{URL: "https://example.invalid/pr/promotion"}}
-		result, err := (&ReleaseService{publisher: publisher}).PrepareReleasePromotion(ctx, PrepareReleasePromotionRequest{
-			Repository: testRepository(),
-			Release:    release,
-			Draft:      true,
+		result, err := (&ReleaseService{git: &fakeGitRepository{}, publisher: publisher}).PrepareReleasePromotion(ctx, PrepareReleasePromotionRequest{
+			Repository:        testRepository(),
+			Release:           release,
+			CreatePullRequest: true,
+			Draft:             true,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -823,19 +832,21 @@ func TestReleaseWhiteboxPromotionAndBackmergePublication(t *testing.T) {
 	t.Run("backmerge propagates publisher errors and emits a complete PR intent", func(t *testing.T) {
 		publishFailure := errors.New("publish backmerge")
 		publisher := &releaseWhiteboxPublisher{err: publishFailure}
-		_, err := (&ReleaseService{publisher: publisher}).PrepareReleaseBackmerge(context.Background(), PrepareReleaseBackmergeRequest{
-			Repository: testRepository(),
-			Release:    release,
+		_, err := (&ReleaseService{git: &fakeGitRepository{}, publisher: publisher}).PrepareReleaseBackmerge(context.Background(), PrepareReleaseBackmergeRequest{
+			Repository:        testRepository(),
+			Release:           release,
+			CreatePullRequest: true,
 		})
 		assertReleaseErrorIs(t, err, publishFailure)
 
 		type contextKey struct{}
 		ctx := context.WithValue(context.Background(), contextKey{}, "backmerge")
 		publisher = &releaseWhiteboxPublisher{result: port.PublishedPullRequest{URL: "https://example.invalid/pr/backmerge"}}
-		result, err := (&ReleaseService{publisher: publisher}).PrepareReleaseBackmerge(ctx, PrepareReleaseBackmergeRequest{
-			Repository: testRepository(),
-			Release:    release,
-			Draft:      true,
+		result, err := (&ReleaseService{git: &fakeGitRepository{}, publisher: publisher}).PrepareReleaseBackmerge(ctx, PrepareReleaseBackmergeRequest{
+			Repository:        testRepository(),
+			Release:           release,
+			CreatePullRequest: true,
+			Draft:             true,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -977,6 +988,7 @@ func TestReleaseWhiteboxPropagateHotfixBoundaries(t *testing.T) {
 		publisher := &releaseWhiteboxPublisher{result: port.PublishedPullRequest{URL: "https://example.invalid/pr/forward-port"}}
 		request := releasePropagationRequest()
 		request.Push = true
+		request.CreatePullRequest = true
 
 		result, err := newReleaseWhiteboxService(git, publisher).PropagateHotfix(ctx, request)
 		if err != nil {
@@ -996,6 +1008,153 @@ func TestReleaseWhiteboxPropagateHotfixBoundaries(t *testing.T) {
 		if git.pushed[0].String() == request.TargetLine.String() {
 			t.Fatalf("protected target line %q was pushed directly", request.TargetLine)
 		}
+	})
+}
+
+func TestReleaseWhiteboxResumeHotfixPropagation(t *testing.T) {
+	source := mustBranch("hotfix/ABC-999-payment-timeout")
+	target := mustBranch("main")
+	propagation := mustBranch("fix/ABC-999-forward-port-payment-timeout")
+	base := mustBase("origin", "main")
+	request := func() ResumeHotfixPropagationRequest {
+		return ResumeHotfixPropagationRequest{
+			Repository: testRepository(),
+			Source:     source,
+			TargetLine: target,
+			Branch:     propagation,
+		}
+	}
+	configure := func(git *releaseWhiteboxGit) {
+		git.workflowBases = map[string]branch.TargetBase{propagation.String(): base}
+	}
+
+	t.Run("rejects dependencies and invalid inputs before mutation", func(t *testing.T) {
+		_, err := (&ReleaseService{}).ResumeHotfixPropagation(context.Background(), request())
+		assertProblemCode(t, err, problem.CodeInternal)
+
+		for _, mutate := range []func(*ResumeHotfixPropagationRequest){
+			func(value *ResumeHotfixPropagationRequest) { value.Source = mustBranch("feature/ABC-999-not-hotfix") },
+			func(value *ResumeHotfixPropagationRequest) {
+				value.TargetLine = mustBranch("feature/ABC-998-not-a-line")
+			},
+			func(value *ResumeHotfixPropagationRequest) {
+				value.Branch = mustBranch("feature/ABC-999-not-a-propagation")
+			},
+			func(value *ResumeHotfixPropagationRequest) { value.Branch = mustBranch("fix/ABC-998-wrong-ticket") },
+			func(value *ResumeHotfixPropagationRequest) { value.CreatePullRequest = true },
+		} {
+			git := newReleaseWhiteboxGit()
+			configure(git)
+			candidate := request()
+			mutate(&candidate)
+			_, err := newReleaseWhiteboxService(git, nil).ResumeHotfixPropagation(context.Background(), candidate)
+			assertProblemCode(t, err, problem.CodeInvalidInput)
+			assertReleaseNoCall(t, git.calls, "continue-cherry-pick")
+		}
+
+		git := newReleaseWhiteboxGit()
+		configure(git)
+		candidate := request()
+		candidate.Repository = port.RepositoryIdentity{}
+		_, err = newReleaseWhiteboxService(git, nil).ResumeHotfixPropagation(context.Background(), candidate)
+		assertProblemCode(t, err, problem.CodeRepositoryNotFound)
+
+		git = newReleaseWhiteboxGit()
+		configure(git)
+		candidate = request()
+		candidate.Repository.Remote = "bad remote"
+		_, err = newReleaseWhiteboxService(git, nil).ResumeHotfixPropagation(context.Background(), candidate)
+		assertProblemCode(t, err, problem.CodeBranchBaseInvalid)
+	})
+
+	t.Run("requires matching stored workflow provenance", func(t *testing.T) {
+		git := newReleaseWhiteboxGit()
+		_, err := newReleaseWhiteboxService(git, nil).ResumeHotfixPropagation(context.Background(), request())
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+
+		git = newReleaseWhiteboxGit()
+		configure(git)
+		git.workflowBaseErr = errors.New("workflow base unavailable")
+		_, err = newReleaseWhiteboxService(git, nil).ResumeHotfixPropagation(context.Background(), request())
+		if !strings.Contains(err.Error(), "workflow base unavailable") {
+			t.Fatalf("workflow-base error = %v", err)
+		}
+
+		git = newReleaseWhiteboxGit()
+		git.workflowBases = map[string]branch.TargetBase{propagation.String(): mustBase("origin", "develop")}
+		_, err = newReleaseWhiteboxService(git, nil).ResumeHotfixPropagation(context.Background(), request())
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+	})
+
+	t.Run("requires a resumable cherry-pick when Git is paused", func(t *testing.T) {
+		git := newReleaseWhiteboxGit()
+		configure(git)
+		git.active = true
+		git.activeOperation = "merge"
+		_, err := newReleaseWhiteboxService(git, nil).ResumeHotfixPropagation(context.Background(), request())
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+
+		git = newReleaseWhiteboxGit()
+		configure(git)
+		git.active = true
+		git.activeOperation = "cherry-pick"
+		_, err = newReleaseWhiteboxService(nonContinuingGit{GitRepository: git}, nil).ResumeHotfixPropagation(context.Background(), request())
+		assertProblemCode(t, err, problem.CodeInternal)
+
+		git = newReleaseWhiteboxGit()
+		configure(git)
+		git.active = true
+		git.activeOperation = "cherry-pick"
+		git.continueErr = errors.New("still conflicted")
+		_, err = newReleaseWhiteboxService(git, nil).ResumeHotfixPropagation(context.Background(), request())
+		assertProblemCode(t, err, problem.CodeCherryPickConflict)
+
+		git = newReleaseWhiteboxGit()
+		configure(git)
+		git.activeErr = errors.New("inspect active operation")
+		_, err = newReleaseWhiteboxService(git, nil).ResumeHotfixPropagation(context.Background(), request())
+		if !strings.Contains(err.Error(), "inspect active operation") {
+			t.Fatalf("active-operation error = %v", err)
+		}
+	})
+
+	t.Run("continues a paused or already-completed cherry-pick", func(t *testing.T) {
+		for _, paused := range []bool{true, false} {
+			git := newReleaseWhiteboxGit()
+			configure(git)
+			git.active = paused
+			if paused {
+				git.activeOperation = "cherry-pick"
+			}
+			result, err := newReleaseWhiteboxService(git, nil).ResumeHotfixPropagation(context.Background(), request())
+			if err != nil || !result.CherryPicked || result.Branch.Name != propagation ||
+				result.Publication.PullRequest.Target != target {
+				t.Fatalf("ResumeHotfixPropagation() = (%#v, %v)", result, err)
+			}
+			if paused && countCall(git.calls, "continue-cherry-pick") != 1 {
+				t.Fatalf("continuation calls = %v", git.calls)
+			}
+		}
+
+		git := newReleaseWhiteboxGit()
+		configure(git)
+		git.messages = nil
+		_, err := newReleaseWhiteboxService(git, nil).ResumeHotfixPropagation(context.Background(), request())
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+	})
+
+	t.Run("classifies only paused cherry-pick failures", func(t *testing.T) {
+		cause := errors.New("cherry-pick failed")
+		git := newReleaseWhiteboxGit()
+		configure(git)
+		if err := newReleaseWhiteboxService(git, nil).classifyCherryPickFailure(context.Background(), testRepository(), cause); !errors.Is(err, cause) {
+			t.Fatalf("inactive failure = %v, want %v", err, cause)
+		}
+
+		git.active = true
+		git.activeOperation = "cherry-pick"
+		err := newReleaseWhiteboxService(git, nil).classifyCherryPickFailure(context.Background(), testRepository(), cause)
+		assertProblemCode(t, err, problem.CodeCherryPickConflict)
 	})
 }
 

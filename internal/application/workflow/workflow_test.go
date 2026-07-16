@@ -229,6 +229,16 @@ func (fake *fakeGitRepository) CherryPick(_ context.Context, _ port.RepositoryId
 	return fake.err
 }
 
+func (fake *fakeGitRepository) ContinueCherryPick(context.Context, port.RepositoryIdentity) error {
+	fake.calls = append(fake.calls, "continue-cherry-pick")
+	if fake.continueErr != nil {
+		return fake.continueErr
+	}
+	fake.active = false
+	fake.activeOperation = ""
+	return fake.err
+}
+
 func (fake *fakeGitRepository) DeleteLocalBranch(context.Context, port.RepositoryIdentity, branch.BranchName, bool) error {
 	fake.calls = append(fake.calls, "delete-local-branch")
 	return fake.err
@@ -298,9 +308,9 @@ type fakePublisher struct {
 	err     error
 }
 
-func (fake *fakePublisher) Publish(_ context.Context, request port.PullRequest) (port.PublishedPullRequest, error) {
+func (fake *fakePublisher) Publish(_ context.Context, publication port.PullRequestPublication) (port.PublishedPullRequest, error) {
 	fake.calls++
-	fake.request = request
+	fake.request = publication.PullRequest
 	return fake.result, fake.err
 }
 
@@ -363,10 +373,11 @@ func TestPublishTicketValidatesSeriesAndBuildsPullRequest(t *testing.T) {
 	service := newTicketService(git, quality, publisher)
 	name := mustBranch("feature/ABC-123-add-export")
 	result, err := service.PublishTicket(context.Background(), PublishTicketRequest{
-		Repository: testRepository(),
-		Branch:     name,
-		Push:       true,
-		Draft:      true,
+		Repository:        testRepository(),
+		Branch:            name,
+		Push:              true,
+		CreatePullRequest: true,
+		Draft:             true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -377,7 +388,7 @@ func TestPublishTicketValidatesSeriesAndBuildsPullRequest(t *testing.T) {
 	if result.PublishedURL != "https://example.invalid/pr/1" || publisher.calls != 1 || quality.calls != 1 {
 		t.Fatalf("publish result = %#v, publisher=%d, quality=%d", result, publisher.calls, quality.calls)
 	}
-	expected := "validate-ref,fetch,commit-messages,validate-ref,worktree-clean,publication,missing-base,push"
+	expected := "validate-ref,fetch,commit-messages,validate-ref,worktree-clean,publication,missing-base,push,remote-url"
 	if got := strings.Join(git.calls, ","); got != expected {
 		t.Fatalf("calls = %q, want %q", got, expected)
 	}
@@ -491,7 +502,7 @@ func TestTicketPublicationResumePushAndPullRequestBoundaries(t *testing.T) {
 		t.Fatalf("ResumeTicketPublish() = (%#v, %v), quality=%d", resumed, err, quality.calls)
 	}
 
-	if err := service.PushPreparedTicket(context.Background(), testRepository(), name, &base); err != nil {
+	if err := service.PushPreparedTicket(context.Background(), testRepository(), name, &base, false); err != nil {
 		t.Fatalf("PushPreparedTicket() error = %v", err)
 	}
 	if len(git.pushed) != 1 || git.pushed[0] != name {
@@ -500,7 +511,7 @@ func TestTicketPublicationResumePushAndPullRequestBoundaries(t *testing.T) {
 	if service.HasPullRequestPublisher() {
 		t.Fatal("service unexpectedly reports a publisher")
 	}
-	_, err = service.PublishPullRequest(context.Background(), resumed.PullRequest)
+	_, err = service.PublishPullRequest(context.Background(), testRepository(), resumed.PullRequest)
 	assertProblemCode(t, err, problem.CodeExternalCommandFailed)
 
 	publisher := &fakePublisher{result: port.PublishedPullRequest{URL: "https://example.invalid/pr/2"}}
@@ -508,7 +519,7 @@ func TestTicketPublicationResumePushAndPullRequestBoundaries(t *testing.T) {
 	if !service.HasPullRequestPublisher() {
 		t.Fatal("service did not report the configured publisher")
 	}
-	url, err := service.PublishPullRequest(context.Background(), resumed.PullRequest)
+	url, err := service.PublishPullRequest(context.Background(), testRepository(), resumed.PullRequest)
 	if err != nil || url != "https://example.invalid/pr/2" || publisher.calls != 1 {
 		t.Fatalf("PublishPullRequest() = (%q, %v), calls=%d", url, err, publisher.calls)
 	}
@@ -622,32 +633,32 @@ func TestTicketPublicationResumeAndPushWhiteboxFailurePaths(t *testing.T) {
 	})
 
 	t.Run("push protects all preconditions and preserves adapter failures", func(t *testing.T) {
-		err := (&TicketService{}).PushPreparedTicket(context.Background(), testRepository(), name, &base)
+		err := (&TicketService{}).PushPreparedTicket(context.Background(), testRepository(), name, &base, false)
 		assertProblemCode(t, err, problem.CodeInternal)
 
 		git := &fakeGitRepository{}
 		service := newTicketService(git, nil, nil)
-		err = service.PushPreparedTicket(context.Background(), testRepository(), mustBranch("scratch/ABC-123-experiment"), &base)
+		err = service.PushPreparedTicket(context.Background(), testRepository(), mustBranch("scratch/ABC-123-experiment"), &base, false)
 		assertProblemCode(t, err, problem.CodeInvalidInput)
 
 		git = &fakeGitRepository{publication: branch.PublicationUnpublished, missing: true}
-		err = newTicketService(git, nil, nil).PushPreparedTicket(context.Background(), testRepository(), name, &base)
+		err = newTicketService(git, nil, nil).PushPreparedTicket(context.Background(), testRepository(), name, &base, false)
 		assertProblemCode(t, err, problem.CodeBranchBaseInvalid)
 
 		publicationErr := errors.New("publication failed")
 		git = &fakeGitRepository{publicationErr: publicationErr}
-		err = newTicketService(git, nil, nil).PushPreparedTicket(context.Background(), testRepository(), name, &base)
+		err = newTicketService(git, nil, nil).PushPreparedTicket(context.Background(), testRepository(), name, &base, false)
 		if !errors.Is(err, publicationErr) {
 			t.Fatalf("publication error = %v, want %v", err, publicationErr)
 		}
 
 		git = &fakeGitRepository{publication: branch.PublicationUnknown}
-		err = newTicketService(git, nil, nil).PushPreparedTicket(context.Background(), testRepository(), name, &base)
+		err = newTicketService(git, nil, nil).PushPreparedTicket(context.Background(), testRepository(), name, &base, false)
 		assertProblemCode(t, err, problem.CodeBranchPublicationUnknown)
 
 		pushErr := errors.New("push failed")
 		git = &fakeGitRepository{publication: branch.PublicationUnpublished, pushErr: pushErr}
-		err = newTicketService(git, nil, nil).PushPreparedTicket(context.Background(), testRepository(), name, &base)
+		err = newTicketService(git, nil, nil).PushPreparedTicket(context.Background(), testRepository(), name, &base, false)
 		if !errors.Is(err, pushErr) {
 			t.Fatalf("push error = %v, want %v", err, pushErr)
 		}
@@ -656,7 +667,7 @@ func TestTicketPublicationResumeAndPushWhiteboxFailurePaths(t *testing.T) {
 	t.Run("pull request publisher errors are preserved", func(t *testing.T) {
 		publishErr := errors.New("publisher failed")
 		service := newTicketService(&fakeGitRepository{}, nil, &fakePublisher{err: publishErr})
-		_, err := service.PublishPullRequest(context.Background(), port.PullRequest{})
+		_, err := service.PublishPullRequest(context.Background(), testRepository(), port.PullRequest{})
 		if !errors.Is(err, publishErr) {
 			t.Fatalf("publisher error = %v, want %v", err, publishErr)
 		}
@@ -879,8 +890,9 @@ func TestPrepareReleaseBackmerge(t *testing.T) {
 	publisher := &fakePublisher{result: port.PublishedPullRequest{URL: "https://example.invalid/pr/backmerge"}}
 	service := newReleaseService(&fakeGitRepository{}, publisher)
 	result, err := service.PrepareReleaseBackmerge(context.Background(), PrepareReleaseBackmergeRequest{
-		Repository: testRepository(),
-		Release:    mustBranch("release/2.8.0"),
+		Repository:        testRepository(),
+		Release:           mustBranch("release/2.8.0"),
+		CreatePullRequest: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -943,8 +955,9 @@ func TestReleasePromotionAndSupportProvenance(t *testing.T) {
 		publisher := &fakePublisher{result: port.PublishedPullRequest{URL: "https://example.invalid/pr/release"}}
 		service := newReleaseService(&fakeGitRepository{}, publisher)
 		result, err := service.PrepareReleasePromotion(context.Background(), PrepareReleasePromotionRequest{
-			Repository: testRepository(),
-			Release:    mustBranch("release/2.8.0"),
+			Repository:        testRepository(),
+			Release:           mustBranch("release/2.8.0"),
+			CreatePullRequest: true,
 		})
 		if err != nil || result.PullRequest.Target.String() != "main" || result.PublishedURL == "" {
 			t.Fatalf("PrepareReleasePromotion() = (%#v, %v)", result, err)

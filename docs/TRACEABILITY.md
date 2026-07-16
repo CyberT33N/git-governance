@@ -61,10 +61,11 @@ does not rely on any external governance repository or unpublished rule set.
 | `branch list`, `validate`, `create`, `merge-scratch`, `sync-base` | IMPLEMENTED | CLI contract tests cover help, JSON, flags, dry-run behavior, and structured commit composition |
 | `commit create`, `validate` | IMPLEMENTED | explicit staging, branch-derived ticket context, and canonical family selection are enforced |
 | `workflow ticket start` | IMPLEMENTED | optional scratch branch and provider-neutral PR intent |
-| `workflow ticket publish` | VERIFIED | reports conditional rebase state, resumes a resolved conflict through Retry, asks before push, and creates a PR only through a configured provider adapter |
+| `workflow ticket publish` | IMPLEMENTED | reports conditional rebase state, resumes resolved rebase and scratch-transfer conflicts interactively or with `--resume`, and creates a PR only through an explicit configured provider |
 | `workflow hotfix start` | IMPLEMENTED | affected-line selection is mandatory |
-| hotfix publish and propagation | IMPLEMENTED | affected-line publish plus `cherry-pick -x` forward/backport workflow |
-| `workflow release cut`, `stabilize`, `promote`, `backmerge`, `support`, `cleanup` | IMPLEMENTED | stabilization constraints, release-to-main intent, cleanup, and support-tag provenance are enforced |
+| hotfix publish and propagation | IMPLEMENTED | affected-line publish plus `cherry-pick -x` forward/backport workflow, including non-interactive `--resume` continuation |
+| `workflow release cut`, `stabilize`, `promote`, `backmerge`, `support`, `cleanup` | IMPLEMENTED | stabilization constraints, release-to-main intent, explicit provider publication, cleanup, and support-tag provenance are enforced |
+| GitHub pull-request adapter | IMPLEMENTED | standard-library REST adapter, remote-derived repository resolution, explicit API versioning, bounded responses, and idempotent existing-PR lookup |
 | `validate pre-push` | IMPLEMENTED | parses every Git stdin ref update and validates the actual remote target |
 | `config key` | IMPLEMENTED | OS configuration directory, atomic JSON storage |
 | `policy describe`, `completion`, `version` | IMPLEMENTED | policy and environment inspection are read-only |
@@ -85,7 +86,7 @@ does not rely on any external governance repository or unpublished rule set.
 | Specialized workflow base metadata | VERIFIED | local Git metadata records hotfix, stabilization, and propagation bases for later sync and pre-push validation |
 | First push checks basis freshness | VERIFIED | push is blocked when an unpublished branch misses base commits |
 | Unpublished branch rebase | VERIFIED | only after a real base delta |
-| Interactive conflict status and retry | VERIFIED | no-op/rebase rationale is displayed; an unresolved rebase or scratch squash is resumed without restarting publication |
+| Interactive and non-interactive conflict continuation | IMPLEMENTED | rebase, scratch-squash, and hotfix-propagation continuations remain explicit and can resume with `--resume` after manual conflict resolution |
 | Published branch synchronization | VERIFIED | recommends or performs explicit merge, never routine rebase |
 | Scratch branch | VERIFIED | private local branch from the same-ticket official local branch; transfer resolves an existing local official target by ticket ID and squashes to one governed commit |
 | Release stabilization and completion | IMPLEMENTED | constrained stabilization, promotion intent, backmerge, cleanup, and support-tag provenance are present |
@@ -151,7 +152,7 @@ does not rely on any external governance repository or unpublished rule set.
 ## Explicit non-goals in v1
 
 - No live ticket-registry lookup.
-- No provider-specific pull-request API without an explicit adapter.
+- GitHub pull-request publication is supported only through the explicit GitHub adapter; other provider-specific APIs remain out of scope.
 - No automatic self-update.
 - No direct mutation of protected shared lines.
 - No automatic shell-profile editing.

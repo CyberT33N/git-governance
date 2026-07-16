@@ -296,10 +296,11 @@ func (service *ReleaseService) CreateReleaseStabilization(ctx context.Context, r
 // PrepareReleasePromotionRequest describes a provider-neutral release-to-main
 // pull request after release stabilization and approval.
 type PrepareReleasePromotionRequest struct {
-	Repository port.RepositoryIdentity
-	Release    branch.BranchName
-	Draft      bool
-	DryRun     bool
+	Repository        port.RepositoryIdentity
+	Release           branch.BranchName
+	CreatePullRequest bool
+	Draft             bool
+	DryRun            bool
 }
 
 // PrepareReleasePromotionResult exposes the release-to-main pull request
@@ -319,7 +320,8 @@ func (service *ReleaseService) PrepareReleasePromotion(ctx context.Context, requ
 			"select the frozen release line approved for promotion",
 		)
 	}
-	if _, err := normalizeWorkflowRepository(request.Repository); err != nil {
+	repository, err := normalizeWorkflowRepository(request.Repository)
+	if err != nil {
 		return PrepareReleasePromotionResult{}, err
 	}
 	version, _ := request.Release.ReleaseVersion()
@@ -332,24 +334,25 @@ func (service *ReleaseService) PrepareReleasePromotion(ctx context.Context, requ
 		},
 		DryRun: request.DryRun,
 	}
-	if request.DryRun || service.publisher == nil {
+	if request.DryRun || !request.CreatePullRequest {
 		return result, nil
 	}
-	published, err := service.publisher.Publish(ctx, result.PullRequest)
+	publishedURL, err := publishPullRequest(ctx, service.git, service.publisher, repository, result.PullRequest)
 	if err != nil {
 		return PrepareReleasePromotionResult{}, err
 	}
-	result.PublishedURL = published.URL
+	result.PublishedURL = publishedURL
 	return result, nil
 }
 
 // PrepareReleaseBackmergeRequest describes provider-neutral release backmerge
 // preparation after a release has been approved.
 type PrepareReleaseBackmergeRequest struct {
-	Repository port.RepositoryIdentity
-	Release    branch.BranchName
-	Draft      bool
-	DryRun     bool
+	Repository        port.RepositoryIdentity
+	Release           branch.BranchName
+	CreatePullRequest bool
+	Draft             bool
+	DryRun            bool
 }
 
 // PrepareReleaseBackmergeResult exposes the PR intent and optional published
@@ -368,7 +371,8 @@ func (service *ReleaseService) PrepareReleaseBackmerge(ctx context.Context, requ
 			"select the completed release branch to merge back into develop",
 		)
 	}
-	if _, err := normalizeWorkflowRepository(request.Repository); err != nil {
+	repository, err := normalizeWorkflowRepository(request.Repository)
+	if err != nil {
 		return PrepareReleaseBackmergeResult{}, err
 	}
 	releaseVersion, _ := request.Release.ReleaseVersion()
@@ -382,28 +386,29 @@ func (service *ReleaseService) PrepareReleaseBackmerge(ctx context.Context, requ
 		PullRequest: pullRequest,
 		DryRun:      request.DryRun,
 	}
-	if request.DryRun || service.publisher == nil {
+	if request.DryRun || !request.CreatePullRequest {
 		return result, nil
 	}
-	published, err := service.publisher.Publish(ctx, pullRequest)
+	publishedURL, err := publishPullRequest(ctx, service.git, service.publisher, repository, pullRequest)
 	if err != nil {
 		return PrepareReleaseBackmergeResult{}, err
 	}
-	result.PublishedURL = published.URL
+	result.PublishedURL = publishedURL
 	return result, nil
 }
 
 // PropagateHotfixRequest describes an explicit forward-port or backport of one
 // already-reviewed hotfix commit into another active line.
 type PropagateHotfixRequest struct {
-	Repository port.RepositoryIdentity
-	Source     branch.BranchName
-	TargetLine branch.BranchName
-	CommitID   string
-	Slug       branch.Slug
-	Push       bool
-	Draft      bool
-	DryRun     bool
+	Repository        port.RepositoryIdentity
+	Source            branch.BranchName
+	TargetLine        branch.BranchName
+	CommitID          string
+	Slug              branch.Slug
+	Push              bool
+	CreatePullRequest bool
+	Draft             bool
+	DryRun            bool
 }
 
 // PropagateHotfixResult describes the derived fix branch, cherry-pick, and
@@ -489,24 +494,162 @@ func (service *ReleaseService) PropagateHotfix(ctx context.Context, request Prop
 		return PropagateHotfixResult{}, err
 	}
 	if err := service.git.CherryPick(ctx, repository, request.CommitID); err != nil {
-		return PropagateHotfixResult{}, err
+		return PropagateHotfixResult{}, service.classifyCherryPickFailure(ctx, repository, err)
 	}
 	result.CherryPicked = true
 	target := request.TargetLine
 	publication, err := service.tickets.PublishTicket(ctx, PublishTicketRequest{
-		Repository:      repository,
-		Branch:          created.Name,
-		Base:            &base,
-		Target:          &target,
-		WorkflowManaged: true,
-		Push:            request.Push,
-		Draft:           request.Draft,
+		Repository:        repository,
+		Branch:            created.Name,
+		Base:              &base,
+		Target:            &target,
+		WorkflowManaged:   true,
+		Push:              request.Push,
+		CreatePullRequest: request.CreatePullRequest,
+		Draft:             request.Draft,
 	})
 	if err != nil {
 		return PropagateHotfixResult{}, err
 	}
 	result.Publication = publication
 	return result, nil
+}
+
+// ResumeHotfixPropagation continues a manually resolved cherry-pick and then
+// resumes validation, optional push, and optional pull-request publication for
+// the already-created propagation branch.
+type ResumeHotfixPropagationRequest struct {
+	Repository        port.RepositoryIdentity
+	Source            branch.BranchName
+	TargetLine        branch.BranchName
+	Branch            branch.BranchName
+	Push              bool
+	CreatePullRequest bool
+	Draft             bool
+}
+
+// ResumeHotfixPropagation continues only a known propagation branch whose
+// stored workflow base matches the requested target line.
+func (service *ReleaseService) ResumeHotfixPropagation(
+	ctx context.Context,
+	request ResumeHotfixPropagationRequest,
+) (PropagateHotfixResult, error) {
+	if service.branches == nil || service.git == nil || service.tickets == nil {
+		return PropagateHotfixResult{}, internalDependencyError("hotfix propagation services")
+	}
+	if request.Source.Family() != branch.FamilyHotfix {
+		return PropagateHotfixResult{}, invalidWorkflowInput(
+			"hotfix propagation resumption requires the original hotfix source branch",
+			"provide --source hotfix/<ticket>-<slug>",
+		)
+	}
+	switch request.TargetLine.Family() {
+	case branch.FamilyMain, branch.FamilyDevelop, branch.FamilyRelease, branch.FamilySupport:
+	default:
+		return PropagateHotfixResult{}, invalidWorkflowInput(
+			"hotfix propagation resumption targets main, develop, release/<semver>, or support/<major.minor>",
+			"provide the target line originally selected for the propagation",
+		)
+	}
+	if request.Branch.Family() != branch.FamilyFix {
+		return PropagateHotfixResult{}, invalidWorkflowInput(
+			"hotfix propagation resumption requires the generated fix branch",
+			"provide --branch fix/<ticket>-<slug>",
+		)
+	}
+	sourceTicket, _ := request.Source.Ticket()
+	branchTicket, hasBranchTicket := request.Branch.Ticket()
+	if !hasBranchTicket || branchTicket.String() != sourceTicket.String() {
+		return PropagateHotfixResult{}, invalidWorkflowInput(
+			"the resumed propagation branch must carry the source hotfix ticket",
+			"provide the fix branch created for the same hotfix ticket",
+		)
+	}
+	if request.CreatePullRequest && !request.Push {
+		return PropagateHotfixResult{}, invalidWorkflowInput(
+			"pull-request creation requires an explicit propagation branch push",
+			"set Push before requesting provider pull-request creation",
+		)
+	}
+	repository, err := normalizeWorkflowRepository(request.Repository)
+	if err != nil {
+		return PropagateHotfixResult{}, err
+	}
+	base, err := branch.NewTargetBase(repository.Remote, request.TargetLine)
+	if err != nil {
+		return PropagateHotfixResult{}, err
+	}
+	storedBase, found, err := service.git.WorkflowBase(ctx, repository, request.Branch)
+	if err != nil {
+		return PropagateHotfixResult{}, err
+	}
+	if !found || storedBase.String() != base.String() {
+		return PropagateHotfixResult{}, invalidWorkflowInput(
+			"hotfix propagation resumption requires the recorded workflow base for the selected target line",
+			"resume the original propagation branch with its original --target-line",
+		)
+	}
+	operation, active, err := service.git.ActiveOperation(ctx, repository)
+	if err != nil {
+		return PropagateHotfixResult{}, err
+	}
+	if active {
+		if operation != "cherry-pick" {
+			return PropagateHotfixResult{}, invalidWorkflowInput(
+				"hotfix propagation can resume only an in-progress cherry-pick",
+				"complete or abort the active Git operation before resuming propagation",
+			)
+		}
+		continuator, ok := service.git.(port.CherryPickContinuator)
+		if !ok {
+			return PropagateHotfixResult{}, internalDependencyError("cherry-pick continuator")
+		}
+		if err := continuator.ContinueCherryPick(ctx, repository); err != nil {
+			return PropagateHotfixResult{}, service.classifyCherryPickFailure(ctx, repository, err)
+		}
+	}
+	target := request.TargetLine
+	publication, err := service.tickets.PublishTicket(ctx, PublishTicketRequest{
+		Repository:        repository,
+		Branch:            request.Branch,
+		Base:              &base,
+		Target:            &target,
+		WorkflowManaged:   true,
+		Push:              request.Push,
+		CreatePullRequest: request.CreatePullRequest,
+		Draft:             request.Draft,
+	})
+	if err != nil {
+		return PropagateHotfixResult{}, err
+	}
+	return PropagateHotfixResult{
+		Branch: branchapp.CreateResult{
+			Name: request.Branch,
+			Base: base,
+		},
+		CherryPicked: true,
+		Publication:  publication,
+	}, nil
+}
+
+func (service *ReleaseService) classifyCherryPickFailure(
+	ctx context.Context,
+	repository port.RepositoryIdentity,
+	cause error,
+) error {
+	operation, active, err := service.git.ActiveOperation(ctx, repository)
+	if err != nil || !active || operation != "cherry-pick" {
+		return cause
+	}
+	return problem.Wrap(problem.Details{
+		Code:        problem.CodeCherryPickConflict,
+		Category:    problem.CategoryGit,
+		Field:       "cherry-pick",
+		Expected:    "a completed cherry-pick without unresolved conflicts",
+		Rule:        "hotfix propagation pauses while Git requires manual conflict resolution",
+		Example:     "resolve conflicts, stage the resolutions, then rerun workflow hotfix propagate --resume",
+		Remediation: "resolve and stage every conflicting file, then resume the existing propagation branch",
+	}, cause)
 }
 
 // CleanupBranchRequest describes a local cleanup. Remote branch retention and

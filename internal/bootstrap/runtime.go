@@ -8,6 +8,7 @@ import (
 
 	"github.com/CyberT33N/git-governance/internal/adapters/configfs"
 	"github.com/CyberT33N/git-governance/internal/adapters/gitcli"
+	"github.com/CyberT33N/git-governance/internal/adapters/github"
 	"github.com/CyberT33N/git-governance/internal/adapters/quality"
 	"github.com/CyberT33N/git-governance/internal/adapters/report"
 	"github.com/CyberT33N/git-governance/internal/adapters/system"
@@ -21,18 +22,19 @@ import (
 )
 
 type appOptions struct {
-	interactive   string
-	output        string
-	quiet         bool
-	color         string
-	accessible    bool
-	remote        string
-	repository    string
-	config        string
-	qualityConfig string
-	dryRun        bool
-	yes           bool
-	timeout       time.Duration
+	interactive         string
+	output              string
+	quiet               bool
+	color               string
+	accessible          bool
+	remote              string
+	repository          string
+	config              string
+	qualityConfig       string
+	pullRequestProvider string
+	dryRun              bool
+	yes                 bool
+	timeout             time.Duration
 }
 
 type Runtime struct {
@@ -124,13 +126,21 @@ func (application *application) services() services {
 	if qualityRunner == nil {
 		qualityRunner = application.runtime.QualityFactory(application.options.qualityConfig, application.options.timeout)
 	}
+	publisher := application.runtime.Publisher
+	if publisher == nil && application.options.pullRequestProvider == "github" {
+		publisher = github.New(github.Options{
+			Token:      os.Getenv("GIT_GOVERNANCE_GITHUB_TOKEN"),
+			APIBaseURL: os.Getenv("GIT_GOVERNANCE_GITHUB_API_URL"),
+			Timeout:    application.options.timeout,
+		})
+	}
 	branches := branchapp.NewService(git, application.runtime.KeyPolicy)
 	sync := branchapp.NewSynchronizer(git, branches, qualityRunner)
 	scratch := branchapp.NewScratchMerger(git, branches)
 	commits := commitapp.NewService(git, application.runtime.KeyPolicy, sync)
-	tickets := workflow.NewTicketService(branches, sync, git, qualityRunner, application.runtime.Publisher).
+	tickets := workflow.NewTicketService(branches, sync, git, qualityRunner, publisher).
 		WithScratchMerger(scratch)
-	releases := workflow.NewReleaseService(branches, git, application.runtime.Publisher).WithTicketService(tickets)
+	releases := workflow.NewReleaseService(branches, git, publisher).WithTicketService(tickets)
 	policyInspector, _ := application.runtime.KeyPolicy.(port.PolicyInspector)
 	return services{
 		git:         git,

@@ -323,9 +323,10 @@ func (synchronizer *Synchronizer) ResumeRebase(ctx context.Context, request Resu
 
 // PrePushRequest describes the local governance data checked before a push.
 type PrePushRequest struct {
-	Repository port.RepositoryIdentity
-	Name       branch.BranchName
-	Base       *branch.TargetBase
+	Repository      port.RepositoryIdentity
+	Name            branch.BranchName
+	Base            *branch.TargetBase
+	WorkflowManaged bool
 }
 
 // PrePushResult describes the freshness and publication state checked locally.
@@ -382,7 +383,7 @@ func (synchronizer *Synchronizer) ValidatePrePush(ctx context.Context, request P
 	if err != nil {
 		return PrePushResult{}, err
 	}
-	base, err := resolveSyncBase(request.Name, repository, baseInput, false)
+	base, err := resolveSyncBase(request.Name, repository, baseInput, request.WorkflowManaged)
 	if err != nil {
 		return PrePushResult{}, err
 	}

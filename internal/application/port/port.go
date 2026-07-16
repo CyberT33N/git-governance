@@ -70,6 +70,13 @@ type GitRepository interface {
 	) (PushUpdateInspection, error)
 }
 
+// CherryPickContinuator is consumed only by workflows that must resume a
+// user-resolved cherry-pick. Keeping it separate avoids forcing unrelated Git
+// adapters and test fakes to implement a mutation they never invoke.
+type CherryPickContinuator interface {
+	ContinueCherryPick(ctx context.Context, repository RepositoryIdentity) error
+}
+
 // KeyPolicy validates a syntactically valid key against the active local
 // policy. The first implementation only checks syntax; a bundle adapter can
 // add repository authorization later.
@@ -217,13 +224,28 @@ type PullRequest struct {
 	Draft  bool
 }
 
+// PullRequestPublication carries provider-neutral pull-request intent together
+// with the selected Git remote needed by a hosting adapter. RemoteURL is never
+// included in the CLI result contract.
+type PullRequestPublication struct {
+	Repository  RepositoryIdentity
+	RemoteURL   string
+	PullRequest PullRequest
+}
+
 // PublishedPullRequest represents an optional provider-specific result.
 type PublishedPullRequest struct {
 	URL string
 }
 
-// PullRequestPublisher is optional: the initial product emits provider-neutral
-// pull request data, while later adapters can publish it to a configured host.
+// PullRequestPublisher is optional: the product always emits provider-neutral
+// pull-request data and publishes it only through an explicitly configured host.
 type PullRequestPublisher interface {
-	Publish(ctx context.Context, request PullRequest) (PublishedPullRequest, error)
+	Publish(ctx context.Context, publication PullRequestPublication) (PublishedPullRequest, error)
+}
+
+// PullRequestPublisherPreflight is an optional capability for adapters that
+// can validate credentials and routing before a Git branch is pushed.
+type PullRequestPublisherPreflight interface {
+	Validate(ctx context.Context, publication PullRequestPublication) error
 }

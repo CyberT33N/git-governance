@@ -32,12 +32,13 @@ func NewWithRuntime(build BuildInfo, runtime Runtime) *cobra.Command {
 		version = "devel"
 	}
 	options := &appOptions{
-		interactive: "auto",
-		output:      "human",
-		color:       "auto",
-		remote:      "origin",
-		repository:  ".",
-		timeout:     30 * time.Second,
+		interactive:         "auto",
+		output:              "human",
+		color:               "auto",
+		remote:              "origin",
+		repository:          ".",
+		pullRequestProvider: "none",
+		timeout:             30 * time.Second,
 	}
 	application := newApplication(runtime, options)
 
@@ -79,6 +80,7 @@ func NewWithRuntime(build BuildInfo, runtime Runtime) *cobra.Command {
 	command.PersistentFlags().StringVar(&options.repository, "repo", options.repository, "repository directory")
 	command.PersistentFlags().StringVar(&options.config, "config", "", "user preferences configuration path")
 	command.PersistentFlags().StringVar(&options.qualityConfig, "quality-config", "", "repository-local quality gate configuration path")
+	command.PersistentFlags().StringVar(&options.pullRequestProvider, "pull-request-provider", options.pullRequestProvider, "none or github")
 	command.PersistentFlags().BoolVar(&options.dryRun, "dry-run", false, "show a plan without mutating Git")
 	command.PersistentFlags().BoolVar(&options.yes, "yes", false, "confirm mutating operations non-interactively")
 	command.PersistentFlags().DurationVar(&options.timeout, "timeout", options.timeout, "timeout for external Git processes")

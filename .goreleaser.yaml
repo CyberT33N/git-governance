@@ -36,6 +36,7 @@ archives:
           - zip
     files:
       - README.md
+      - docs/**
       - CONTRIBUTING.md
       - LICENSE
       - NOTICE

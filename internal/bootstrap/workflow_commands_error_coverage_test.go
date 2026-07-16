@@ -18,6 +18,7 @@ type workflowCommandCoverageGit struct {
 	discoverErr error
 	currentErr  error
 	exists      bool
+	identity    *port.RepositoryIdentity
 	hasCommits  *bool
 	releaseTags []string
 }
@@ -44,13 +45,28 @@ type workflowFailurePublisher struct {
 	err error
 }
 
-func (publisher workflowFailurePublisher) Publish(context.Context, port.PullRequest) (port.PublishedPullRequest, error) {
+func (publisher workflowFailurePublisher) Publish(context.Context, port.PullRequestPublication) (port.PublishedPullRequest, error) {
 	return port.PublishedPullRequest{}, publisher.err
+}
+
+type workflowPreflightFailurePublisher struct {
+	err error
+}
+
+func (publisher workflowPreflightFailurePublisher) Publish(context.Context, port.PullRequestPublication) (port.PublishedPullRequest, error) {
+	return port.PublishedPullRequest{}, nil
+}
+
+func (publisher workflowPreflightFailurePublisher) Validate(context.Context, port.PullRequestPublication) error {
+	return publisher.err
 }
 
 func (git *workflowCommandCoverageGit) Discover(context.Context, string) (port.RepositoryIdentity, error) {
 	if git.discoverErr != nil {
 		return port.RepositoryIdentity{}, git.discoverErr
+	}
+	if git.identity != nil {
+		return *git.identity, nil
 	}
 	return git.commandGit.Discover(context.Background(), "")
 }
@@ -630,8 +646,8 @@ func TestWorkflowCommandsAttachInputsToPostValidationFailures(t *testing.T) {
 func TestReleasePromotionAndBackmergeAttachInputsToPublisherFailures(t *testing.T) {
 	publishErr := errors.New("publisher unavailable")
 	for _, arguments := range [][]string{
-		{"workflow", "release", "promote", "--release", "release/2.8.0"},
-		{"workflow", "release", "backmerge", "--release", "release/2.8.0"},
+		{"workflow", "release", "promote", "--release", "release/2.8.0", "--create-pull-request", "--yes"},
+		{"workflow", "release", "backmerge", "--release", "release/2.8.0", "--create-pull-request", "--yes"},
 	} {
 		arguments := arguments
 		t.Run(strings.Join(arguments[2:3], "-"), func(t *testing.T) {

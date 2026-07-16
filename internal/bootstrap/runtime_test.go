@@ -157,6 +157,22 @@ func TestServicesWireDependenciesAndQualityFallback(t *testing.T) {
 	if fallbackCalls != 1 || qualityPath != options.qualityConfig || qualityTimeout != options.timeout {
 		t.Fatalf("quality fallback = calls %d, path %q, timeout %s", fallbackCalls, qualityPath, qualityTimeout)
 	}
+
+	githubOptions := runtimeTestOptions()
+	githubOptions.pullRequestProvider = "github"
+	githubApplication := newApplication(Runtime{
+		GitFactory: func(time.Duration) port.GitRepository {
+			return git
+		},
+		StoreFactory: func(string) port.PreferencesStore {
+			return store
+		},
+		Quality: quality,
+		Tools:   &runtimeTestTools{},
+	}, githubOptions)
+	if !githubApplication.services().tickets.HasPullRequestPublisher() {
+		t.Fatal("GitHub provider selection did not construct a pull-request publisher")
+	}
 }
 
 func TestRepositoryOverwritesRemoteAndPropagatesCancellation(t *testing.T) {

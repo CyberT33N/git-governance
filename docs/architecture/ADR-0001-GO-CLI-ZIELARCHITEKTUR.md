@@ -321,13 +321,16 @@ Die interaktive Erklärung muss deutlich machen:
 6. Validierungen erneut ausführen.
 7. Den Rebase-Ausgang interaktiv anzeigen; bei Konflikten den pausierten
    Rebase oder einen vorherigen Scratch-Squash nach expliziter Auflösung und
-   Retry fortsetzen.
+   Retry beziehungsweise nicht-interaktiv mit `--resume` fortsetzen.
 8. Ersten Push mit Upstream interaktiv bestätigen oder nicht-interaktiv
    explizit anfordern.
 9. Providerneutrale PR-Daten für Ziel `develop` erzeugen; eine echte
    Provider-Erstellung wird nur mit konfiguriertem Outbound Adapter angeboten.
 
-Ein späterer GitHub-/GitLab-Adapter ist ein Outbound Adapter. Ohne festgelegten Provider darf der Domain-Kern keine `gh`-, GitHub- oder GitLab-Abhängigkeit besitzen.
+Der GitHub-Adapter ist ein Outbound Adapter hinter dem application-owned
+`PullRequestPublisher`-Port. Der Domain-Kern enthält weiterhin keine `gh`-,
+GitHub- oder GitLab-Abhängigkeit; weitere Provider bleiben austauschbare
+Adapter.
 
 ### 11.3 Hotfix
 
@@ -503,7 +506,7 @@ Negativ:
 - native Artefakte müssen pro OS/Architektur gebaut und getestet werden
 - Cobra und Huh erweitern die Supply-Chain-Fläche
 - Git bleibt eine erforderliche externe Prozessabhängigkeit
-- provider-spezifische PR-Erstellung benötigt einen späteren Adapter
+- weitere provider-spezifische PR-Erstellung benötigt einen eigenen Adapter
 
 ## 19. Verwarfene Optionen
 

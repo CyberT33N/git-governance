@@ -580,6 +580,17 @@ func (repository *Repository) CherryPick(ctx context.Context, identity port.Repo
 	return nil
 }
 
+// ContinueCherryPick advances an already started cherry-pick after the user
+// resolves and stages its conflicts. A non-interactive editor preserves the
+// original Git message while keeping automated continuation non-blocking.
+func (repository *Repository) ContinueCherryPick(ctx context.Context, identity port.RepositoryIdentity) error {
+	result := repository.invoke(ctx, identity.Root, nil, "-c", "core.editor=true", "cherry-pick", "--continue")
+	if result.err != nil {
+		return repository.commandProblem(problem.CodeGitCommandFailed, identity, "continue the resolved cherry-pick", result)
+	}
+	return nil
+}
+
 // DeleteLocalBranch removes a completed local branch. Scratch branches may use
 // force deletion because they are explicitly private and disposable.
 func (repository *Repository) DeleteLocalBranch(ctx context.Context, identity port.RepositoryIdentity, name branch.BranchName, force bool) error {
