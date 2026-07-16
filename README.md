@@ -21,6 +21,7 @@ non-interactive command contracts.
   `workflow release backmerge`, and `workflow release support`
 - `workflow cleanup`
 - `validate pre-push`
+- `auth login github`, `auth status github`, and `auth logout github`
 - `config key list`, `config key add`, `config key remove`, and
   `config key set-default`
 - `policy describe`, `doctor`, and `completion <shell>`
@@ -29,3 +30,8 @@ For automation, use `--interactive never --output json`, supply every required
 value as a flag, and add `--yes` for mutations. GitHub pull-request creation is
 an explicit opt-in through `--pull-request-provider github` and
 `--create-pull-request`.
+
+GitHub API access uses an explicit GitHub App login or a managed credential
+broker; it never accepts a GitHub token as a CLI flag or stores one in user
+preferences. Read the [GitHub App authentication guide](docs/usage/authentication.md)
+before requesting pull-request creation.

@@ -97,7 +97,23 @@ Konfiguration wird:
 - mit restriktiven Benutzerrechten angelegt
 - nie als Secret Store verwendet
 
-### 6.1 Repository-Quality-Gates
+### 6.1 GitHub App credentials
+
+The configuration file never stores GitHub tokens, refresh tokens, App private
+keys, client secrets, broker credentials, or authorization headers. A local
+user supplies only the public GitHub App client ID through
+`GIT_GOVERNANCE_GITHUB_APP_CLIENT_ID`, then completes `auth login github` in a
+real terminal. The refresh session is protected by DPAPI on Windows, Keychain
+on macOS, or Secret Service on Linux; no plaintext fallback is permitted.
+
+Managed CI does not reuse a developer refresh session. It supplies a
+workload-identity token and a HTTPS credential-broker endpoint at deployment
+time. The broker holds the GitHub App private key outside the repository and
+mints only short-lived, repository-bound installation tokens. See
+[GitHub App authentication](../usage/authentication.md) for the precise
+runtime contract.
+
+### 6.2 Repository-Quality-Gates
 
 Projekt- und programmiersprachenabhängige Build-, Test- und Lint-Kommandos
 gehören nicht in die Binary und nicht in die Benutzerkonfiguration. Ein

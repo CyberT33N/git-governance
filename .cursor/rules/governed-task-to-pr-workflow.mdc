@@ -315,7 +315,11 @@ binary branch and commit validation passed
 The selected publish workflow validates commits, runs configured gates, fetches, checks base freshness, rebases only an unpublished branch with a real delta, revalidates, pushes, and prepares the PR.
 
 Actual GitHub PR requirements:
-- `GIT_GOVERNANCE_GITHUB_TOKEN` exists only in environment and is never passed/logged;
+- a local GitHub App session exists in the native secret store, or managed CI
+  supplies a broker-backed workload identity; GitHub access, refresh, and
+  private-key values are never passed or logged;
+- local users complete `auth login github` explicitly before non-interactive
+  publication; publish never opens a browser or prompts for login;
 - use `--pull-request-provider github --create-pull-request`;
 - use `--push` for ticket, hotfix, propagation, and stabilization publish;
 - an idempotently returned existing PR URL is success.

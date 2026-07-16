@@ -52,5 +52,20 @@ already on `PATH`:
 git governance --help
 ```
 
+## GitHub App login
+
+Pull-request publication uses a GitHub App, not a static personal token. Set
+the public App client ID in the current shell, then run the explicit
+browser-assisted Device Flow:
+
+```powershell
+$env:GIT_GOVERNANCE_GITHUB_APP_CLIENT_ID = "<GitHub-App-client-ID>"
+git governance --interactive always auth login github
+git governance auth status github
+```
+
+The complete prerequisite, secret-store, broker, logout, and Git transport
+readiness contract is in [GitHub App authentication](usage/authentication.md).
+
 Release installers and package-manager manifests are added by the release
 pipeline. They are not yet published by this repository.

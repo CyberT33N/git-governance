@@ -47,6 +47,7 @@ does not rely on any external governance repository or unpublished rule set.
 | One official regular branch per ticket | VERIFIED | local/remote branch discovery, whitebox test, and real-Git regression test |
 | Explicit staging only | VERIFIED | application and Git adapter tests |
 | Commit creation through stdin | VERIFIED | real local Git integration test |
+| Fail-closed Git transport authentication diagnostic | VERIFIED | non-interactive dry-run push adapter and same-package whitebox tests |
 | First-push publication detection | VERIFIED | real local Git integration test |
 | Base delta, merge, and rebase paths | VERIFIED | real local Git integration test |
 | Scratch-to-official squash transfer | VERIFIED | whitebox, CLI-contract, Git-adapter, and real local Git integration tests |
@@ -65,11 +66,12 @@ does not rely on any external governance repository or unpublished rule set.
 | `workflow hotfix start` | IMPLEMENTED | affected-line selection is mandatory |
 | hotfix publish and propagation | IMPLEMENTED | affected-line publish plus `cherry-pick -x` forward/backport workflow, including non-interactive `--resume` continuation |
 | `workflow release cut`, `stabilize`, `promote`, `backmerge`, `support`, `cleanup` | IMPLEMENTED | stabilization constraints, release-to-main intent, explicit provider publication, cleanup, and support-tag provenance are enforced |
-| GitHub pull-request adapter | IMPLEMENTED | standard-library REST adapter, remote-derived repository resolution, explicit API versioning, bounded responses, and idempotent existing-PR lookup |
+| GitHub App pull-request adapter | IMPLEMENTED | just-in-time App credential resolution, host/repository isolation, bounded REST responses, and idempotent existing-PR lookup |
+| `auth login/status/logout github` | IMPLEMENTED | explicit Device Flow, redacted status, native secret-store session lifecycle, and CLI contract tests |
 | `validate pre-push` | IMPLEMENTED | parses every Git stdin ref update and validates the actual remote target |
 | `config key` | IMPLEMENTED | OS configuration directory, atomic JSON storage |
 | `policy describe`, `completion`, `version` | IMPLEMENTED | policy and environment inspection are read-only |
-| `doctor` | IMPLEMENTED | Git version, remote, Lefthook, policy, configuration, and in-progress-operation checks are read-only |
+| `doctor` | IMPLEMENTED | Git version, remote, fail-closed Git transport dry-run authentication, Lefthook, policy, configuration, and in-progress-operation checks |
 | Interactive Huh forms and accessible prompts | IMPLEMENTED | tested with accessible form input |
 | Interactive field validation retries | VERIFIED | invalid ticket, slug, commit-subject, and breaking-change values show field diagnostics and retry in place |
 | Workflow input failure summaries | VERIFIED | accepted command inputs accompany classified workflow and branch-creation failures |

@@ -30,6 +30,7 @@ func TestCommandTreeAndVersion(t *testing.T) {
 		"commit",
 		"workflow",
 		"validate",
+		"auth",
 		"config",
 		"policy",
 		"doctor",
@@ -616,6 +617,10 @@ func (*commandGit) RemoteURL(context.Context, port.RepositoryIdentity) (string, 
 
 func (*commandGit) ActiveOperation(context.Context, port.RepositoryIdentity) (string, bool, error) {
 	return "", false, nil
+}
+
+func (*commandGit) CheckTransportAuthentication(context.Context, port.RepositoryIdentity) error {
+	return nil
 }
 
 func (*commandGit) HasCommits(context.Context, port.RepositoryIdentity) (bool, error) {

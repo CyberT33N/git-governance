@@ -50,7 +50,8 @@ Regeln:
 - Im JSON-Modus sind Prompts verboten; bei `--interactive=auto` verhält sich JSON deshalb wie `never`.
 - Secrets werden weder über Flags noch über diese Konfigurationsdatei verwaltet.
 - `--pull-request-provider=github` aktiviert ausschließlich den GitHub-Adapter;
-  der Token stammt aus `GIT_GOVERNANCE_GITHUB_TOKEN`.
+  dieser löst eine GitHub-App-Sitzung oder einen Managed-Credential-Broker erst
+  unmittelbar vor dem API-Aufruf auf.
 - `--create-pull-request` ist ein expliziter Workflow-Flag, verlangt bei
   Publish-Workflows zusätzlich `--push` und erzeugt ohne Provider keinen
   stillen Fallback.
@@ -118,6 +119,13 @@ git governance
 │   └── cleanup
 ├── validate
 │   └── pre-push
+├── auth
+│   ├── login
+│   │   └── github
+│   ├── status
+│   │   └── github
+│   └── logout
+│       └── github
 ├── config
 │   └── key
 │       ├── list
@@ -130,7 +138,30 @@ git governance
 └── doctor
 ```
 
-## 4. `branch list`
+## 4. `auth`
+
+```text
+git governance auth login github
+git governance auth status github
+git governance auth logout github
+```
+
+`auth login github` ist ein expliziter interaktiver GitHub-App-Device-Flow.
+Er verlangt Human-Output und ein echtes TTY, gibt nur Verifikations-URL und
+Einmalcode aus und öffnet ausschließlich in diesem Command einen Browser.
+`--interactive never` und JSON-Ausgabe sind dafür ungültig. Der lokale Client
+speichert ausschließlich eine geschützte Refresh-Sitzung im nativen
+Betriebssystem-Tresor; Access-Tokens, Refresh-Tokens, Private Keys und
+Client-Secrets werden nie angezeigt, persistiert oder als Flag akzeptiert.
+
+`auth status github` ist nicht interaktiv und gibt nur Host, Account,
+Credential-Quelle sowie den Refresh-Ablaufstatus aus. `auth logout github`
+löscht die lokale Tresor-Sitzung. Eine Gerätefluss-Sitzung wird nicht remote
+widerrufen, weil ein lokaler Client keinen GitHub-App-Client-Secret besitzen
+darf. Der vollständige Ablauf und der Brokervertrag stehen in
+[`docs/usage/authentication.md`](../usage/authentication.md).
+
+## 5. `branch list`
 
 Zeigt alle Branch-Familien einschließlich Shared Lines und governance-gebundener Linien:
 
@@ -159,7 +190,7 @@ Jeder Eintrag enthält:
 
 `branch list` ist die vollständige Informationsoberfläche. `branch create` zeigt nur auswählbare Familien für den konkreten Kontext und erklärt, warum andere Familien nicht direkt erzeugt werden dürfen.
 
-## 5. `branch create`
+## 6. `branch create`
 
 ### 5.1 Zweck
 
@@ -277,7 +308,7 @@ Command setzt keinen automatischen Merge fort; innerhalb von `workflow ticket
 publish` wird derselbe Konfliktzustand dagegen über eine Retry-Auswahl
 fortgesetzt, nachdem der Benutzer ihn aufgelöst und gestaged hat.
 
-## 6. `branch validate`
+## 7. `branch validate`
 
 ```text
 git governance branch validate [<branch-name>]
@@ -294,7 +325,7 @@ Ohne Argument wird der aktuelle Branch verwendet. Das Kommando prüft:
 
 Es mutiert nichts und eignet sich für lokale Diagnose und CI.
 
-## 7. `branch sync-base`
+## 8. `branch sync-base`
 
 ### 7.1 Zweck
 
@@ -336,7 +367,7 @@ Kompatibilitätseingang erhalten.
 
 Nach einer Mutation laufen Governance-Checks und konfigurierte Quality Checks erneut. Schlägt ein direkter `branch sync-base`-Rebase konfliktbedingt fehl, bleibt Git im normalen Rebase-Zustand und wird nicht verborgen. Im `workflow ticket publish` wird derselbe Zustand zusätzlich als Retry-Schritt dargestellt: Nach Auflösung und Staging setzt Retry den bestehenden Rebase fort.
 
-## 8. `commit create`
+## 9. `commit create`
 
 ### 8.1 Optionen
 
@@ -388,7 +419,7 @@ Der Benutzer erhält eine Erklärung:
 
 `commit create` bietet kein Amend-Flag. Vor dem ersten Push wäre ein lokales Amend gemäß Referenz-Governance zwar grundsätzlich zulässig, ist aber kein notwendiger Produkt-Use-Case. Nach dem ersten Push ist Amend als Routine verboten. Force Push wird von keinem Kommando angeboten.
 
-## 9. `commit validate`
+## 10. `commit validate`
 
 ```text
 git governance commit validate --message-file <path>
@@ -409,7 +440,7 @@ Prüfungen:
 
 Für `commit-msg` wird immer `--message-file` verwendet. Die Datei wird begrenzt gelesen; NUL und unzulässige Kontrollzeichen werden abgewiesen.
 
-## 10. `workflow ticket start`
+## 11. `workflow ticket start`
 
 ### 10.1 Zweck
 
@@ -451,7 +482,7 @@ Arbeitsbranch. Übernimm stabile Ergebnisse später kontrolliert per Squash
 oder Cherry-Pick in den offiziellen Ticket-Branch.
 ```
 
-## 11. `workflow ticket publish`
+## 12. `workflow ticket publish`
 
 Dieses Kommando wird nach Entwicklung und lokalen Tests aufgerufen. Es ist kein automatisch fortlaufender Teil von `ticket start`.
 
@@ -506,9 +537,11 @@ andere Adapter. Eine Benutzerbestätigung kann deshalb nur dann einen echten PR
 erzeugen, wenn ein solcher Adapter zur Laufzeit konfiguriert ist.
 
 Für einen GitHub-PR setzt die Automation `--pull-request-provider github`,
-`--push` und `--create-pull-request`; der Token kommt ausschließlich aus
-`GIT_GOVERNANCE_GITHUB_TOKEN`. Der Adapter leitet Owner und Repository aus dem
-ausgewählten Git-Remote ab und gibt einen bereits offenen gleichartigen PR
+`--push` und `--create-pull-request`. Sie verwendet eine bereits bestehende
+GitHub-App-Session oder einen CI-Credential-Broker; sie startet nie einen
+Browser und akzeptiert keinen statischen GitHub-Token. Der Adapter leitet Host,
+Owner und Repository aus dem ausgewählten Git-Remote ab, prüft die exakte
+Repository-Autorisierung und gibt einen bereits offenen gleichartigen PR
 idempotent zurück.
 
 Nach manueller Konfliktauflösung und Staging ist die Fortsetzung auch ohne TTY
@@ -523,7 +556,7 @@ git governance --interactive never --yes workflow ticket publish \
 Auf `scratch/*` bleiben die ursprünglichen `--type`/`--subject`- oder
 `--message`-Eingaben erforderlich; bei Mehrdeutigkeit bleibt `--target` Pflicht.
 
-## 12. `workflow hotfix start`
+## 13. `workflow hotfix start`
 
 Pflichtoptionen:
 
@@ -575,7 +608,7 @@ Bei einem pausierten Cherry-Pick löst der Benutzer die Konflikte und setzt
 anschließend mit `--source`, `--target-line`, dem erzeugten `--branch` und
 `--resume` fort. `--commit` ist beim Fortsetzen nicht erneut erforderlich.
 
-## 13. Release-Kommandos
+## 14. Release-Kommandos
 
 ### 13.1 `workflow release cut`
 
@@ -667,7 +700,7 @@ und Support-Branches sind keine lokalen CLI-Cleanup-Ziele. Das Kommando
 behauptet nicht, einen Hosting-Merge oder Forward-/Backport-Abschluss beweisen
 zu können.
 
-## 14. `validate pre-push`
+## 15. `validate pre-push`
 
 Dieses Kommando ist die Lefthook- und manuelle Pre-Push-Oberfläche.
 
@@ -688,7 +721,7 @@ Es liest die von Git gelieferte Ref-Liste begrenzt von stdin und prüft:
 
 Der Validator führt nie selbst Rebase oder Merge aus. Er blockiert mit einer konkreten, policy-konformen Handlungsanweisung.
 
-## 15. Konfigurationskommandos
+## 16. Konfigurationskommandos
 
 ```text
 git governance config key add PLATFORM2
@@ -705,7 +738,7 @@ Regeln:
 - Ticketnummern werden nicht als globaler Default gespeichert
 - Commits leiten das Ticket aus dem aktuellen Branch ab
 
-## 16. `policy describe`
+## 17. `policy describe`
 
 Gibt die aktive ausführbare Policy versioniert aus:
 
@@ -725,7 +758,7 @@ Enthalten sind:
 
 Dokumentations- und Conformance-Tests verwenden diese Ausgabe, damit keine zweite Regex-Wahrheit in Hooks oder Beispielen entsteht.
 
-## 17. `doctor`
+## 18. `doctor`
 
 Read-only-Diagnose:
 
@@ -733,17 +766,26 @@ Read-only-Diagnose:
 - Git vorhanden und Mindestversion erfüllt
 - Repository erkannt
 - Remote vorhanden, ohne dessen URL in der Human-Ausgabe offenzulegen
+- Git-Transportauthentifizierung durch einen nicht-interaktiven
+  `push --dry-run --porcelain` des aktuellen Branches
 - Benutzerkonfiguration lesbar
 - Lefthook vorhanden
 - Lefthook-Konfiguration vorhanden
 - Policy-Bundle-Status, wenn aktiviert
 - keine laufende Merge-/Rebase-/Cherry-Pick-Operation
 
+Eine fehlende Git-Transportauthentifizierung ist ein klassifizierter Fehler,
+nicht nur ein warnender Check. Der Dry-Run kontaktiert den Remote, ändert aber
+keine Remote-Referenz, überspringt Git-Hooks und darf keinen Credential-Prompt
+öffnen. GitHub-App-API-
+Sitzungen bleiben davon getrennt und werden durch `auth status github` sowie
+den Publish-Preflight geprüft.
+
 `doctor` installiert, repariert oder mutiert nichts ohne ein separates explizites Kommando.
 
-## 18. Human- und JSON-Ausgabe
+## 19. Human- und JSON-Ausgabe
 
-### 18.1 Human
+### 19.1 Human
 
 Nach einem erfolgreichen `git fetch --prune <remote>` beginnt die interaktive
 Human-Abschlussmeldung mit:
@@ -778,7 +820,7 @@ Behebung:
   Verwende ABC-123 oder wechsle auf den zum Commit gehörenden Branch.
 ```
 
-### 18.2 JSON
+### 19.2 JSON
 
 ```json
 {
@@ -799,7 +841,7 @@ Behebung:
 
 JSON-Feldnamen und Exitcodes sind öffentliche Verträge und werden kompatibel versioniert.
 
-## 19. Interne Komposition
+## 20. Interne Komposition
 
 Delivery-Adapter sammeln Eingaben und erzeugen Commands. Workflows rufen Application Services direkt auf:
 
@@ -822,7 +864,7 @@ workflow command
 
 Nur externe Consumer und Automation verwenden die CLI-Oberfläche.
 
-## 20. Übernahme aus dem bisherigen Tool
+## 21. Übernahme aus dem bisherigen Tool
 
 | Bestehende Fähigkeit | Zielentscheidung |
 |---|---|

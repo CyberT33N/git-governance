@@ -64,6 +64,10 @@ git governance --interactive never --output json --yes `
   --create-pull-request
 ```
 
+Use an existing GitHub App session for interactive local work or the managed
+credential broker for automation; publication never starts login implicitly.
+See [GitHub App authentication](../authentication.md).
+
 After the protected `release/<semver> -> main` pull request merges, GitHub
 Actions creates the immutable annotated `v<semver>` tag at that exact merge
 commit. The tag workflow then dispatches the artifact workflow for that tag.

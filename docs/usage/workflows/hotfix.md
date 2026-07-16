@@ -46,6 +46,9 @@ git governance --interactive never --output json --yes workflow hotfix publish `
 Add `--pull-request-provider github --create-pull-request` to create the
 explicit provider-backed pull request after the push. The target remains the
 specified affected line; it is never silently redirected to `develop`.
+Authenticate before local publication with `auth login github`, or configure
+the managed credential broker for automation. See
+[GitHub App authentication](../authentication.md).
 
 After resolving and staging a paused rebase, continue the same publication:
 

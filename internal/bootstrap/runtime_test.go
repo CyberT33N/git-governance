@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CyberT33N/git-governance/internal/adapters/github"
 	"github.com/CyberT33N/git-governance/internal/application/port"
 	"github.com/CyberT33N/git-governance/internal/domain/problem"
 )
@@ -18,7 +19,9 @@ func TestDefaultRuntimeConstructsAllAdapters(t *testing.T) {
 	runtime := defaultRuntime()
 
 	if runtime.GitFactory == nil || runtime.StoreFactory == nil || runtime.KeyPolicy == nil ||
-		runtime.QualityFactory == nil || runtime.Tools == nil || runtime.PromptFactory == nil ||
+		runtime.QualityFactory == nil || runtime.GitHubAuthFactory == nil || runtime.Browser == nil ||
+		runtime.GitHubAppClientID == nil || runtime.GitHubCredentialBrokerURL == nil ||
+		runtime.GitHubWorkloadIdentity == nil || runtime.Tools == nil || runtime.PromptFactory == nil ||
 		runtime.InputIsTerminal == nil || runtime.OutputIsTerminal == nil {
 		t.Fatal("default runtime left a required dependency unset")
 	}
@@ -31,6 +34,12 @@ func TestDefaultRuntimeConstructsAllAdapters(t *testing.T) {
 	if runtime.QualityFactory("quality.yaml", time.Second) == nil {
 		t.Fatal("default quality factory returned nil")
 	}
+	if runtime.GitHubAuthFactory(time.Second) == nil {
+		t.Fatal("default GitHub authentication runtime dependencies are unavailable")
+	}
+	_ = runtime.GitHubAppClientID()
+	_ = runtime.GitHubCredentialBrokerURL()
+	_ = runtime.GitHubWorkloadIdentity()
 	if runtime.PromptFactory(true, "never") == nil {
 		t.Fatal("default prompt factory returned nil")
 	}
@@ -44,7 +53,9 @@ func TestNewApplicationSuppliesAndPreservesRuntimeSeams(t *testing.T) {
 	}
 	if withFallbacks.runtime.GitFactory == nil || withFallbacks.runtime.StoreFactory == nil ||
 		withFallbacks.runtime.KeyPolicy == nil || withFallbacks.runtime.QualityFactory == nil ||
-		withFallbacks.runtime.Tools == nil || withFallbacks.runtime.PromptFactory == nil ||
+		withFallbacks.runtime.GitHubAuthFactory == nil || withFallbacks.runtime.Browser == nil ||
+		withFallbacks.runtime.GitHubAppClientID == nil || withFallbacks.runtime.GitHubCredentialBrokerURL == nil ||
+		withFallbacks.runtime.GitHubWorkloadIdentity == nil || withFallbacks.runtime.Tools == nil || withFallbacks.runtime.PromptFactory == nil ||
 		withFallbacks.runtime.InputIsTerminal == nil || withFallbacks.runtime.OutputIsTerminal == nil {
 		t.Fatal("newApplication did not supply all runtime fallbacks")
 	}
@@ -59,6 +70,8 @@ func TestNewApplicationSuppliesAndPreservesRuntimeSeams(t *testing.T) {
 	factoryQuality := &runtimeTestQuality{}
 	tools := &runtimeTestTools{}
 	prompt := &runtimeTestPrompt{}
+	githubAuth := &bootstrapAuthProvider{}
+	browser := &bootstrapBrowserOpener{}
 	inputTerminal := func() bool { return true }
 	outputTerminal := func() bool { return false }
 	application := newApplication(Runtime{
@@ -73,6 +86,19 @@ func TestNewApplicationSuppliesAndPreservesRuntimeSeams(t *testing.T) {
 		QualityFactory: func(string, time.Duration) port.QualityRunner {
 			return factoryQuality
 		},
+		GitHubAuthFactory: func(time.Duration) github.AuthProvider {
+			return githubAuth
+		},
+		Browser: browser,
+		GitHubAppClientID: func() string {
+			return "public-client-id"
+		},
+		GitHubCredentialBrokerURL: func() string {
+			return "https://broker.example"
+		},
+		GitHubWorkloadIdentity: func() string {
+			return "workload-identity"
+		},
 		Tools: tools,
 		PromptFactory: func(bool, string) port.Prompt {
 			return prompt
@@ -86,6 +112,11 @@ func TestNewApplicationSuppliesAndPreservesRuntimeSeams(t *testing.T) {
 		application.runtime.KeyPolicy != policy ||
 		application.runtime.Quality != quality ||
 		application.runtime.QualityFactory("quality.yaml", time.Second) != factoryQuality ||
+		application.runtime.GitHubAuthFactory(time.Second) != githubAuth ||
+		application.runtime.Browser != browser ||
+		application.runtime.GitHubAppClientID() != "public-client-id" ||
+		application.runtime.GitHubCredentialBrokerURL() != "https://broker.example" ||
+		application.runtime.GitHubWorkloadIdentity() != "workload-identity" ||
 		application.runtime.Tools != tools ||
 		application.runtime.PromptFactory(false, "auto") != prompt {
 		t.Fatal("newApplication replaced an injected runtime dependency")
@@ -169,6 +200,15 @@ func TestServicesWireDependenciesAndQualityFallback(t *testing.T) {
 		},
 		Quality: quality,
 		Tools:   &runtimeTestTools{},
+		GitHubAuthFactory: func(time.Duration) github.AuthProvider {
+			return &bootstrapAuthProvider{}
+		},
+		GitHubCredentialBrokerURL: func() string {
+			return "https://broker.example"
+		},
+		GitHubWorkloadIdentity: func() string {
+			return "workload-identity"
+		},
 	}, githubOptions)
 	if !githubApplication.services().tickets.HasPullRequestPublisher() {
 		t.Fatal("GitHub provider selection did not construct a pull-request publisher")
