@@ -69,6 +69,13 @@ jobs:
       - name: Run full build gate
         run: go run -mod=readonly ./cmd/build
 
+      - name: Report coverage breakdown on failure
+        if: failure()
+        shell: bash
+        run: |
+          go test -count=1 -coverprofile=coverage.out ./... || true
+          test ! -f coverage.out || go tool cover -func=coverage.out
+
   native-smoke:
     name: Native smoke test (${{ matrix.name }})
     needs: quality
@@ -141,7 +148,6 @@ jobs:
           "./dist/git-governance${{ matrix.extension }}" --version
           "./dist/git-governance${{ matrix.extension }}" --output json branch list
           "./dist/git-governance${{ matrix.extension }}" --output json policy describe
-          "./dist/git-governance${{ matrix.extension }}" --output json doctor
 
   release-config:
     name: Release configuration

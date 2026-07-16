@@ -58,6 +58,12 @@ This keeps both `gofmt -l` and `go mod tidy -diff` semantically identical on
 Windows and Unix runners instead of failing on a checkout-only line-ending
 conversion.
 
+Native binary smoke tests intentionally exclude `doctor`: a detached CI
+checkout has neither a checked-out work branch nor a developer's Git transport
+credential, while `doctor` must fail closed when either is absent. Its
+behavior is covered by same-package and integration tests and is exercised in
+real developer repositories before governed publication.
+
 On Windows, the race detector needs a working C compiler and `CGO_ENABLED=1`.
 If the local host cannot provide that compiler, use the Ubuntu CI gate rather
 than claiming a skipped race run passed.

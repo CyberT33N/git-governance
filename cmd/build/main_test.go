@@ -568,10 +568,6 @@ func expectedInvocations(files []string) []invocation {
 			executable: artifact,
 			arguments:  []string{"--output", "json", "policy", "describe"},
 		},
-		invocation{
-			executable: artifact,
-			arguments:  []string{"--output", "json", "doctor"},
-		},
 	}
 }
 
