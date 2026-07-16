@@ -95,7 +95,7 @@ does not rely on any external governance repository or unpublished rule set.
 | Gate | Status | Latest local result |
 |---|---|---|
 | `go test ./...` | VERIFIED | passed after final remediation |
-| `go run ./cmd/check-coverage` | VERIFIED | every package with executable statements reached 100.0 % |
+| `go run ./cmd/check-coverage` | VERIFIED | every Go package had a `_test.go` file; every package with executable statements reached 100.0 % |
 | `go vet ./...` | VERIFIED | passed after final remediation |
 | Domain whitebox coverage | VERIFIED | 100.0 % in every domain package |
 | Git adapter whitebox coverage | VERIFIED | 100.0 % |

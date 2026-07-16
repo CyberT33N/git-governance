@@ -320,8 +320,12 @@ func ignoredDirectory(name string) bool {
 }
 
 func binaryPath() string {
+	return binaryPathFor(runtime.GOOS)
+}
+
+func binaryPathFor(goos string) string {
 	name := "git-governance"
-	if runtime.GOOS == "windows" {
+	if goos == "windows" {
 		name += ".exe"
 	}
 	return filepath.Join("dist", name)

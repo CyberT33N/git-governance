@@ -788,6 +788,10 @@ go test -mod=readonly ./internal/integration -count=1
 go tool -modfile tools/go.mod govulncheck ./...
 ```
 
+`check-coverage` executes `go test -count=1 -cover ./...`. It fails when a Go
+package has no `_test.go` file or its executable statements do not reach
+`100.0%` coverage.
+
 On Windows, the race detector needs a working C compiler and `CGO_ENABLED=1`.
 If the local host cannot provide that compiler, use the Ubuntu CI gate rather
 than claiming a skipped race run passed.

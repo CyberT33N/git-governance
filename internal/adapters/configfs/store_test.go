@@ -208,6 +208,38 @@ func TestSaveRejectsUnavailableParentAndCancelledContext(t *testing.T) {
 	})
 }
 
+func TestSaveHonorsCancelledContextWithoutMutation(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), configFileName)
+	if err := os.WriteFile(path, []byte("current"), defaultFileMode); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := New(Options{Path: path}).Save(ctx, port.Preferences{})
+	assertProblemCode(t, err, problem.CodeOperationCancelled)
+
+	actual, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(actual) != "current" {
+		t.Fatalf("configuration after cancelled save = %q, want %q", actual, "current")
+	}
+	if _, err := os.Lstat(path + ".bak"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("backup after cancelled save = %v, want not exist", err)
+	}
+	temporaryFiles, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".config-*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(temporaryFiles) != 0 {
+		t.Fatalf("temporary files remain after cancelled save: %v", temporaryFiles)
+	}
+}
+
 func TestInternalNormalizationAndConfigurationWrite(t *testing.T) {
 	t.Parallel()
 

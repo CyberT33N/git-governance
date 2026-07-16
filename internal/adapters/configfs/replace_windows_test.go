@@ -3,15 +3,12 @@
 package configfs
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/CyberT33N/git-governance/internal/application/port"
-	"github.com/CyberT33N/git-governance/internal/domain/problem"
 	"golang.org/x/sys/windows"
 )
 
@@ -305,26 +302,6 @@ func TestWindowsReplaceConfigurationReportsPostRecoveryTargetStatError(t *testin
 		t.Fatal(err)
 	}
 	assertNotExists(t, backup)
-}
-
-func TestWindowsSaveHonorsCancelledContextWithoutMutation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	writeTestConfiguration(t, path, "current")
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err := New(Options{Path: path}).Save(ctx, port.Preferences{})
-	assertProblemCode(t, err, problem.CodeOperationCancelled)
-	assertFileContent(t, path, "current")
-	assertNotExists(t, path+".bak")
-
-	temporaryFiles, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".config-*.tmp"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(temporaryFiles) != 0 {
-		t.Fatalf("temporary files remain after cancelled save: %v", temporaryFiles)
-	}
 }
 
 func writeTestConfiguration(t *testing.T, path, contents string) {

@@ -155,7 +155,8 @@ Die Release-Pipeline trennt strikt:
 - Modulgraph mit `go mod tidy -diff` ohne Mutation prüfen
 - Build- und Testbefehle mit `-mod=readonly` ausführen
 - `go test ./...`
-- `go run ./cmd/check-coverage`
+- `go run ./cmd/check-coverage` mit uncached Coverage, verpflichtender
+  `_test.go`-Datei je Go-Package und `100.0 %` für ausführbare Statements
 - `go test -race ./...` auf nativen Testplattformen
 - `go vet ./...`
 - statische Analyse und Vulnerability Scan

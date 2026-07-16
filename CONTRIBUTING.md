@@ -77,6 +77,10 @@ The build runner owns the complete ordered quality sequence and resolves its
 pinned development tools from `tools/go.mod`; do not require globally installed
 linters, vulnerability scanners, or Lefthook binaries.
 
+`cmd/check-coverage` runs its coverage tests uncached. It rejects every Go
+package reported without a `_test.go` file and every package with executable
+statements below `100.0%` coverage.
+
 Dependency updates belong in a separately reviewed update lane. That lane is
 the only place allowed to run `go get` or a mutating `go mod tidy`; normal
 development, CI, and release lanes must keep `go.mod` and `go.sum` read-only.

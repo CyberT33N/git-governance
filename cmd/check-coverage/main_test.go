@@ -48,6 +48,39 @@ func TestIncompletePackages(t *testing.T) {
 	}
 }
 
+func TestPackagesWithoutTests(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name   string
+		output string
+		want   []string
+	}{
+		{
+			name: "all packages contain tests",
+			output: strings.Join([]string{
+				"ok example.com/complete coverage: 100.0% of statements",
+				"ok example.com/integration coverage: [no statements]",
+			}, "\r\n"),
+		},
+		{
+			name:   "reports package without test files",
+			output: "? example.com/port [no test files]\n",
+			want:   []string{"? example.com/port [no test files]"},
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			actual := packagesWithoutTests(testCase.output)
+			if strings.Join(actual, "\n") != strings.Join(testCase.want, "\n") {
+				t.Fatalf("packagesWithoutTests() = %q, want %q", actual, testCase.want)
+			}
+		})
+	}
+}
+
 func TestRun(t *testing.T) {
 	complete := []byte("ok example.com/complete coverage: 100.0% of statements\n")
 
@@ -57,7 +90,7 @@ func TestRun(t *testing.T) {
 		exitCode := run(context.Background(), nil, stdout, stderr, func(context.Context, string, ...string) ([]byte, error) {
 			return complete, nil
 		})
-		if exitCode != 0 || !strings.Contains(stdout.String(), "All executable Go packages") || stderr.Len() != 0 {
+		if exitCode != 0 || !strings.Contains(stdout.String(), "All Go packages contain test files") || stderr.Len() != 0 {
 			t.Fatalf("run() = (%d, %q, %q)", exitCode, stdout.String(), stderr.String())
 		}
 	})
@@ -69,6 +102,31 @@ func TestRun(t *testing.T) {
 			return []byte("ok example.com/incomplete coverage: 80.0% of statements\n"), nil
 		})
 		if exitCode != 1 || !strings.Contains(stderr.String(), "80.0%") || !strings.Contains(stdout.String(), "80.0%") {
+			t.Fatalf("run() = (%d, %q, %q)", exitCode, stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("rejects packages without test files", func(t *testing.T) {
+		stdout := &bytes.Buffer{}
+		stderr := &bytes.Buffer{}
+		exitCode := run(context.Background(), nil, stdout, stderr, func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("? example.com/port [no test files]\n"), nil
+		})
+		if exitCode != 1 || !strings.Contains(stderr.String(), "_test.go") || !strings.Contains(stderr.String(), "example.com/port") || !strings.Contains(stdout.String(), "example.com/port") {
+			t.Fatalf("run() = (%d, %q, %q)", exitCode, stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("reports missing tests and incomplete coverage together", func(t *testing.T) {
+		stdout := &bytes.Buffer{}
+		stderr := &bytes.Buffer{}
+		exitCode := run(context.Background(), nil, stdout, stderr, func(context.Context, string, ...string) ([]byte, error) {
+			return []byte(strings.Join([]string{
+				"? example.com/port [no test files]",
+				"ok example.com/incomplete coverage: 80.0% of statements",
+			}, "\n")), nil
+		})
+		if exitCode != 1 || !strings.Contains(stderr.String(), "_test.go") || !strings.Contains(stderr.String(), "100.0%") {
 			t.Fatalf("run() = (%d, %q, %q)", exitCode, stdout.String(), stderr.String())
 		}
 	})
@@ -100,7 +158,7 @@ func TestRun(t *testing.T) {
 	t.Run("normalizes a nil context", func(t *testing.T) {
 		stdout := &bytes.Buffer{}
 		exitCode := run(testNilContext(), nil, stdout, &bytes.Buffer{}, func(ctx context.Context, executable string, arguments ...string) ([]byte, error) {
-			if ctx == nil || executable != "go" || strings.Join(arguments, " ") != "test -cover ./..." {
+			if ctx == nil || executable != "go" || strings.Join(arguments, " ") != "test -count=1 -cover ./..." {
 				t.Fatalf("coverage invocation = (%v, %q, %v)", ctx, executable, arguments)
 			}
 			return complete, nil

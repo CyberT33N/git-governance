@@ -362,14 +362,32 @@ func TestIgnoredDirectory(t *testing.T) {
 	}
 }
 
-func TestBinaryPath(t *testing.T) {
+func TestBinaryPathFor(t *testing.T) {
 	t.Parallel()
 
-	name := "git-governance"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
+	testCases := []struct {
+		name string
+		goos string
+		want string
+	}{
+		{name: "Windows", goos: "windows", want: filepath.Join("dist", "git-governance.exe")},
+		{name: "Linux", goos: "linux", want: filepath.Join("dist", "git-governance")},
 	}
-	if got, want := binaryPath(), filepath.Join("dist", name); got != want {
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := binaryPathFor(testCase.goos); got != testCase.want {
+				t.Fatalf("binaryPathFor(%q) = %q, want %q", testCase.goos, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestBinaryPathUsesCurrentPlatform(t *testing.T) {
+	t.Parallel()
+
+	if got, want := binaryPath(), binaryPathFor(runtime.GOOS); got != want {
 		t.Fatalf("binaryPath() = %q, want %q", got, want)
 	}
 }
