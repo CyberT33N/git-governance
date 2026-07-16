@@ -70,6 +70,9 @@ func TestLinuxSecretServiceStoreWhiteboxErrorPaths(t *testing.T) {
 		if got := (linuxSecretTool{binary: "go"}).executable(); got != "go" {
 			t.Fatalf("configured secret-tool binary = %q", got)
 		}
+		if _, err := (linuxSecretTool{}).run(context.Background(), nil, "--help"); err != nil && !errors.Is(err, errSessionStoreUnavailable) {
+			t.Logf("default secret-tool help returned %v", err)
+		}
 		if _, err := (linuxSecretTool{binary: "go"}).run(context.Background(), nil, "version"); err != nil {
 			t.Fatalf("native runner success error = %v", err)
 		}
