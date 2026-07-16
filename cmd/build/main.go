@@ -72,27 +72,27 @@ var (
 		{
 			name:       "typecheck packages and tests",
 			executable: "go",
-			arguments:  []string{"test", "-run=^$", "./..."},
+			arguments:  []string{"test", "-mod=readonly", "-run=^$", "./..."},
 		},
 		{
 			name:       "run unit, contract, and integration tests",
 			executable: "go",
-			arguments:  []string{"test", "./..."},
+			arguments:  []string{"test", "-mod=readonly", "./..."},
 		},
 		{
 			name:       "run uncached integration tests",
 			executable: "go",
-			arguments:  []string{"test", "./internal/integration", "-count=1"},
+			arguments:  []string{"test", "-mod=readonly", "./internal/integration", "-count=1"},
 		},
 		{
 			name:       "enforce complete statement coverage",
 			executable: "go",
-			arguments:  []string{"run", "./cmd/check-coverage"},
+			arguments:  []string{"run", "-mod=readonly", "./cmd/check-coverage"},
 		},
 		{
 			name:       "run race detector",
 			executable: "go",
-			arguments:  []string{"test", "-race", "./..."},
+			arguments:  []string{"test", "-mod=readonly", "-race", "./..."},
 		},
 		{
 			name:       "run static analysis",
@@ -107,27 +107,27 @@ var (
 		{
 			name:       "fuzz ticket parser",
 			executable: "go",
-			arguments:  []string{"test", "./internal/domain/ticket", "-run=^$", "-fuzz=FuzzParseTicketValues", "-fuzztime=2s", "-parallel=1"},
+			arguments:  []string{"test", "-mod=readonly", "./internal/domain/ticket", "-run=^$", "-fuzz=FuzzParseTicketValues", "-fuzztime=2s", "-parallel=1"},
 		},
 		{
 			name:       "fuzz branch parser",
 			executable: "go",
-			arguments:  []string{"test", "./internal/domain/branch", "-run=^$", "-fuzz=FuzzParseBranchValues", "-fuzztime=2s", "-parallel=1"},
+			arguments:  []string{"test", "-mod=readonly", "./internal/domain/branch", "-run=^$", "-fuzz=FuzzParseBranchValues", "-fuzztime=2s", "-parallel=1"},
 		},
 		{
 			name:       "fuzz commit-message parser",
 			executable: "go",
-			arguments:  []string{"test", "./internal/domain/commitmsg", "-run=^$", "-fuzz=FuzzParseCommitMessage", "-fuzztime=2s", "-parallel=1"},
+			arguments:  []string{"test", "-mod=readonly", "./internal/domain/commitmsg", "-run=^$", "-fuzz=FuzzParseCommitMessage", "-fuzztime=2s", "-parallel=1"},
 		},
 		{
 			name:       "fuzz preferences decoder",
 			executable: "go",
-			arguments:  []string{"test", "./internal/adapters/configfs", "-run=^$", "-fuzz=FuzzDecodePreferences", "-fuzztime=2s", "-parallel=1"},
+			arguments:  []string{"test", "-mod=readonly", "./internal/adapters/configfs", "-run=^$", "-fuzz=FuzzDecodePreferences", "-fuzztime=2s", "-parallel=1"},
 		},
 		{
 			name:       "fuzz quality configuration decoder",
 			executable: "go",
-			arguments:  []string{"test", "./internal/adapters/quality", "-run=^$", "-fuzz=FuzzDecodeQualityConfiguration", "-fuzztime=2s", "-parallel=1"},
+			arguments:  []string{"test", "-mod=readonly", "./internal/adapters/quality", "-run=^$", "-fuzz=FuzzDecodeQualityConfiguration", "-fuzztime=2s", "-parallel=1"},
 		},
 		{
 			name:       "validate Lefthook configuration",
@@ -185,7 +185,12 @@ func run(
 		{
 			name:       "build native binary",
 			executable: "go",
-			arguments:  []string{"build", "-trimpath", "-o", artifact, "./cmd/git-governance"},
+			arguments:  []string{"build", "-mod=readonly", "-trimpath", "-o", artifact, "./cmd/git-governance"},
+		},
+		{
+			name:       "record embedded module provenance",
+			executable: "go",
+			arguments:  []string{"version", "-m", artifact},
 		},
 		{
 			name:       "smoke test version",

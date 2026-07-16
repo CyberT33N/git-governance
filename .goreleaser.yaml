@@ -4,7 +4,7 @@ project_name: git-governance
 
 before:
   hooks:
-    - go run ./cmd/generate-docs --out dist/generated
+    - go run -mod=readonly ./cmd/generate-docs --out dist/generated
 
 builds:
   - id: git-governance

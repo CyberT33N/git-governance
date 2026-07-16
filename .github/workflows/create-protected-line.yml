@@ -26,7 +26,7 @@ jobs:
   create:
     if: github.repository == 'CyberT33N/git-governance'
     name: Create ${{ inputs.kind }} line
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release
     steps:
       - name: Check out complete repository history

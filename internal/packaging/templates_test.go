@@ -81,7 +81,7 @@ func TestGoReleaserArchiveTemplateUsesGoTargetIdentifiers(t *testing.T) {
 		t.Fatal("GoReleaser archive template must use .Os and .Arch identifiers")
 	}
 	for _, expected := range []string{
-		"go run ./cmd/generate-docs --out dist/generated",
+		"go run -mod=readonly ./cmd/generate-docs --out dist/generated",
 		"dist/generated/completions/*",
 		"dist/generated/man/*",
 	} {

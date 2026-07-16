@@ -16,6 +16,11 @@ permissions:
   id-token: write
   attestations: write
 
+env:
+  GOTOOLCHAIN: local
+  GOFLAGS: -mod=readonly
+  GOVCS: "*:off"
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -23,7 +28,7 @@ concurrency:
 jobs:
   release:
     if: github.repository == 'CyberT33N/git-governance'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release
     steps:
       - name: Check out immutable release source
@@ -54,8 +59,15 @@ jobs:
             go.sum
             tools/go.sum
 
+      - name: Verify controlled Go toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOVERSION)" = "go1.26.5"
+          test "$(go env GOTOOLCHAIN)" = "local"
+
       - name: Verify release source
-        run: go run ./cmd/build
+        run: go run -mod=readonly ./cmd/build
 
       - name: Install Syft for GoReleaser SBOM generation
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0

@@ -6,21 +6,28 @@
 - Git 2.53 or newer recommended
 
 ```powershell
+$env:GOTOOLCHAIN = "local"
+$env:GOFLAGS = "-mod=readonly"
+$env:GOVCS = "*:off"
 go version
 git --version
 go mod download
+go -C tools mod download
 ```
 
 Do not add a runtime requirement for end users. Go belongs to development and
 CI; released artifacts are native binaries.
 
+These variables affect only the current shell. Do not use `go env -w` for
+repository policy because it mutates a developer's global Go configuration.
+
 ## Local development loop
 
 ```powershell
-go test ./...
-go run .\cmd\check-coverage
-go vet ./...
-go run .\cmd\git-governance --help
+go test -mod=readonly ./...
+go run -mod=readonly .\cmd\check-coverage
+go vet -mod=readonly ./...
+go run -mod=readonly .\cmd\git-governance --help
 ```
 
 Format changed Go files:
@@ -63,12 +70,16 @@ Every behavior change requires tests at the lowest meaningful boundary:
 Run the full local gate:
 
 ```powershell
-go run .\cmd\build
+go run -mod=readonly .\cmd\build
 ```
 
 The build runner owns the complete ordered quality sequence and resolves its
 pinned development tools from `tools/go.mod`; do not require globally installed
 linters, vulnerability scanners, or Lefthook binaries.
+
+Dependency updates belong in a separately reviewed update lane. That lane is
+the only place allowed to run `go get` or a mutating `go mod tidy`; normal
+development, CI, and release lanes must keep `go.mod` and `go.sum` read-only.
 
 Run bounded fuzzing before changes to parser or config code:
 

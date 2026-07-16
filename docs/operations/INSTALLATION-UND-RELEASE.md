@@ -150,27 +150,47 @@ Die Release-Pipeline trennt strikt:
 ### 8.1 Build
 
 - exakten Git-Tag und Commit prüfen
-- Go-Toolchain pinnen
+- exakte Go-Toolchain provisionieren und mit `GOTOOLCHAIN=local` erzwingen
 - Dependencies mit Checksums auflösen
+- Modulgraph mit `go mod tidy -diff` ohne Mutation prüfen
+- Build- und Testbefehle mit `-mod=readonly` ausführen
 - `go test ./...`
 - `go run ./cmd/check-coverage`
 - `go test -race ./...` auf nativen Testplattformen
 - `go vet ./...`
 - statische Analyse und Vulnerability Scan
+- Dependency-Review bei jedem Pull Request sowie periodische CI-Neubewertung
 - Cross-Platform-Binaries bauen
 
 #### 8.1.1 Lokale GoReleaser-Validierung
 
-Die Release-Konfiguration wird mit derselben GoReleaser-Version wie CI geprüft:
-
-```powershell
-go install github.com/goreleaser/goreleaser/v2@v2.16.0
-$goreleaser = Join-Path (go env GOPATH) "bin\goreleaser.exe"
-& $goreleaser check
-```
+Die Release-Konfiguration wird in CI mit derselben fest gebundenen
+GoReleaser-Version wie der Release ausgeführt geprüft. Lokale Validierung ist
+nur mit einer bereits freigegebenen und verifizierten GoReleaser-Binary
+zulässig. Eine ad-hoc-Beschaffung per `go install ...@version` ist nicht Teil
+des Release- oder Validierungsprozesses.
 
 Der Check validiert ausschließlich die Konfiguration. Er veröffentlicht keine
 Artefakte und benötigt keine Release-Credentials.
+
+#### 8.1.2 Beschaffungsgrenze
+
+Dieses Repository erzwingt bereits Toolchain-, Read-only- und VCS-Fallback-
+Kontrollen in CI und Release. Die Umstellung auf einen internen Approved Proxy
+und die dazugehörige Artifact-Registry-Admission ist eine externe
+Plattformvoraussetzung und wird erst mit deren Bereitstellung aktiviert. Bis
+dahin bleibt die bestehende Go-Proxy-Konfiguration unverändert.
+
+#### 8.1.3 Dependency- und Runner-Governance
+
+- Pull Requests durchlaufen eine auf einen unveränderlichen Commit gepinnte
+  Dependency Review; neue Vulnerability-Findings jeder Schwere und in jedem
+  Dependency-Scope blockieren den Check.
+- CI führt dieselben Supply-Chain-Gates täglich zusätzlich zu Pull Requests,
+  Pushes und manuellen Ausführungen aus.
+- GitHub-hosted Jobs verwenden konkrete, versionsgebundene Runner-Labels statt
+  `*-latest`. Diese Labels reduzieren Major-Version-Drift, sind jedoch kein
+  Ersatz für eine später bereitzustellende unveränderliche Build-Enklave.
 
 ### 8.2 Package
 
@@ -212,10 +232,11 @@ Aktueller Artefaktvertrag:
 - Package-Manager-Manifeste erst aus dem veröffentlichten Artefakt erzeugen
 
 Alle Drittanbieter-Actions in CI und Release werden auf vollständige,
-unveränderliche Commit-IDs gepinnt. GoReleaser, Syft, Cosign, Govulncheck und
-Lefthook werden zusätzlich auf konkrete Versionen gebunden. Ein Release wird
-nur von einem SemVer-Tag oder einem manuellen Run mit explizitem bestehenden
-SemVer-Tag gebaut.
+unveränderliche Commit-IDs gepinnt. GoReleaser, Syft und Cosign werden
+zusätzlich auf konkrete Versionen gebunden. Govulncheck, Lefthook und
+Staticcheck stammen aus dem versionierten `tools/go.mod`-Modul. Ein Release
+wird nur von einem SemVer-Tag oder einem manuellen Run mit explizitem
+bestehenden SemVer-Tag gebaut.
 
 Der normale automatisierte Pfad lautet:
 

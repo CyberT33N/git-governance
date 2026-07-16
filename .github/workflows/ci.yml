@@ -5,10 +5,17 @@ on:
   push:
     branches:
       - main
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+env:
+  GOTOOLCHAIN: local
+  GOFLAGS: -mod=readonly
+  GOVCS: "*:off"
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -17,7 +24,7 @@ concurrency:
 jobs:
   quality:
     name: Quality gates
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out source
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
@@ -34,8 +41,15 @@ jobs:
             go.sum
             tools/go.sum
 
+      - name: Verify controlled Go toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOVERSION)" = "go1.26.5"
+          test "$(go env GOTOOLCHAIN)" = "local"
+
       - name: Run full build gate
-        run: go run ./cmd/build
+        run: go run -mod=readonly ./cmd/build
 
   native-smoke:
     name: Native smoke test (${{ matrix.name }})
@@ -45,7 +59,7 @@ jobs:
       matrix:
         include:
           - name: linux-amd64
-            os: ubuntu-latest
+            os: ubuntu-24.04
             goos: linux
             goarch: amd64
             extension: ""
@@ -65,7 +79,7 @@ jobs:
             goarch: arm64
             extension: ""
           - name: windows-amd64
-            os: windows-latest
+            os: windows-2025
             goos: windows
             goarch: amd64
             extension: ".exe"
@@ -91,6 +105,13 @@ jobs:
             go.sum
             tools/go.sum
 
+      - name: Verify controlled Go toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOVERSION)" = "go1.26.5"
+          test "$(go env GOTOOLCHAIN)" = "local"
+
       - name: Build and smoke test native binary
         shell: bash
         run: |
@@ -98,7 +119,7 @@ jobs:
           test "$(go env GOOS)" = "${{ matrix.goos }}"
           test "$(go env GOARCH)" = "${{ matrix.goarch }}"
           mkdir -p dist
-          go build -trimpath -o "dist/git-governance${{ matrix.extension }}" ./cmd/git-governance
+          go build -mod=readonly -trimpath -o "dist/git-governance${{ matrix.extension }}" ./cmd/git-governance
           "./dist/git-governance${{ matrix.extension }}" --version
           "./dist/git-governance${{ matrix.extension }}" --output json branch list
           "./dist/git-governance${{ matrix.extension }}" --output json policy describe
@@ -106,7 +127,7 @@ jobs:
 
   release-config:
     name: Release configuration
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out source
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
