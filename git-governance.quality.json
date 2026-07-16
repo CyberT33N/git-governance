@@ -14,31 +14,14 @@
   },
   "gates": [
     {
-      "name": "unit-and-integration-tests",
-      "command": "go",
-      "args": [
-        "test",
-        "./..."
-      ],
-      "timeout": "2m"
-    },
-    {
-      "name": "static-analysis",
-      "command": "go",
-      "args": [
-        "vet",
-        "./..."
-      ],
-      "timeout": "1m"
-    },
-    {
-      "name": "complete-statement-coverage",
+      "name": "full-local-build",
       "command": "go",
       "args": [
         "run",
-        "./cmd/check-coverage"
+        "-mod=readonly",
+        "./cmd/build"
       ],
-      "timeout": "5m"
+      "timeout": "15m"
     }
   ]
 }

@@ -27,7 +27,9 @@ type linuxSecretToolRunner interface {
 	run(context.Context, []byte, ...string) ([]byte, error)
 }
 
-type linuxSecretTool struct{}
+type linuxSecretTool struct {
+	binary string
+}
 
 func newPlatformSessionStore() SessionStore {
 	return &linuxSecretServiceStore{runner: linuxSecretTool{}}
@@ -141,14 +143,21 @@ func (store *linuxSecretServiceStore) clear(ctx context.Context, host, account s
 	return nil
 }
 
-func (linuxSecretTool) run(ctx context.Context, input []byte, arguments ...string) ([]byte, error) {
-	command := exec.CommandContext(ctx, "secret-tool", arguments...)
+func (tool linuxSecretTool) run(ctx context.Context, input []byte, arguments ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, tool.executable(), arguments...)
 	command.Stdin = bytes.NewReader(input)
 	output, err := command.Output()
 	if errors.Is(err, exec.ErrNotFound) {
 		return nil, errSessionStoreUnavailable
 	}
 	return output, err
+}
+
+func (tool linuxSecretTool) executable() string {
+	if tool.binary == "" {
+		return "secret-tool"
+	}
+	return tool.binary
 }
 
 func linuxSecretHost(host string) string {

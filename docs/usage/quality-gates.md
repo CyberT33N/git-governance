@@ -66,3 +66,19 @@ not a hardcoded exception: a repository can include `scratch` for one small
 gate without enabling expensive gates there. This lets a documentation branch
 run link checks while skipping a stress test, or a performance branch run a
 stress test that other families do not need.
+
+## This repository's full-quality gate
+
+This repository configures one `full-local-build` gate:
+
+```text
+go run -mod=readonly ./cmd/build
+```
+
+The repository configuration, rather than the generic CLI, owns that Go
+command. It ensures that governed publication runs the same complete local
+picture as CI on the current native platform: formatting, linting, type checks,
+tests, uncached 100%-coverage, race detection, static analysis, vulnerability
+checks, fuzz smoke tests, Lefthook validation, and native binary smoke checks.
+Cross-platform native quality remains a CI responsibility; see
+[development verification](../development/verification.md).

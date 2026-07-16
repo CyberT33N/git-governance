@@ -113,8 +113,9 @@ does not rely on any external governance repository or unpublished rule set.
 | Vulnerability scan | VERIFIED | `govulncheck` v1.5.0 reported no vulnerabilities |
 | Windows amd64 native smoke | VERIFIED | version, policy, branch catalog, and doctor commands passed |
 | Windows/macOS/Linux cross-builds | VERIFIED | all six promised OS/architecture binaries compiled with `CGO_ENABLED=0` |
+| Native primary-OS full-quality matrix | IMPLEMENTED | CI runs `cmd/build` natively on Linux, macOS, and Windows; each OS independently enforces lint, tests, uncached 100%-coverage, race, fuzz, and security gates |
 | Native ARM64 smoke tests | IMPLEMENTED | CI matrix contains Ubuntu ARM64, Windows ARM64, and macOS ARM64 runners; remote execution requires the first push |
-| macOS/Linux native smoke tests | BLOCKED | configured in CI but not executable on the local Windows host |
+| macOS/Linux native smoke tests | IMPLEMENTED | CI executes native smoke tests; local Windows execution is intentionally not a prerequisite |
 
 ## Delivery and operations
 
@@ -129,7 +130,7 @@ does not rely on any external governance repository or unpublished rule set.
 | Periodic dependency re-evaluation | IMPLEMENTED | the CI workflow runs daily in addition to pull-request, push, and manual triggers |
 | Dependency update intake | IMPLEMENTED | Dependabot opens daily reviewable update pull requests for the application module, the tools module, and GitHub Actions |
 | Hosted runner major-version pinning | IMPLEMENTED | GitHub workflows use concrete Ubuntu and Windows runner labels rather than `*-latest` labels |
-| GitHub Actions CI | IMPLEMENTED | immutable action commits, pinned tool versions, read-only module execution, complete-coverage, race, fuzz, vulnerability, Lefthook, native-smoke, and release-config gates are configured |
+| GitHub Actions CI | IMPLEMENTED | immutable action commits, pinned tool versions, read-only module execution, native Linux/macOS/Windows full-quality gates, uncached coverage, race, fuzz, vulnerability, Lefthook, smoke, and release-config gates are configured |
 | GitHub release artifacts | IMPLEMENTED | tag/manual-tag validation, checksums, SBOM, Cosign, provenance attestation, and Linux package formats are configured |
 | CI-owned release tag lifecycle | IMPLEMENTED | merged same-repository `release/<semver> -> main` creates an immutable annotated tag and dispatches the artifact workflow |
 | Package-manager manifest templates | IMPLEMENTED | Homebrew, Scoop, and WinGet templates are version/checksum-driven under `packaging/` |
