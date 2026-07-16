@@ -1,0 +1,363 @@
+---
+description: Execute every repository change through the governed ticket-to-PR workflow
+alwaysApply: true
+---
+# Governed Task-to-Pull-Request Workflow
+
+## [0] Authority and activation
+This rule is a governance overlay. System, developer, user, and more specific repository instructions retain precedence. Never weaken higher-priority safety, testing, review, or tool-use requirements.
+
+Activate for every requested repository mutation, implementation, fix, refactor, test/coverage change, documentation change, maintenance task, performance task, ticket execution, commit, push, or pull request. Read-only explanation, diagnosis without implementation, review, and status requests do not start a mutation workflow.
+
+The user's task and acceptance criteria remain unchanged. Classification, branching, Scratch use, commit grouping, and publication organize the work; they must not narrow, expand, or reinterpret it.
+
+**MUST**
+- Complete every triggered task from intake through an actual pull request, or report the exact blocking gate.
+- Prefer a complete `git-governance` workflow. Use lower-level `git-governance` commands only where no complete workflow exists.
+- Use the repository-local built binary, its current help, and executable policy as runtime authority.
+- Serialize mutations; parallelize only independent read-only discovery or verification.
+- Preserve unrelated user changes. Never reset, discard, overwrite, stash, amend, force-push, or delete work without explicit authorization.
+- Keep hidden reasoning private. Emit concise audit records with inputs, source, result, confidence, and gate status; never expose private chain-of-thought.
+
+**MUST NOT**
+- Never perform a branch, commit, push, tag, or PR mutation with raw Git when the binary exposes it.
+- Never replace a complete workflow with manually assembled branch commands.
+- Never use `git add .`, implicit staging, `commit --amend`, force push, or direct developer pushes to `main`, `develop`, `release/*`, or `support/*`.
+- Never treat a passing local regex as final authority; the binary must also accept the value.
+- Never claim completion from an intent-only result while a PR, protected-line creation, merge, tag, or release is pending.
+- Never create checkpoint commits because time passed, a file changed, or progress should be saved.
+
+## [1] Deterministic state and proof model
+Track one active state:
+```text
+ANCHORING -> ENVIRONMENT_READY -> INTAKE_READY -> BRANCH_READY -> EXECUTING
+-> VERIFIED -> COMMIT_READY -> PUBLICATION_READY -> PR_CREATED -> COMPLETE
+```
+Exceptional states:
+```text
+WAITING_FOR_TICKET | WAITING_FOR_USER_DECISION | PAUSED_CONFLICT | BLOCKED
+```
+Track proof fields:
+```text
+readme_anchored
+os_verified
+binary_verified
+policy_snapshot_loaded
+repository_diagnostics_passed
+task_contract_frozen
+ticket_verified
+family_verified
+slug_verified
+scratch_decision_recorded
+official_branch_verified
+acceptance_items_total
+acceptance_items_passed
+quality_gates_passed
+commit_plan_verified
+commits_created
+publication_verified
+pull_request_url
+```
+A transition is forbidden until every proof required by its destination is present. Missing output is never `PASS`. `COMPLETE` requires `acceptance_items_passed == acceptance_items_total`, all required verification, a reviewed commit series, successful publication, and a non-empty PR URL.
+
+## [2] Mandatory first anchoring and environment preflight
+Before editing, execute in order:
+1. Read workspace-root `README.md` completely as the first repository document. Follow its current links; do not assume every command is inline.
+2. Determine host OS and architecture from reliable runtime metadata.
+3. Resolve the repository root and repository-local binary:
+   - Windows: `<repo>\dist\git-governance.exe`
+   - macOS/Linux: `<repo>/dist/git-governance`
+4. If absent: log absence; re-read `README.md`; follow linked contributor/getting-started documentation; extract and execute the current full build command; verify the expected binary exists. Never hardcode the build command in this rule.
+5. Execute `<GG> --version`.
+6. Execute `<GG> --interactive never --output json policy describe`.
+7. Execute `<GG> --interactive never --output json doctor`.
+8. Read `--help` for each selected workflow before its first invocation.
+9. Inspect current branch, worktree, staged state, same-ticket branches, and active merge/rebase/cherry-pick state.
+
+Set `<GG>` to the absolute verified path:
+```text
+AUTO = <GG> --interactive never --output json
+MUT  = <GG> --interactive never --output json --yes
+DRY  = <GG> --interactive never --output json --dry-run
+GH   = <GG> --interactive never --output json --yes --pull-request-provider github
+```
+There is no `--silent` mode. `--interactive never` disables prompts, `--output json` preserves evidence, and `--yes` authorizes bounded mutation. Do not replace this with `--quiet`.
+
+If changes already exist, prove they belong to the supplied ticket and current official/Scratch branch. Otherwise stop before mutation and ask how to handle them. Never hide them with an automatic stash or low-quality commit.
+
+Audit:
+```text
+🧭 Preflight | os=<os/arch> | binary=<absolute path> | version=<value>
+| policySchema=<value> | doctor=PASS|FAIL | state=<state>
+```
+
+## [3] Preventive executable input contract
+The current binary remains final authority.
+```text
+Ticket key:
+  ^[A-Z][A-Z0-9]*$ ; 1..32 ASCII characters
+Ticket number:
+  ^[1-9][0-9]*$ ; 1..18 digits
+Ticket ID:
+  ^[A-Z][A-Z0-9]*-[1-9][0-9]*$
+Branch slug/description:
+  ^[a-z0-9]+(?:-[a-z0-9]+)*$ ; 1..100 ASCII characters
+Ticket-scoped branch:
+  ^(feature|fix|docs|refactor|chore|test|perf|hotfix|scratch)/([A-Z][A-Z0-9]*-[1-9][0-9]*)-([a-z0-9]+(?:-[a-z0-9]+)*)$
+Regular official families:
+  feature fix docs refactor chore test perf
+Special families:
+  hotfix release support scratch
+Commit families:
+  build chore ci docs feat fix perf refactor revert style test
+Commit header:
+  ^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)\(([A-Z][A-Z0-9]*-[1-9][0-9]*)\)(!)?: ([^\r\n]+)$
+Commit subject:
+  non-empty, unpadded, no control characters, <=200 Unicode runes
+Reviewed propagation commit:
+  ^[0-9a-fA-F]{7,64}$
+Release version:
+  SemVer 2.0.0 without leading v
+Support version:
+  ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$
+Affected hotfix line:
+  main | release/<semver> | support/<major.minor>
+Propagation target:
+  main | develop | release/<semver> | support/<major.minor>
+Release stabilization kind:
+  blocker | docs | release-prep
+```
+At preflight, compare embedded family sets, commit types, and limits with `policy describe`. On mismatch enter `BLOCKED`, re-anchor to current docs/help, and never send stale values.
+
+Every generated or supplied value passes:
+1. local lexical and task-semantic verification;
+2. binary verification through the relevant `--dry-run`, validation, or workflow.
+
+Never normalize invalid input silently. Suggest a valid correction and obtain confirmation. A user override may select a semantically weaker but binary-valid option; it may never bypass executable governance.
+
+## [4] Intake decisions
+### 4.1 Ticket gate
+An explicit complete ticket is mandatory. Non-interactive execution requires both `--key` and `--ticket`; a numeric ticket alone is insufficient.
+- If absent/incomplete, enter `WAITING_FOR_TICKET`, ask for `KEY-NUMBER`, and do not edit, branch, or commit.
+- Preserve supplied values exactly; verify key, number, combined form, lengths, and binary acceptance.
+- Split only into `--key KEY --ticket NUMBER`; never invent either.
+- Never reuse a previous ticket or infer a global ticket default.
+
+### 4.2 Branch-family matrix
+Classify the primary outcome, not touched-file counts:
+```text
+explicit user outcome                 35%
+dominant semantic change              25%
+observable behavior effect            15%
+defect/release-line context           15%
+review and rollback identity          10%
+```
+Mapping:
+```text
+new capability                                   -> feature
+regular development-line defect                  -> fix
+documentation-only outcome                       -> docs
+behavior-preserving restructuring                -> refactor
+maintenance/build/CI/dependency/tooling          -> chore
+test-only or coverage-only outcome               -> test
+measured performance outcome                     -> perf
+defect on main/release/support                    -> hotfix workflow
+frozen release blocker/docs/release preparation  -> release stabilization
+```
+Supporting tests/docs do not change a feature/fix family. Mixed independent outcomes imply an oversized ticket and require clarification or splitting.
+
+If omitted, select the highest score. If top score is below 70% or tied, ask one focused question. If supplied, verify twice: (1) lexical/workflow eligibility via binary policy; (2) semantic fit via matrix. If correct, retain it. If not, show supplied/recommended values, concise evidence, and confidence delta; ask whether to switch. If declined, retain the supplied family only when the binary accepts it for that workflow.
+```text
+🧭 Family verification | supplied=<value|none> | lexical=PASS|FAIL
+| semantic=PASS|FAIL | selected=<family> | override=<bool>
+```
+
+### 4.3 Branch-description matrix
+Generate a task-specific kebab-case slug unless supplied:
+```text
+task-scope fidelity 35% | clarity 25% | conciseness 15%
+stable terminology 15% | lexical compliance 10%
+```
+If a binary-valid alternative scores at least 10 points higher, propose it. If declined, retain the supplied slug only when binary-valid. Invalid input cannot be forced through.
+```text
+🧭 Slug verification | supplied=<value|none> | lexical=PASS|FAIL
+| semanticScore=<n> | selected=<slug> | override=<bool>
+```
+
+## [5] Proactive and reactive Scratch decision
+Scratch is private exploration, never the official branch or PR source. Evaluate before implementation and whenever uncertainty rises:
+```text
+solution uncertainty                         30%
+probability of throwaway experiments         20%
+multiple competing approaches                15%
+isolation value for risky local experiments  15%
+requirements ambiguity                       10%
+unknown dependency/performance behavior      10%
+```
+```text
+0..39 direct official work
+40..59 read-only clarification/probes, then rescore
+60..100 Scratch before speculative implementation
+```
+External/irreversible risk still needs explicit approval; Scratch does not make external side effects safe.
+```text
+🧭 Scratch decision | timing=proactive|reactive | score=<n>
+| result=official|clarify|scratch | evidence=<concise factors>
+```
+Proactive Scratch uses the complete workflow:
+```text
+DRY workflow ticket start --family <family> --key <KEY> --ticket <NUMBER> --slug <slug> --scratch [--scratch-slug <slug>]
+MUT workflow ticket start --family <family> --key <KEY> --ticket <NUMBER> --slug <slug> --scratch [--scratch-slug <slug>]
+```
+Without Scratch, omit `--scratch`.
+
+Reactive Scratch has no complete create-only workflow; from a clean local official branch use:
+```text
+DRY branch create --family scratch --key <KEY> --ticket <NUMBER> --slug <scratch-slug> --base <official-branch>
+MUT branch create --family scratch --key <KEY> --ticket <NUMBER> --slug <scratch-slug> --base <official-branch>
+```
+If dirty, stop. Never create a junk checkpoint. Ask whether to finish a genuinely complete semantic unit, explicitly stash, or handle changes another safe way.
+
+## [6] Workflow topology and commands
+### 6.1 Regular ticket
+Always start with `workflow ticket start`; never manually assemble fetch/branch steps. One ticket has exactly one regular official branch.
+
+After implementation, verification, and governed commits:
+```text
+GH workflow ticket publish --push --create-pull-request
+```
+From Scratch, provide the single squash-commit input:
+```text
+GH workflow ticket publish --type <commit-family> --subject "<subject>" --push --create-pull-request
+```
+Use `--target <official>` only if the binary reports multiple local same-ticket candidates.
+
+### 6.2 Hotfix
+Choose the line actually carrying the defect; never default a production/release/support defect to `develop`.
+```text
+DRY workflow hotfix start --key <KEY> --ticket <NUMBER> --slug <slug> --affected-line <line>
+MUT workflow hotfix start --key <KEY> --ticket <NUMBER> --slug <slug> --affected-line <line>
+GH workflow hotfix publish --affected-line <same-line> --push --create-pull-request
+```
+For each additional affected line:
+```text
+GH workflow hotfix propagate --source <hotfix> --target-line <line> --commit <sha> --push --create-pull-request
+```
+Each line gets an explicit branch and PR; never assume propagation.
+
+### 6.3 Release and support
+```text
+MUT workflow release cut --version <semver>
+MUT workflow release stabilize --release release/<semver> --kind <kind> --key <KEY> --ticket <NUMBER> --slug <slug>
+GH workflow release publish-stabilization --release release/<semver> --push --create-pull-request
+GH workflow release promote --release release/<semver> --create-pull-request
+GH workflow release backmerge --release release/<semver> --create-pull-request
+MUT workflow release support --version <major.minor>
+```
+`cut`/`support` produce protected-CI intents, not local remote-line creation. `promote`/`backmerge` create PRs but never tag or directly mutate shared lines. Do not report external transitions complete without authoritative evidence.
+
+### 6.4 Direct fallback
+Use direct commands only where the complete workflow lacks that capability:
+```text
+branch create          reactive Scratch only
+branch merge-scratch   standalone transfer; prefer ticket publish
+branch sync-base       explicit standalone synchronization
+commit create          governed semantic commits
+branch validate        read-only diagnosis
+commit validate        read-only message validation
+workflow cleanup       local Scratch cleanup only
+```
+Read-only `git status`, `git diff`, and `git log` may gather evidence. Covered mutations remain binary-only.
+
+## [7] Implementation and semantic commits
+Freeze an acceptance ledger before editing. For each item track implementation evidence, direct tests, errors/edge cases, documentation impact, and result. Re-anchor to the unchanged task and current diff at semantic phase boundaries.
+
+Implement coherent vertical slices. A group includes all production, test, docs, configuration, and migration work needed to make it independently understandable and valid. Do not split invariant-preserving tests from production merely to increase count.
+
+Commit matrix:
+```text
+semantic completeness 30% | independent verifiability 20%
+rollback safety 15% | review clarity 15%
+dependency coherence 10% | history signal-to-noise 10%
+```
+A commit requires `>=85%` plus all blockers passing:
+- no knowingly incomplete path;
+- direct tests for the unit pass;
+- unit is valid under repository rules;
+- staged paths contain only that unit;
+- type/subject describe final architecture, not editing activity;
+- ticket is derived from and matches the current branch.
+
+File count has zero independent weight. A one-file commit is correct when it is a complete, independently reviewable/revertible unit, such as a docs-only ticket, focused configuration contract, test-only coverage improvement, isolated fix, or migration artifact. It is wrong when it records a property tweak belonging to unfinished work.
+
+Target 1..3 clean commits. A fourth needs an independent implementation/test/docs/migration/API boundary. At five or more planned commits, reassess ticket size/grouping. Append-only review fixes remain new commits even beyond the initial target.
+
+Create each commit explicitly without immediate push:
+```text
+DRY commit create --type <type> --subject "<subject>" --stage <path> [--stage <path>...]
+MUT commit create --type <type> --subject "<subject>" --stage <path> [--stage <path>...]
+```
+Use body/footer/breaking inputs only when semantically true. Never mark internal refactors breaking. If one file contains inseparable proposed groups, keep one coherent commit or sequence complete units; never manufacture partial history.
+
+Before publication, inspect all commits since the actual base for ticket consistency, semantic order, WIP/checkpoint messages, unrelated scope, and verification evidence. Let `workflow ... publish` execute full-series validation.
+
+## [8] Verification, PR, and cleanup
+Run repository-mandated checks in required order. Follow repository rules for whitebox tests, coverage, formatting, and static-analysis authorization. Do not embed language-specific checks here; consume repository instructions and `git-governance.quality.json`.
+
+Publication gate:
+```text
+acceptance_items_passed == acceptance_items_total
+required tests and coverage passed
+no unintended worktree changes
+commit series passed semantic review
+binary branch and commit validation passed
+```
+The selected publish workflow validates commits, runs configured gates, fetches, checks base freshness, rebases only an unpublished branch with a real delta, revalidates, pushes, and prepares the PR.
+
+Actual GitHub PR requirements:
+- `GIT_GOVERNANCE_GITHUB_TOKEN` exists only in environment and is never passed/logged;
+- use `--pull-request-provider github --create-pull-request`;
+- use `--push` for ticket, hotfix, propagation, and stabilization publish;
+- an idempotently returned existing PR URL is success.
+
+If provider/credentials are unavailable, never bypass the binary with another PR tool. Enter `BLOCKED`; report the provider-neutral intent and prerequisite.
+
+After successful Scratch transfer and PR creation, when appropriate:
+```text
+MUT workflow cleanup --branch scratch/<ticket>-<slug>
+```
+Never clean remote or official branches.
+
+## [9] Conflict protocol
+On rebase, Scratch squash, cherry-pick, or controlled-merge conflict:
+1. Enter `PAUSED_CONFLICT`; never restart the workflow.
+2. Identify actual operation, source, target/base, conflicted files, and preserved state.
+3. Ask the user to choose collaborative conflict-by-conflict resolution or autonomous agent resolution.
+4. Collaborative: explain competing intent per conflict and wait before editing it.
+5. Autonomous: resolve against actual target architecture/current target-base behavior, run focused verification, and summarize decisions.
+6. Stage only resolved paths. Raw `git add -- <paths>` is allowed solely because no binary conflict-staging endpoint exists; `git add .` remains forbidden.
+7. Continue through the binary resume path.
+
+Never assume every conflict rebases `develop`: hotfix uses its affected line, stabilization its release line, propagation its target line, and Scratch its official branch.
+```text
+GH workflow ticket publish --branch <official> --resume --push --create-pull-request
+GH workflow ticket publish --type <type> --subject "<subject>" [--target <official>] --resume --push --create-pull-request
+GH workflow hotfix publish --branch <hotfix> --affected-line <line> --resume --push --create-pull-request
+GH workflow release publish-stabilization --branch <branch> --release <release> --resume --push --create-pull-request
+GH workflow hotfix propagate --source <hotfix> --target-line <line> --branch <fix-branch> --resume --push --create-pull-request
+```
+For a controlled published-branch merge conflict, resolve/stage exact paths, complete a governed merge with `commit create` using the branch ticket, rerun required checks, then return to publish. Never abort, take one side wholesale, or discard state without explicit authorization.
+
+## [10] Audit and completion guard
+Emit compact material-gate records:
+```text
+🧭 Intake | ticket=<id> | family=<family> | slug=<slug> | verification=PASS
+🧭 Scratch | timing=<proactive|reactive> | score=<n> | result=<value>
+🧭 Branch | workflow=<command> | branch=<name> | binary=PASS
+🧭 Commit | index=<n> | type=<type> | semanticScore=<n> | paths=<count> | binary=PASS
+🧭 Quality | required=<count> | passed=<count> | status=PASS|FAIL
+🧭 Publish | pushed=<bool> | provider=<value> | pr=<url|blocked>
+```
+Before irreversible/external output, perform a hidden rubric self-check over completeness, governance, evidence, history quality, data preservation, and publication proof. Iterate internally until passing; never reveal rubric scores or private reasoning.
+
+Final response states unchanged objective/ticket, family/official branch/Scratch decision, semantic commits, verification commands/results, publication outcome/actual PR URL, and remaining external step or blocker. If PR URL is empty, state is not `COMPLETE`.
