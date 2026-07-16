@@ -23,7 +23,9 @@ type macOSKeychainRunner interface {
 	run(context.Context, []byte, ...string) ([]byte, error)
 }
 
-type macOSSecurityRunner struct{}
+type macOSSecurityRunner struct {
+	binary string
+}
 
 func newPlatformSessionStore() SessionStore {
 	return &macOSKeychainStore{runner: macOSSecurityRunner{}}
@@ -136,14 +138,21 @@ func (store *macOSKeychainStore) delete(ctx context.Context, host, account strin
 	return nil
 }
 
-func (macOSSecurityRunner) run(ctx context.Context, input []byte, arguments ...string) ([]byte, error) {
-	command := exec.CommandContext(ctx, "security", arguments...)
+func (runner macOSSecurityRunner) run(ctx context.Context, input []byte, arguments ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, runner.executable(), arguments...)
 	command.Stdin = bytes.NewReader(input)
 	output, err := command.Output()
 	if errors.Is(err, exec.ErrNotFound) {
 		return nil, errSessionStoreUnavailable
 	}
 	return output, err
+}
+
+func (runner macOSSecurityRunner) executable() string {
+	if runner.binary == "" {
+		return "security"
+	}
+	return runner.binary
 }
 
 func macOSKeychainService(host string) string {
