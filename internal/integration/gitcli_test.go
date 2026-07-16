@@ -31,7 +31,7 @@ func TestGitCLIAdapterAgainstLocalRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 	identity.Remote = "origin"
-	if filepath.Clean(filepath.FromSlash(identity.Root)) != filepath.Clean(local) {
+	if canonicalRepositoryPath(t, identity.Root) != canonicalRepositoryPath(t, local) {
 		t.Fatalf("Discover() root = %q, want %q", identity.Root, local)
 	}
 	if hasCommits, err := adapter.HasCommits(ctx, identity); err != nil || !hasCommits {
@@ -337,6 +337,15 @@ func setupRepository(t *testing.T) (string, string) {
 	runGit(t, local, "switch", "-c", "develop")
 	runGit(t, local, "push", "--set-upstream", "origin", "develop")
 	return local, remote
+}
+
+func canonicalRepositoryPath(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(filepath.FromSlash(path)))
+	if err != nil {
+		t.Fatalf("resolve repository path %q: %v", path, err)
+	}
+	return filepath.Clean(resolved)
 }
 
 func advanceRemoteDevelop(t *testing.T, remote, fileName, contents string) {
