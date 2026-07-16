@@ -105,11 +105,7 @@ func (resolver *BrokerResolver) Resolve(ctx context.Context, target CredentialTa
 	if err != nil {
 		return "", brokerEndpointProblem(err)
 	}
-	body, _ := json.Marshal(brokerRequest{
-		Host:       target.Host,
-		Owner:      target.Owner,
-		Repository: target.Repository,
-	})
+	body, _ := json.Marshal(brokerRequest(target))
 	// The method, validated HTTPS endpoint, and non-nil context are fixed by
 	// this adapter, so request construction cannot fail after the checks above.
 	request, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))

@@ -24,10 +24,7 @@ const (
 	secretStoreSourceLabel = "native-secret-store"
 )
 
-var (
-	errSessionNotFound         = errors.New("GitHub App session not found")
-	errSessionStoreUnavailable = errors.New("native GitHub App secret store is unavailable")
-)
+var errSessionNotFound = errors.New("GitHub App session not found")
 
 // CredentialTarget identifies the exact GitHub repository for which an API
 // credential is requested. A resolver must reject a host mismatch rather than

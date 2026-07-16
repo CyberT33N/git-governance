@@ -17,6 +17,8 @@ const (
 	linuxSecretSessionLabel  = "git-governance GitHub App session"
 )
 
+var errSessionStoreUnavailable = errors.New("native GitHub App secret store is unavailable")
+
 type linuxSecretServiceStore struct {
 	runner linuxSecretToolRunner
 }
@@ -45,7 +47,7 @@ func (store *linuxSecretServiceStore) LoadActive(ctx context.Context, host strin
 	}
 	var session Session
 	if err := json.Unmarshal(encoded, &session); err != nil {
-		return Session{}, errors.New("Secret Service GitHub App session has an invalid format")
+		return Session{}, errors.New("secret service GitHub App session has an invalid format")
 	}
 	if err := validateStoredSession(session); err != nil {
 		return Session{}, err
@@ -116,7 +118,7 @@ func (store *linuxSecretServiceStore) store(ctx context.Context, host, account s
 		account,
 	)
 	if err != nil {
-		return errors.New("Secret Service could not store the GitHub App session")
+		return errors.New("secret service could not store the GitHub App session")
 	}
 	return nil
 }
@@ -134,7 +136,7 @@ func (store *linuxSecretServiceStore) clear(ctx context.Context, host, account s
 		account,
 	)
 	if err != nil {
-		return errors.New("Secret Service could not delete the GitHub App session")
+		return errors.New("secret service could not delete the GitHub App session")
 	}
 	return nil
 }

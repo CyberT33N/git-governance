@@ -68,7 +68,7 @@ func TestBrokerResolverRejectsUnsafeOrInvalidInputs(t *testing.T) {
 		_, err := defaults.Resolve(context.Background(), invalid)
 		assertBrokerProblem(t, err, problem.CodeConfigurationInvalid)
 	}
-	_, err = defaults.Resolve(nil, target)
+	_, err = defaults.Resolve(testNilContext(), target)
 	assertBrokerProblem(t, err, problem.CodeInvalidInput)
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
