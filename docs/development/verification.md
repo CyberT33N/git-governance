@@ -53,6 +53,10 @@ matrix result. The workflow configuration can create those checks, but the
 hosting-provider ruleset is the external authority that prevents a merge when
 one platform fails.
 
+Go module metadata is canonical LF text through `.gitattributes`. This keeps
+`go mod tidy -diff` semantically identical on Windows and Unix runners instead
+of failing on a checkout-only line-ending conversion.
+
 On Windows, the race detector needs a working C compiler and `CGO_ENABLED=1`.
 If the local host cannot provide that compiler, use the Ubuntu CI gate rather
 than claiming a skipped race run passed.

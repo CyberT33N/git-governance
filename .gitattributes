@@ -1,0 +1,4 @@
+go.mod text eol=lf
+go.sum text eol=lf
+tools/go.mod text eol=lf
+tools/go.sum text eol=lf
