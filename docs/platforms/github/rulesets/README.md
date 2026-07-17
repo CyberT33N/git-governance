@@ -89,6 +89,7 @@ The shared-line Rulesets `02-develop.json`, `03-main.json`,
 |---|---|---|
 | CodeQL code scanning | `alerts_threshold: all`; `security_alerts_threshold: all` | Every unresolved CodeQL alert, including the lowest reported severity, blocks a pull request. |
 | GitHub Code Quality | `severity: all` | Every unresolved Code Quality result blocks a pull request. |
+| GitHub Code Quality coverage | `minimum_coverage: 100`; `max_coverage_drop: 0` | Any aggregate coverage below 100% or any coverage decrease blocks a pull request. |
 | Project statement coverage | exactly `100.0%` | The existing repository quality gate rejects executable Go packages below complete statement coverage. |
 
 These gates intentionally target **shared PR destination lines only**:
@@ -98,6 +99,11 @@ branches are PR sources; their changes are analyzed as part of the pull
 request to the protected destination line. Applying these gates to source
 branches would block normal direct development pushes without increasing the
 merge-time protection.
+
+In particular, **never** add `code_coverage`, `code_scanning`, or
+`code_quality` to `01-ticket-working-branches.json`. GitHub coverage checks
+require a PR merge through the API or UI, so applying them to a working branch
+would reject normal branch pushes before a PR can exist.
 
 ### Required CodeQL and Code Quality prerequisites
 
@@ -118,20 +124,19 @@ because the Rulesets require results that do not exist yet.
 
 ### Required GitHub Code Quality coverage configuration
 
-GitHub's **Restrict code coverage** rule is a public-preview UI feature whose
-stable import/REST JSON representation is not currently documented. Configure
-it in GitHub after importing the Rulesets:
+The shared-line JSON files serialize GitHub's **Restrict code coverage** rule
+with the following strict values:
 
 ```text
-Minimum coverage percentage: 100
-Maximum coverage drop:       0 percentage points
+minimum_coverage: 100
+max_coverage_drop: 0
 ```
 
 `Maximum coverage drop` is not a maximum coverage value. Setting it to `100`
 would permit a decline of up to 100 percentage points and is therefore the
 least strict meaningful setting. A value of `0` rejects every coverage
-decrease. Before activating this UI rule, the repository **MUST** upload a
-Cobertura XML report for pull requests and the default branch with
+decrease. Before importing these active Rulesets, the repository **MUST**
+upload a Cobertura XML report for pull requests and the default branch with
 `code-quality: write` permission. The existing project coverage gate remains
 the authoritative immediate 100% enforcement until that upload path is live.
 
