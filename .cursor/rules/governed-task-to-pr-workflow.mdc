@@ -38,7 +38,7 @@ BRANCH_CONTEXT_CHECK -> HELP_REANCHORING -> ENVIRONMENT_READY -> INTAKE_READY ->
 Exceptional states:
 ```text
 WAITING_FOR_BRANCH_DECISION | WAITING_FOR_TICKET | WAITING_FOR_USER_DECISION
-| PAUSED_CONFLICT | BLOCKED
+| WAITING_FOR_RELEASE_DELIVERY | PAUSED_CONFLICT | BLOCKED
 ```
 Track proof fields:
 ```text
@@ -63,6 +63,10 @@ commit_plan_verified
 commits_created
 publication_verified
 pull_request_url
+protected_line_dispatched
+protected_line_verified
+release_delivery_verified
+release_reconciliation_status
 ```
 A transition is forbidden until every proof required by its destination is present. Missing output is never `PASS`. A confirmed continuation resumes at the earliest unmet proof: it never repeats a completed branch-start action, but it never waives current CLI/policy, ticket/family, branch-topology, worktree, acceptance, commit, or publication gates. `COMPLETE` requires `acceptance_items_passed == acceptance_items_total`, all required verification, a reviewed commit series, successful publication, and a non-empty PR URL.
 
@@ -348,8 +352,8 @@ Each line gets an explicit branch and PR; never assume propagation.
 ### 6.3 Release and support
 ```text
 🧭
-Request the release cut because the governed release line must be prepared through protected CI.
-MUT workflow release cut --version <semver>
+Dispatch the release cut because the protected release line must be created and verified through authorized CI.
+GH workflow release cut --version <semver> --dispatch
 🧭
 Start release stabilization because the ticket-scoped work must originate from the frozen release line.
 MUT workflow release stabilize --release release/<semver> --kind <kind> --key <KEY> --ticket <NUMBER> --slug <slug>
@@ -360,13 +364,33 @@ GH workflow release publish-stabilization --release release/<semver> --push --cr
 Create the release-to-main review because the approved release must not directly mutate main.
 GH workflow release promote --release release/<semver> --create-pull-request
 🧭
-Create the release-to-develop review because approved release changes must return to the integration line safely.
+Assess the completed release because a backmerge is required only when verified release-only changes remain outside develop.
 GH workflow release backmerge --release release/<semver> --create-pull-request
 🧭
-Request the support-line workflow because explicit maintenance obligations require protected CI preparation.
-MUT workflow release support --version <major.minor>
+Dispatch the support-line workflow because explicit maintenance obligations require protected CI creation and verification.
+GH workflow release support --version <major.minor> --dispatch
 ```
-`cut`/`support` produce protected-CI intents, not local remote-line creation. `promote`/`backmerge` create PRs but never tag or directly mutate shared lines. Do not report external transitions complete without authoritative evidence.
+For a complete release cut or support-line request, `--dispatch` is mandatory:
+the command must wait for the provider workflow and verify the fetched protected
+remote line. An invocation without `--dispatch` is an intent-only plan and
+cannot advance the release state.
+
+After the release-to-main PR is created, enter `WAITING_FOR_RELEASE_DELIVERY`.
+Do not invoke backmerge merely because the PR exists. Resume only after
+authoritative evidence proves all of the following:
+
+1. the release-to-main PR was merged;
+2. the immutable `v<semver>` tag points exactly to that promotion merge;
+3. required artifacts and the GitHub Release were published successfully, or
+   an explicit repository contract marks a delivery component not applicable.
+
+`workflow release backmerge` enforces this evidence through the configured
+provider and compares `release/<semver>` against `develop`. Its result is
+either `required`, which creates or returns the reviewed backmerge PR, or
+`not-required`, which creates no empty PR and must be recorded in the release
+audit. Neither path directly mutates a shared line. Release cleanup remains
+hosting- or CI-owned and becomes eligible only after the delivery and
+reconciliation outcome are proven.
 
 A detected `release/<semver>` or `support/<major.minor>` branch is relevant workflow context, not automatic authority to commit directly to that protected line. Resume only the matching special workflow and its command-specific gates.
 
@@ -447,6 +471,13 @@ Actual GitHub PR requirements:
 - use `--push` for ticket, hotfix, propagation, and stabilization publish;
 - an idempotently returned existing PR URL is success.
 
+Protected-line dispatch and release reconciliation additionally require a
+least-privileged GitHub release-automation identity that can dispatch the
+approved workflow, inspect promotion/tag/release evidence, and create a
+backmerge PR only when required. Prefer a managed broker-backed identity for
+these lifecycle actions; do not grant ordinary developer credentials a broad
+Ruleset bypass or pass any credential through command arguments.
+
 When explicit local authentication is required, use this serialized runtime pair and wait for its result before any publish command:
 ```text
 🧭
@@ -506,6 +537,7 @@ Emit compact material-gate records:
 📋 Help reanchor | availability=PASS|FAIL
 📋 Runtime result | result=PASS|FAIL | state=<state>
 📋 Publish | pushed=<bool> | provider=<value> | pr=<url|blocked>
+📋 Release | line=<release|support> | dispatch=<url|blocked> | delivery=<PASS|WAITING|FAIL> | reconciliation=<required|not-required|blocked>
 ```
 Before irreversible/external output, perform a hidden rubric self-check over completeness, governance, evidence, history quality, data preservation, and publication proof. Iterate internally until passing; never reveal rubric scores or private reasoning.
 

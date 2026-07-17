@@ -19,7 +19,8 @@ machines once a release binary is installed. Git itself is required.
 - canonical branch, ticket, slug, SemVer, and Conventional Commit validation
 - branch creation from the correct remote-tracking base
 - commit creation with explicit staging only
-- bounded ticket, hotfix, release, support, and backmerge workflows
+- bounded ticket, hotfix, release, support, and delivery-gated conditional
+  backmerge workflows
 - first-push base-freshness checks
 - stable human and JSON error contracts
 - known ticket-key preferences in the operating-system configuration directory

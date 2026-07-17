@@ -368,6 +368,17 @@ Ein Hotfix startet von der real betroffenen Linie: `main`, derselben `release/*`
 
 `release/*` und `support/*` werden nicht über den normalen Branch-Wizard erzeugt. Der Wizard zeigt sie vollständig an, verweist aber auf die governance-gebundenen Workflow-Kommandos. `main` und `develop` werden erklärt, aber nie als normale Arbeitsbranch-Auswahl angeboten.
 
+`workflow release cut --dispatch` und `workflow release support --dispatch`
+rufen einen autorisierten Hosting-Adapter auf, warten auf den korrelierten
+CI-Workflow und verifizieren die erzeugte Remote-Linie nach einem Fetch. Ohne
+`--dispatch` bleibt die Ausgabe bewusst ein providerneutraler Intent.
+
+Ein Backmerge ist eine verpflichtende Reconciliation, kein pauschaler PR:
+erst nach gemergter Main-Promotion, exakt zugehörigem Tag und erfolgreicher
+Release-Delivery prüft der Hosting-Adapter den effektiven
+`release/<semver>`-zu-`develop`-Delta. Nur ein Delta erzeugt den Backmerge-PR;
+ohne Delta wird ein auditierbares `not-required`-Ergebnis geliefert.
+
 ## 12. Lefthook: Ergänzung statt Ersatz
 
 Lefthook ist laut eigener Dokumentation ein Git-Hook-Manager: Konfigurationen werden in `.git/hooks` installiert und `lefthook run <hook-name>` führt konfigurierte Jobs aus. Eigene Hooks und interaktive Jobs sind möglich. Das macht Lefthook zu einem guten Runner, aber nicht zu einem Branch-/Commit-/Workflow-Domainprodukt.
@@ -495,6 +506,12 @@ privilegienminimierter GitHub-Actions-Workflow `v<semver>` als annotierten,
 unveränderlichen Tag auf genau dem Merge-Commit. Weil ein durch `GITHUB_TOKEN`
 erzeugter Tag keinen weiteren Push-Workflow auslöst, startet dieser Workflow
 den vorhandenen Artefaktworkflow ausdrücklich per `workflow_dispatch`.
+
+Nach erfolgreicher Artefakt- und Release-Veröffentlichung prüft der
+GitHub-Lifecycle-Adapter den Promotion-Merge, den exakten Tag und den
+effektiven Delta von `release/<semver>` nach `develop`. Nur bei Delta wird ein
+reviewbarer Backmerge-PR erstellt; andernfalls ist das auditierbare Ergebnis
+`not-required` der Reconciliation-Abschluss.
 
 Installationsskripte dürfen nicht ungefragt `.bashrc`, `.zshrc` oder PowerShell-Profile verändern. Details stehen in `docs/operations/INSTALLATION-UND-RELEASE.md`.
 

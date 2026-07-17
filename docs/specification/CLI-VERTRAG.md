@@ -613,7 +613,8 @@ anschließend mit `--source`, `--target-line`, dem erzeugten `--branch` und
 ### 13.1 `workflow release cut`
 
 ```text
-git governance workflow release cut --version 2.8.0
+git governance --pull-request-provider github workflow release cut \
+  --version 2.8.0 --dispatch
 ```
 
 Das Kommando:
@@ -622,8 +623,11 @@ Das Kommando:
 - prüft die lokale Release-Anfrage und erzeugt einen maschinenlesbaren Intent
   für `create-protected-line.yml`
 - erstellt, wechselt oder pusht keinen lokalen `release/*`-Branch
-- übergibt die tatsächliche Remote-Erstellung an einen geschützten,
-  autorisierten CI-Workflow
+- übergibt mit `--dispatch` die tatsächliche Remote-Erstellung an einen
+  geschützten, autorisierten CI-Workflow, wartet auf dessen korrelierten Erfolg
+  und verifiziert den gefetchten Remote-Branch
+- bleibt ohne `--dispatch` absichtlich bei einem Intent; dieser kann keinen
+  nachfolgenden Release-Zustand beweisen
 - erklärt die danach erlaubte begrenzte Stabilisierung
 
 ### 13.2 `workflow release stabilize`
@@ -663,13 +667,22 @@ Mutationsfreigabe möglich.
 
 ### 13.5 `workflow release backmerge`
 
-Erzeugt keine stillen Direktcommits. Das Kommando validiert Release- und Zielzustand und erzeugt providerneutrale PR-Daten für:
+Erzeugt keine stillen Direktcommits und keinen leeren Ritual-PR. Außerhalb
+eines Dry-Runs verlangt es einen konfigurierten Release-Lifecycle-Provider,
+der vor der PR-Erzeugung nachweist:
+
+1. `release/<semver> -> main` wurde gemergt;
+2. `v<semver>` zeigt exakt auf diesen Promotion-Merge;
+3. die erforderliche GitHub Release- und Artefakt-Delivery ist erfolgreich;
+4. ein effektiver Release-Delta fehlt noch in `develop`.
 
 ```text
 release/<semver> -> develop
 ```
 
-Die Freigabe nach `main`, Tagging und Artefakterstellung bleiben Release-/CI-Verantwortung.
+Ist der Delta vorhanden, liefert `status=required` und erzeugt bei
+`--create-pull-request` den PR. Ist kein effektiver Delta vorhanden, liefert
+das Kommando `status=not-required`, den Delivery-Nachweis und keinen PR.
 Ein echter Provider-PR folgt derselben expliziten GitHub-Adapter-Konfiguration
 wie die Promotion.
 
@@ -678,8 +691,9 @@ wie die Promotion.
 `support/<major.minor>` darf nur angefordert werden, wenn die aktuell
 gefetchte `origin/main`-Revision einen passenden
 `v<major.minor.patch>`-Release-Tag trägt. Die CLI erzeugt einen Intent für
-`create-protected-line.yml`; der geschützte CI-Workflow erstellt die Remote
-Support-Linie von dieser freigegebenen Main-Revision.
+`create-protected-line.yml`; mit `--dispatch` startet sie den geschützten
+CI-Workflow und verifiziert die Remote-Support-Linie von dieser freigegebenen
+Main-Revision.
 
 ### 13.7 `workflow cleanup`
 
@@ -689,8 +703,9 @@ Lifecycle-Nachweise gehören zu GitHub, GitLab oder CI:
 - Ticket- und Hotfix-Remote-Branches werden nach dem passenden PR-Merge durch
   die Hosting-Plattform entfernt.
 - Ein Release-Remote-Branch bleibt bis Main-Promotion, Tag/Artefakt-Workflow
-  und Backmerge nach `develop` erhalten; danach löscht ihn Hosting-Automation
-  oder CI.
+  und abgeschlossener Reconciliation nach `develop` erhalten. Ein
+  `status=not-required` ist dabei ein gültiger Abschluss ohne leeren
+  Backmerge-PR; danach löscht ihn Hosting-Automation oder CI.
 - `main`, `develop`, `release/*` und `support/*` sind nie lokale
   CLI-Cleanup-Ziele.
 

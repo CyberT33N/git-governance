@@ -175,12 +175,37 @@ constraint faithfully in static branch rulesets:
   provenance of a hotfix;
 - a merge-method choice conditional on the PR source branch or on whether a
   ticket history contains internal noise;
-- deletion only after release promotion **and** backmerge.
+- protected-line creation, tag-to-artifact triggering, and deletion only after
+  release promotion, confirmed delivery, and documented reconciliation.
 
 Those controls remain in the `git-governance` domain/application workflow,
 Lefthook, CI, and human release governance. Treating GitHub Rulesets as the
 only architecture would both leave these constraints unenforced and duplicate
 the canonical policy in a less expressive mechanism.
+
+## Release lifecycle automation
+
+Rulesets protect the release boundary but cannot execute or prove the complete
+release lifecycle. The GitHub lifecycle adapter and Actions workflows must
+provide these separate controls:
+
+1. `workflow release cut --dispatch` dispatches `create-protected-line.yml`
+   through a least-privileged release-automation identity. The CLI waits for
+   the correlated workflow result, fetches, and verifies the resulting
+   `origin/release/<semver>` reference. The CLI never pushes a shared line.
+2. The merged `release/<semver> -> main` PR triggers the tag workflow. Because
+   a tag pushed with `GITHUB_TOKEN` cannot trigger another `push` workflow,
+   that workflow explicitly dispatches `release.yml` with the immutable tag.
+3. `workflow release backmerge` verifies the merged promotion, exact tag, and
+   published release before comparing `release/<semver>` with `develop`. It
+   opens a PR only for an effective delta; `not-required` is the auditable
+   completion result when no delta remains.
+4. Release cleanup occurs only after delivery and either the backmerge merge or
+   the recorded `not-required` reconciliation result.
+
+The automation identity must be narrowly scoped and auditable. Do not use an
+ordinary developer or a broad administrator bypass to create protected release
+lines, dispatch release workflows, or remove them after completion.
 
 ## Merge strategy mapping
 
@@ -239,7 +264,8 @@ exporting a ruleset, and the repository cannot safely invent team or app IDs.
 Do not grant ordinary developers bypass.
 
 `release/*` is protected from premature deletion. Before a completed release
-line can be deleted after both its promotion and backmerge, configure an
+line can be deleted after its promotion, confirmed delivery, and completed
+reconciliation, configure an
 explicit, audited release-maintainer or release-automation bypass through the
 GitHub UI or API. The same identity decision is needed if release or support
 branch creation must be restricted to a release workflow. GitHub bypass is
@@ -264,7 +290,9 @@ has no `deletion` rule, allowing GitHub to remove merged
 `perf/*` remote branches automatically.
 
 Shared lines remain deletion-protected. `release/*` requires a controlled
-cleanup only after promotion to `main` and backmerge to `develop`; active
+cleanup only after promotion to `main`, confirmed delivery, and either a
+merged backmerge to `develop` or an audited `not-required` reconciliation;
+active
 `support/*`, `main`, and `develop` are never automatically deleted. A
 `hotfix/*` branch is deleted only after its merge and documented
 forward-/backport decision, so its lifecycle is controlled by hosting or CI

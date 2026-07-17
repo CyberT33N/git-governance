@@ -32,8 +32,10 @@ Die CLI löscht standardmäßig nur lokale `scratch/*`-Branches und entfernt dab
 deren lokale Workflow-Basis-Metadaten. Sie löscht nie Remote-Branches und
 löscht keine Shared Lines. Die Remote-Löschung von Ticket- und Hotfix-Branches
 liegt bei GitHub, GitLab oder einer gleichwertigen Hosting-Automation. Ein
-Release-Branch wird erst nach Promotion nach `main`, Tag-/Artefakt-Erstellung
-und Backmerge nach `develop` durch CI oder Hosting-Automation entfernt.
+Release-Branch wird erst nach Promotion nach `main`, bestätigter
+Tag-/Artefakt-Delivery und abgeschlossener Reconciliation nach `develop` durch
+CI oder Hosting-Automation entfernt. Ein auditierbares `not-required` ist ein
+gültiger Reconciliation-Abschluss, wenn kein effektiver Delta bleibt.
 
 ## Entscheidungsbewertung
 
@@ -80,7 +82,7 @@ und Pfade außerhalb des Repository-Roots sind ausgeschlossen.
 | `scratch/*` | ja | nicht vorgesehen | Entwickler / CLI |
 | reguläre Ticket-Branches | nein | nach PR-Merge | Hosting-Plattform |
 | `hotfix/*` | nein | nach Zielmerge und Weiterleitung | Hosting-Plattform / CI |
-| `release/*` | nein | erst nach Main-Promotion und Develop-Backmerge | CI / Hosting-Automation |
+| `release/*` | nein | erst nach Main-Promotion, bestätigter Delivery und abgeschlossener Reconciliation | CI / Hosting-Automation |
 | `main`, `develop`, aktive `support/*` | nein | nein | Branch Protection |
 
 Die CLI darf keinen Merge-, Pull-Request- oder Weiterleitungsabschluss
@@ -95,7 +97,9 @@ release/<semver> → Pull Request nach main → geschützter Merge
 → CI prüft den Main-Merge-Commit
 → CI erzeugt den annotierten unveränderlichen Tag v<semver>
 → CI startet Artefakt-Build, Signierung und Veröffentlichung
-→ release/<semver> → Pull Request nach develop
+→ Lifecycle-Adapter prüft Promotion, Tag, Delivery und effektiven Delta
+→ bei Delta: release/<semver> → Pull Request nach develop
+→ ohne Delta: auditierbares not-required
 → CI oder Hosting-Automation bereinigt die abgeschlossene Release-Linie
 ```
 
