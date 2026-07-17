@@ -23,7 +23,7 @@ Do not redefine ticket, branch, or commit grammar here. Those remain in
 ## Layout
 
 ```text
-docs/platforms/
+docs/hosting-platforms/
   index.md                 # this catalog
   github/                  # GitHub hosting contracts
     rulesets/              # importable GitHub branch ruleset JSON

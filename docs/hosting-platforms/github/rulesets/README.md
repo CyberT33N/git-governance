@@ -203,6 +203,35 @@ not make it a global or universal requirement. GitHub rulesets cannot express
 the remaining conditional decision (“squash only for internal noise”) because
 they cannot select a merge method by PR source branch or commit quality.
 
+### Pull request creation versus merge selection
+
+GitHub records both the PR source and target branch, for example
+`feature/GOV-3-example` → `develop`. Creating a pull request does not select
+its merge method. The authorized person who merges it selects the method after
+reviews and checks are satisfied.
+
+For a regular ticket PR targeting `develop`, use this decision order:
+
+| PR history | Merge method |
+|---|---|
+| Each commit is independently meaningful and should remain visible | Rebase merge |
+| The branch boundary or a release backmerge must remain explicit | Merge commit |
+| The branch contains internal intermediate commits that should not enter the integration history | Selective squash merge |
+
+All three methods are deliberately available on `develop`; availability is not
+permission to choose arbitrarily. GitHub Rulesets cannot select a method from
+the source branch or commit history, so that context decision remains with the
+authorized merger.
+
+### Auto-merge
+
+**Allow auto-merge MUST remain disabled** under **Settings → General → Pull
+Requests**. Auto-merge preserves a method selected in advance and executes it
+later after requirements pass. It does not bypass Rulesets, reviews, or
+checks, but it removes the final deliberate review of the context-dependent
+merge-method decision. Reconsider it only if a controlled merger service
+enforces the same source- and history-aware decision matrix.
+
 ## Bypass, review, and lifecycle decisions
 
 `bypass_actors` is intentionally empty. GitHub omits bypass lists when
@@ -223,6 +252,28 @@ this repository currently has no `CODEOWNERS` file; set it to `true` only after
 that ownership contract exists. Signed commits are likewise a recommended,
 separate decision and are not silently imposed here.
 
+## Branch cleanup after merge
+
+GitHub Rulesets can restrict deletion; they cannot automatically delete a
+branch after a pull request lifecycle completes.
+
+For normal ticket branches, enable **Settings → General → Pull Requests →
+Automatically delete head branches**. The working-branch Ruleset intentionally
+has no `deletion` rule, allowing GitHub to remove merged
+`feature/*`, `fix/*`, `docs/*`, `refactor/*`, `chore/*`, `test/*`, and
+`perf/*` remote branches automatically.
+
+Shared lines remain deletion-protected. `release/*` requires a controlled
+cleanup only after promotion to `main` and backmerge to `develop`; active
+`support/*`, `main`, and `develop` are never automatically deleted. A
+`hotfix/*` branch is deleted only after its merge and documented
+forward-/backport decision, so its lifecycle is controlled by hosting or CI
+rather than an unconditional deletion rule.
+
+Automatic remote cleanup does not delete local branches. The governed CLI
+never cleans official local branches; `workflow cleanup` is reserved for
+local `scratch/*` branches.
+
 ## Import (UI)
 
 1. Open the repository on GitHub.
@@ -235,11 +286,11 @@ separate decision and are not silently imposed here.
 ## Import (API)
 
 ```powershell
-gh api --method POST repos/{owner}/{repo}/rulesets --input docs/platforms/github/rulesets/01-ticket-working-branches.json
-gh api --method POST repos/{owner}/{repo}/rulesets --input docs/platforms/github/rulesets/02-develop.json
-gh api --method POST repos/{owner}/{repo}/rulesets --input docs/platforms/github/rulesets/03-main.json
-gh api --method POST repos/{owner}/{repo}/rulesets --input docs/platforms/github/rulesets/04-release.json
-gh api --method POST repos/{owner}/{repo}/rulesets --input docs/platforms/github/rulesets/05-support.json
+gh api --method POST repos/{owner}/{repo}/rulesets --input docs/hosting-platforms/github/rulesets/01-ticket-working-branches.json
+gh api --method POST repos/{owner}/{repo}/rulesets --input docs/hosting-platforms/github/rulesets/02-develop.json
+gh api --method POST repos/{owner}/{repo}/rulesets --input docs/hosting-platforms/github/rulesets/03-main.json
+gh api --method POST repos/{owner}/{repo}/rulesets --input docs/hosting-platforms/github/rulesets/04-release.json
+gh api --method POST repos/{owner}/{repo}/rulesets --input docs/hosting-platforms/github/rulesets/05-support.json
 ```
 
 ## Status checks
