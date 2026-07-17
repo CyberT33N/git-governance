@@ -16,7 +16,7 @@ Do not redefine ticket, branch, or commit grammar here. Those remain in
 
 | Provider | Status | Documents |
 |---|---|---|
-| [GitHub](github/develop-line.md) | required for this repository | `develop` integration-line merge policy |
+| [GitHub rulesets](github/rulesets/README.md) | required for this repository | importable branch protection rulesets and merge-strategy mapping |
 | GitLab | reserved | add under `gitlab/` when a contract is adopted |
 | Other hosts | reserved | add a provider directory when a contract is adopted |
 
@@ -26,6 +26,6 @@ Do not redefine ticket, branch, or commit grammar here. Those remain in
 docs/platforms/
   index.md                 # this catalog
   github/                  # GitHub hosting contracts
-    develop-line.md        # develop MUST accept rebase-only merges
+    rulesets/              # importable GitHub branch ruleset JSON
   gitlab/                  # reserved for GitLab contracts
 ```
