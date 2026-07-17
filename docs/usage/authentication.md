@@ -219,6 +219,25 @@ keeps both values in process memory only. The broker must authenticate the
 workload, enforce repository policy, and mint a short-lived App installation
 token for exactly the requested repository.
 
+### Release lifecycle automation
+
+Pull-request publication and protected release lifecycle operations have
+different privilege boundaries. The local Device Flow App remains limited to
+pull-request access. A separate, broker-backed release-automation identity is
+required for:
+
+- dispatching the protected release or support-line workflow;
+- inspecting the promotion merge, immutable tag, GitHub Release, and
+  release-to-develop comparison;
+- creating a required backmerge pull request; and
+- controlled release-line cleanup after its lifecycle is complete.
+
+Install that identity only for the approved repository and grant the minimum
+GitHub permissions required by those exact API calls, including Actions
+workflow dispatch and read access plus the limited Contents/Pull requests
+access required by the controlled workflow. Do not grant ordinary developer
+sessions a Ruleset bypass or reuse a broad administrator credential.
+
 When broker configuration is present, it is used for non-interactive
 publication. The publisher derives `https://<host>/api/v3` for a GitHub
 Enterprise remote; no legacy API-base environment variable is accepted.

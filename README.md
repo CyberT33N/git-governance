@@ -35,6 +35,13 @@ value as a flag, and add `--yes` for mutations. GitHub pull-request creation is
 an explicit opt-in through `--pull-request-provider github` and
 `--create-pull-request`.
 
+For protected release or support lines, add `--dispatch` to the corresponding
+release workflow. The GitHub lifecycle adapter waits for the authorized
+workflow and verifies the resulting remote line. A release backmerge is
+delivery-gated and creates a `develop` pull request only when an effective
+release-only delta remains; see the
+[release reconciliation guide](docs/usage/workflows/release-reconciliation.md).
+
 GitHub API access uses an explicit GitHub App login or a managed credential
 broker; it never accepts a GitHub token as a CLI flag or stores one in user
 preferences. Read the [GitHub App authentication guide](docs/usage/authentication.md)

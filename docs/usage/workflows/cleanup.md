@@ -10,8 +10,10 @@ git governance --yes workflow cleanup `
 The CLI never deletes a remote branch or an official working branch. GitHub or
 GitLab deletes merged ticket- and hotfix-branch remotes through its configured
 merge-request policy. CI or hosting automation retains and later deletes a
-release branch only after both promotion to `main` and the backmerge to
-`develop` are complete.
+release branch only after promotion to `main`, confirmed release delivery, and
+completed reconciliation with `develop`. A `not-required` result is valid only
+when the lifecycle provider recorded the required delivery and comparison
+evidence.
 
 `workflow cleanup` is intentionally limited to local `scratch/*` branches.
 The CLI does not claim to prove merge, propagation, or hosting lifecycle

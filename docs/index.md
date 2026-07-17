@@ -4,6 +4,7 @@
 - [Getting started](getting-started.md)
 - [CLI usage guide](usage/index.md)
 - [GitHub App authentication](usage/authentication.md)
+- [Release reconciliation](usage/workflows/release-reconciliation.md)
 - [Hosting platforms](hosting-platforms/index.md)
 - [GitHub importable rulesets](hosting-platforms/github/rulesets/README.md)
 - [Development verification](development/verification.md)

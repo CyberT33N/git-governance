@@ -258,24 +258,29 @@ bestehenden SemVer-Tag gebaut.
 Der normale automatisierte Pfad lautet:
 
 ```text
-git-governance workflow release cut
+git-governance --pull-request-provider github workflow release cut --dispatch
 -> maschinenlesbarer Intent für create-protected-line.yml
 -> autorisierter CI-Workflow erzeugt release/<semver> aus origin/develop
+-> CLI wartet auf den korrelierten Workflow und verifiziert origin/release/<semver>
 -> kontrollierte Stabilisierung und PR nach main
 release/<semver> -> geschützter Merge nach main
 -> CI prüft den Merge-Commit
 -> CI erstellt den annotierten Tag v<semver> genau auf diesem Commit
 -> CI startet den Artefaktworkflow für diesen Tag
 -> GoReleaser baut, signiert, attestiert und veröffentlicht
+-> Lifecycle-Adapter prüft Promotion, Tag, veröffentlichte Delivery und Delta
+-> bei Delta: reviewbarer Backmerge-PR nach develop
+-> ohne Delta: auditierbares not-required, kein leerer PR
 ```
 
-`create-protected-line.yml` ist ausschließlich manuell über GitHub Actions
-oder über eine später explizit konfigurierte, privilegierte Dispatch-Integration
-auszuführen. Es prüft Version, Quelllinie, Release-Tag bei Support-Linien und
-die Nichtexistenz der Zielbranche. Eine GitHub-Ruleset- oder
-Branch-Protection-Regel muss den Workflow als erlaubten Erzeuger von
-`release/*` und `support/*` festlegen; die lokale CLI erhält dafür keine
-Push-Berechtigung.
+`create-protected-line.yml` wird für vollständige nicht-interaktive Abläufe
+über den GitHub-Lifecycle-Adapter dispatcht. Der Adapter benötigt eine
+least-privileged Release-Automation-Identität, wartet auf den korrelierten
+Workflow und verifiziert die erzeugte Remote-Linie. Es prüft Version,
+Quelllinie, Release-Tag bei Support-Linien und die Nichtexistenz der
+Zielbranche. Eine GitHub-Ruleset- oder Branch-Protection-Regel muss den
+Workflow als erlaubten Erzeuger von `release/*` und `support/*` festlegen; die
+lokale CLI erhält dafür keine Push-Berechtigung.
 
 Ein mit `GITHUB_TOKEN` erzeugter Tag löst keinen weiteren Push-Workflow aus.
 Der Tag-Workflow startet deshalb den vorhandenen `workflow_dispatch`-Pfad des
