@@ -9,8 +9,8 @@ Start with the [documentation index](docs/index.md), then use the
 non-interactive command contracts.
 
 Hosting-platform contracts and their importable GitHub rulesets live under
-[docs/platforms](docs/platforms/index.md). Do not redefine those rules outside
-that tree.
+[docs/hosting-platforms](docs/hosting-platforms/index.md). Do not redefine
+those rules outside that tree.
 
 ## Command catalog
 
