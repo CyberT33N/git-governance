@@ -141,6 +141,12 @@ func TestLinuxSecretServiceStoreWhiteboxErrorPaths(t *testing.T) {
 
 	t.Run("classifies both save calls and both delete calls", func(t *testing.T) {
 		store, runner := newFakeLinuxStore()
+		runner.err = errSessionStoreUnavailable
+		if err := store.DeleteActive(context.Background(), session.Host); !errors.Is(err, errSessionStoreUnavailable) {
+			t.Fatalf("DeleteActive unavailable secret store error = %v", err)
+		}
+
+		store, runner = newFakeLinuxStore()
 		runner.fail = func(command, _, _ string, call int) error {
 			if command == "store" && call == 1 {
 				return errors.New("first store failed")
