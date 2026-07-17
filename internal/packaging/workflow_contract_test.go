@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestTagApprovalCreatesExactlyOneReleaseTrigger(t *testing.T) {
+func TestTagApprovalExplicitlyDispatchesReleaseArtifacts(t *testing.T) {
 	t.Parallel()
 
 	tagWorkflow := readWorkflow(t, "tag-approved-release.yml")
@@ -19,18 +19,19 @@ func TestTagApprovalCreatesExactlyOneReleaseTrigger(t *testing.T) {
 		"- closed",
 		"startsWith(github.event.pull_request.head.ref, 'release/')",
 		`git push origin "refs/tags/${TAG}"`,
+		"actions: write",
+		"actions/workflows/release.yml/dispatches",
+		`\"inputs\":{\"tag\":\"${TAG}\"}`,
 	} {
 		if !strings.Contains(tagWorkflow, expected) {
 			t.Fatalf("tag workflow does not contain %q", expected)
 		}
 	}
 	for _, forbidden := range []string{
-		"Dispatch the artifact workflow",
-		"actions: write",
-		"actions/workflows/release.yml/dispatches",
+		"repository_dispatch",
 	} {
 		if strings.Contains(tagWorkflow, forbidden) {
-			t.Fatalf("tag workflow must not contain %q; the tag push is the single release trigger", forbidden)
+			t.Fatalf("tag workflow must not contain %q", forbidden)
 		}
 	}
 
@@ -54,6 +55,8 @@ func TestProtectedLineWorkflowKeepsSharedLineMutationInCI(t *testing.T) {
 	workflow := readWorkflow(t, "create-protected-line.yml")
 	for _, expected := range []string{
 		"workflow_dispatch:",
+		"run-name: Create ${{ inputs.kind }} line ${{ inputs.version }} (${{ inputs.request_id || 'manual' }})",
+		"request_id:",
 		"environment: release",
 		"source=\"origin/develop\"",
 		"source=\"origin/main\"",

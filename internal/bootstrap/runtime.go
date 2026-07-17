@@ -71,6 +71,7 @@ type services struct {
 	commits     *commitapp.Service
 	tickets     *workflow.TicketService
 	releases    *workflow.ReleaseService
+	lifecycle   port.ReleaseLifecycleProvider
 	preferences *policy.PreferencesService
 	doctor      *policy.DoctorService
 	githubAuth  github.AuthProvider
@@ -187,7 +188,10 @@ func (application *application) services() services {
 	commits := commitapp.NewService(git, application.runtime.KeyPolicy, sync)
 	tickets := workflow.NewTicketService(branches, sync, git, qualityRunner, publisher).
 		WithScratchMerger(scratch)
-	releases := workflow.NewReleaseService(branches, git, publisher).WithTicketService(tickets)
+	lifecycle, _ := publisher.(port.ReleaseLifecycleProvider)
+	releases := workflow.NewReleaseService(branches, git, publisher).
+		WithTicketService(tickets).
+		WithReleaseLifecycleProvider(lifecycle)
 	policyInspector, _ := application.runtime.KeyPolicy.(port.PolicyInspector)
 	return services{
 		git:         git,
@@ -197,6 +201,7 @@ func (application *application) services() services {
 		commits:     commits,
 		tickets:     tickets,
 		releases:    releases,
+		lifecycle:   lifecycle,
 		preferences: policy.NewPreferencesService(store),
 		doctor:      policy.NewDoctorServiceWithDependencies(git, store, policyInspector, application.runtime.Tools),
 		githubAuth:  githubAuth,
