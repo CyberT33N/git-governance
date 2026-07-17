@@ -4,6 +4,8 @@
 - [Getting started](getting-started.md)
 - [CLI usage guide](usage/index.md)
 - [GitHub App authentication](usage/authentication.md)
+- [Hosting platforms](platforms/index.md)
+- [GitHub `develop` line (rebase-only)](platforms/github/develop-line.md)
 - [Development verification](development/verification.md)
 - [Architecture decision record](architecture/ADR-0001-GO-CLI-ZIELARCHITEKTUR.md)
 - [CLI contract](specification/CLI-VERTRAG.md)
