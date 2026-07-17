@@ -80,6 +80,61 @@ fed from release-candidate artifacts built from `release/*`. Treating it as a
 permanent branch would introduce an unsupported branch-per-environment flow
 and obscure the release artifact that was actually deployed.
 
+## Supply-chain fortress gates
+
+The shared-line Rulesets `02-develop.json`, `03-main.json`,
+`04-release.json`, and `05-support.json` require the following gates:
+
+| Gate | Configured threshold | Why it applies |
+|---|---|---|
+| CodeQL code scanning | `alerts_threshold: all`; `security_alerts_threshold: all` | Every unresolved CodeQL alert, including the lowest reported severity, blocks a pull request. |
+| GitHub Code Quality | `severity: all` | Every unresolved Code Quality result blocks a pull request. |
+| Project statement coverage | exactly `100.0%` | The existing repository quality gate rejects executable Go packages below complete statement coverage. |
+
+These gates intentionally target **shared PR destination lines only**:
+`develop`, `main`, `release/*`, and `support/*`. They do not target
+`feature/*`, other regular ticket branches, or `hotfix/*` directly. Those
+branches are PR sources; their changes are analyzed as part of the pull
+request to the protected destination line. Applying these gates to source
+branches would block normal direct development pushes without increasing the
+merge-time protection.
+
+### Required CodeQL and Code Quality prerequisites
+
+Before importing these Rulesets with active enforcement, the repository
+**MUST** have:
+
+1. a successful CodeQL workflow that reports results for pull requests to each
+   shared destination line;
+2. GitHub Code Quality enabled for the repository and a successful
+   `CodeQL - Code Quality` result on a pull request;
+3. an authorized plan for GitHub Code Quality. This GitHub feature is currently
+   a preview capability and requires GitHub Team or Enterprise Cloud;
+4. a controlled exception path for a proven emergency, with audited,
+   least-privileged bypass access rather than a broad administrator bypass.
+
+Without the first two prerequisites, GitHub will block every pull request
+because the Rulesets require results that do not exist yet.
+
+### Required GitHub Code Quality coverage configuration
+
+GitHub's **Restrict code coverage** rule is a public-preview UI feature whose
+stable import/REST JSON representation is not currently documented. Configure
+it in GitHub after importing the Rulesets:
+
+```text
+Minimum coverage percentage: 100
+Maximum coverage drop:       0 percentage points
+```
+
+`Maximum coverage drop` is not a maximum coverage value. Setting it to `100`
+would permit a decline of up to 100 percentage points and is therefore the
+least strict meaningful setting. A value of `0` rejects every coverage
+decrease. Before activating this UI rule, the repository **MUST** upload a
+Cobertura XML report for pull requests and the default branch with
+`code-quality: write` permission. The existing project coverage gate remains
+the authoritative immediate 100% enforcement until that upload path is live.
+
 ## Enforcement boundary
 
 Rulesets are the final remote enforcement layer, not a replacement for the
