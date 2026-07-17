@@ -141,6 +141,12 @@ func TestMacOSKeychainStoreWhiteboxErrorPaths(t *testing.T) {
 
 	t.Run("classifies both save calls and both delete calls", func(t *testing.T) {
 		store, runner := newFakeMacOSStore()
+		runner.err = errSessionStoreUnavailable
+		if err := store.DeleteActive(context.Background(), session.Host); !errors.Is(err, errSessionStoreUnavailable) {
+			t.Fatalf("DeleteActive unavailable keychain error = %v", err)
+		}
+
+		store, runner = newFakeMacOSStore()
 		runner.fail = func(command, _, _ string, call int) error {
 			if command == "add-generic-password" && call == 1 {
 				return errors.New("first store failed")
