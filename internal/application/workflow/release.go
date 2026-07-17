@@ -18,6 +18,7 @@ type ReleaseService struct {
 	branches  *branchapp.Service
 	git       port.GitRepository
 	publisher port.PullRequestPublisher
+	lifecycle port.ReleaseLifecycleProvider
 	tickets   *TicketService
 }
 
@@ -54,6 +55,13 @@ func NewReleaseService(branches *branchapp.Service, git port.GitRepository, publ
 // making the release service depend on the CLI delivery layer.
 func (service *ReleaseService) WithTicketService(tickets *TicketService) *ReleaseService {
 	service.tickets = tickets
+	return service
+}
+
+// WithReleaseLifecycleProvider wires provider-owned protected-line dispatch
+// and release-delivery verification into release workflows.
+func (service *ReleaseService) WithReleaseLifecycleProvider(provider port.ReleaseLifecycleProvider) *ReleaseService {
+	service.lifecycle = provider
 	return service
 }
 
@@ -161,6 +169,74 @@ func (service *ReleaseService) CutRelease(ctx context.Context, request CutReleas
 		request.Version.String(),
 		request.DryRun,
 	)
+}
+
+// DispatchSharedLine delegates protected-line creation to the configured
+// hosting provider, then verifies that the provider-created remote line is
+// available as a fetched remote-tracking reference.
+func (service *ReleaseService) DispatchSharedLine(
+	ctx context.Context,
+	repository port.RepositoryIdentity,
+	intent SharedLineIntent,
+) (port.SharedLineDispatchResult, error) {
+	if service.git == nil {
+		return port.SharedLineDispatchResult{}, internalDependencyError("Git repository")
+	}
+	if service.lifecycle == nil {
+		return port.SharedLineDispatchResult{}, internalDependencyError("release lifecycle provider")
+	}
+	if intent.Branch.IsZero() || strings.TrimSpace(intent.Workflow) == "" || strings.TrimSpace(intent.Kind) == "" {
+		return port.SharedLineDispatchResult{}, invalidWorkflowInput(
+			"a complete protected shared-line intent is required",
+			"prepare the release or support intent before requesting provider dispatch",
+		)
+	}
+	normalized, err := normalizeWorkflowRepository(repository)
+	if err != nil {
+		return port.SharedLineDispatchResult{}, err
+	}
+	remoteURL, err := service.git.RemoteURL(ctx, normalized)
+	if err != nil {
+		return port.SharedLineDispatchResult{}, err
+	}
+	result, err := service.lifecycle.DispatchSharedLine(ctx, port.SharedLineDispatchRequest{
+		Repository: normalized,
+		RemoteURL:  remoteURL,
+		Workflow:   intent.Workflow,
+		Ref:        mustMain().String(),
+		Inputs:     intent.Inputs,
+		Branch:     intent.Branch,
+	})
+	if err != nil {
+		return port.SharedLineDispatchResult{}, err
+	}
+	if result.Branch.IsZero() {
+		result.Branch = intent.Branch
+	}
+	if result.Branch.String() != intent.Branch.String() {
+		return port.SharedLineDispatchResult{}, invalidWorkflowInput(
+			"the provider-created line must equal the requested protected line",
+			"retry the dispatch with the exact release or support branch from the prepared intent",
+		)
+	}
+	if err := service.git.Fetch(ctx, normalized); err != nil {
+		return port.SharedLineDispatchResult{}, err
+	}
+	base, err := branch.NewTargetBase(normalized.Remote, intent.Branch)
+	if err != nil {
+		return port.SharedLineDispatchResult{}, err
+	}
+	exists, err := service.git.TargetBaseExists(ctx, normalized, base)
+	if err != nil {
+		return port.SharedLineDispatchResult{}, err
+	}
+	if !exists {
+		return port.SharedLineDispatchResult{}, invalidWorkflowInput(
+			"the provider workflow must create the requested protected remote line",
+			"inspect the provider workflow result and verify the release or support branch exists on the selected remote",
+		)
+	}
+	return result, nil
 }
 
 // PrepareSupportRequest describes a support-line creation from a released
@@ -363,6 +439,34 @@ type PrepareReleaseBackmergeResult struct {
 	DryRun       bool
 }
 
+// ReleaseBackmergeStatus distinguishes a dry-run plan, an actionable
+// backmerge, and an audited no-op result.
+type ReleaseBackmergeStatus string
+
+const (
+	ReleaseBackmergePlanned     ReleaseBackmergeStatus = "planned"
+	ReleaseBackmergeRequired    ReleaseBackmergeStatus = "required"
+	ReleaseBackmergeNotRequired ReleaseBackmergeStatus = "not-required"
+)
+
+// AssessReleaseBackmergeRequest describes the delivery-gated reconciliation
+// decision for a completed release line.
+type AssessReleaseBackmergeRequest struct {
+	Repository port.RepositoryIdentity
+	Release    branch.BranchName
+	Draft      bool
+	DryRun     bool
+}
+
+// AssessReleaseBackmergeResult captures the provider-verified delivery
+// evidence and, only when needed, the pull-request intent.
+type AssessReleaseBackmergeResult struct {
+	Status      ReleaseBackmergeStatus
+	Evidence    port.ReleaseReconciliationEvidence
+	PullRequest *port.PullRequest
+	DryRun      bool
+}
+
 // PrepareReleaseBackmerge prepares release/<semver> -> develop.
 func (service *ReleaseService) PrepareReleaseBackmerge(ctx context.Context, request PrepareReleaseBackmergeRequest) (PrepareReleaseBackmergeResult, error) {
 	if request.Release.Family() != branch.FamilyRelease {
@@ -375,13 +479,7 @@ func (service *ReleaseService) PrepareReleaseBackmerge(ctx context.Context, requ
 	if err != nil {
 		return PrepareReleaseBackmergeResult{}, err
 	}
-	releaseVersion, _ := request.Release.ReleaseVersion()
-	pullRequest := port.PullRequest{
-		Source: request.Release,
-		Target: mustDevelop(),
-		Title:  "Backmerge release " + releaseVersion.String() + " into develop",
-		Draft:  request.Draft,
-	}
+	pullRequest := releaseBackmergePullRequest(request.Release, request.Draft)
 	result := PrepareReleaseBackmergeResult{
 		PullRequest: pullRequest,
 		DryRun:      request.DryRun,
@@ -395,6 +493,82 @@ func (service *ReleaseService) PrepareReleaseBackmerge(ctx context.Context, requ
 	}
 	result.PublishedURL = publishedURL
 	return result, nil
+}
+
+// AssessReleaseBackmerge verifies the causal release-delivery gate, then
+// creates a backmerge intent only when the hosting provider reports an
+// effective release-only delta for develop.
+func (service *ReleaseService) AssessReleaseBackmerge(
+	ctx context.Context,
+	request AssessReleaseBackmergeRequest,
+) (AssessReleaseBackmergeResult, error) {
+	if request.Release.Family() != branch.FamilyRelease {
+		return AssessReleaseBackmergeResult{}, invalidWorkflowInput(
+			"release backmerge requires a release/<semver> branch",
+			"select the completed release branch to reconcile with develop",
+		)
+	}
+	repository, err := normalizeWorkflowRepository(request.Repository)
+	if err != nil {
+		return AssessReleaseBackmergeResult{}, err
+	}
+	prepared := PrepareReleaseBackmergeResult{
+		PullRequest: releaseBackmergePullRequest(request.Release, request.Draft),
+		DryRun:      request.DryRun,
+	}
+	if request.DryRun {
+		return AssessReleaseBackmergeResult{
+			Status:      ReleaseBackmergePlanned,
+			PullRequest: &prepared.PullRequest,
+			DryRun:      true,
+		}, nil
+	}
+	if service.git == nil {
+		return AssessReleaseBackmergeResult{}, internalDependencyError("Git repository")
+	}
+	if service.lifecycle == nil {
+		return AssessReleaseBackmergeResult{}, internalDependencyError("release lifecycle provider")
+	}
+	remoteURL, err := service.git.RemoteURL(ctx, repository)
+	if err != nil {
+		return AssessReleaseBackmergeResult{}, err
+	}
+	evidence, err := service.lifecycle.VerifyReleaseReconciliation(ctx, port.ReleaseReconciliationRequest{
+		Repository: repository,
+		RemoteURL:  remoteURL,
+		Release:    request.Release,
+	})
+	if err != nil {
+		return AssessReleaseBackmergeResult{}, err
+	}
+	version, _ := request.Release.ReleaseVersion()
+	if evidence.PromotionMergeCommit == "" || evidence.Tag != "v"+version.String() || evidence.ReleaseURL == "" {
+		return AssessReleaseBackmergeResult{}, invalidWorkflowInput(
+			"the release-to-main merge, exact immutable tag, and published release evidence are required before reconciliation",
+			"complete release delivery and retry the release backmerge assessment",
+		)
+	}
+	if !evidence.EffectiveDelta {
+		return AssessReleaseBackmergeResult{
+			Status:   ReleaseBackmergeNotRequired,
+			Evidence: evidence,
+		}, nil
+	}
+	return AssessReleaseBackmergeResult{
+		Status:      ReleaseBackmergeRequired,
+		Evidence:    evidence,
+		PullRequest: &prepared.PullRequest,
+	}, nil
+}
+
+func releaseBackmergePullRequest(release branch.BranchName, draft bool) port.PullRequest {
+	releaseVersion, _ := release.ReleaseVersion()
+	return port.PullRequest{
+		Source: release,
+		Target: mustDevelop(),
+		Title:  "Backmerge release " + releaseVersion.String() + " into develop",
+		Draft:  draft,
+	}
 }
 
 // PropagateHotfixRequest describes an explicit forward-port or backport of one

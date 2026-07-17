@@ -584,6 +584,136 @@ func TestWorkflowCommandsCoverSilentContinuationFailurePaths(t *testing.T) {
 	})
 }
 
+func TestReleaseCommandsDispatchProtectedLinesAndSkipNoopBackmerges(t *testing.T) {
+	t.Run("dispatches a protected release line through the configured lifecycle provider", func(t *testing.T) {
+		git := newCommandGit(t, "feature/ABC-123-add-export", nil)
+		runtime := commandRuntime(git)
+		publisher := &workflowRecordingPublisher{}
+		runtime.Publisher = publisher
+		command := NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+
+		output, err := executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never", "--output", "json", "--yes",
+			"--pull-request-provider", "github",
+			"workflow", "release", "cut",
+			"--version", "2.8.0", "--dispatch",
+		)
+		if err != nil || publisher.dispatchCalls != 1 ||
+			publisher.dispatchRequest.Workflow != "create-protected-line.yml" ||
+			!strings.Contains(output, `"dispatchRequested":"true"`) ||
+			!strings.Contains(output, "protected-line") {
+			t.Fatalf("release dispatch = (%q, %v), publisher=%#v", output, err, publisher)
+		}
+	})
+
+	t.Run("records a no-op release reconciliation without creating a pull request", func(t *testing.T) {
+		git := newCommandGit(t, "release/2.8.0", nil)
+		runtime := commandRuntime(git)
+		publisher := &workflowRecordingPublisher{
+			lifecycleSet: true,
+			lifecycleResult: port.ReleaseReconciliationEvidence{
+				PromotionPullRequestURL: "https://example.invalid/pr/8",
+				PromotionMergeCommit:    strings.Repeat("a", 40),
+				Tag:                     "v2.8.0",
+				ReleaseURL:              "https://example.invalid/releases/v2.8.0",
+				EffectiveDelta:          false,
+			},
+		}
+		runtime.Publisher = publisher
+		command := NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+
+		output, err := executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never", "--output", "json", "--yes",
+			"--pull-request-provider", "github",
+			"workflow", "release", "backmerge",
+			"--release", "release/2.8.0", "--create-pull-request",
+		)
+		if err != nil || publisher.lifecycleCalls != 1 || publisher.calls != 0 ||
+			!strings.Contains(output, `"status":"not-required"`) {
+			t.Fatalf("no-op reconciliation = (%q, %v), publisher=%#v", output, err, publisher)
+		}
+	})
+
+	t.Run("dispatches support and rejects dispatch without a lifecycle adapter", func(t *testing.T) {
+		git := newCommandGit(t, "feature/ABC-123-add-export", nil)
+		runtime := commandRuntime(git)
+		publisher := &workflowRecordingPublisher{}
+		runtime.Publisher = publisher
+		command := NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+		output, err := executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never", "--output", "json", "--yes",
+			"--pull-request-provider", "github",
+			"workflow", "release", "support",
+			"--version", "2.8", "--dispatch",
+		)
+		if err != nil || publisher.dispatchCalls != 1 || !strings.Contains(output, `"dispatchRequested":"true"`) {
+			t.Fatalf("support dispatch = (%q, %v), publisher=%#v", output, err, publisher)
+		}
+
+		runtime = commandRuntime(newCommandGit(t, "feature/ABC-123-add-export", nil))
+		runtime.Publisher = plainWorkflowPublisher{}
+		command = NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+		_, err = executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never", "--output", "json", "--yes",
+			"--pull-request-provider", "github",
+			"workflow", "release", "cut",
+			"--version", "2.8.0", "--dispatch",
+		)
+		assertProblemCode(t, err, problem.CodeExternalCommandFailed)
+
+		runtime = commandRuntime(newCommandGit(t, "feature/ABC-123-add-export", nil))
+		runtime.Publisher = &workflowRecordingPublisher{dispatchErr: errors.New("dispatch unavailable")}
+		command = NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+		_, err = executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never", "--output", "json", "--yes",
+			"--pull-request-provider", "github",
+			"workflow", "release", "cut",
+			"--version", "2.8.0", "--dispatch",
+		)
+		if !errors.Is(err, runtime.Publisher.(*workflowRecordingPublisher).dispatchErr) {
+			t.Fatalf("cut dispatch error = %v", err)
+		}
+
+		runtime = commandRuntime(newCommandGit(t, "feature/ABC-123-add-export", nil))
+		runtime.Publisher = &workflowRecordingPublisher{dispatchErr: errors.New("support dispatch unavailable")}
+		command = NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+		_, err = executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never", "--output", "json", "--yes",
+			"--pull-request-provider", "github",
+			"workflow", "release", "support",
+			"--version", "2.8", "--dispatch",
+		)
+		if !errors.Is(err, runtime.Publisher.(*workflowRecordingPublisher).dispatchErr) {
+			t.Fatalf("support dispatch error = %v", err)
+		}
+
+		runtime = commandRuntime(newCommandGit(t, "feature/ABC-123-add-export", nil))
+		runtime.Publisher = plainWorkflowPublisher{}
+		command = NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+		_, err = executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never", "--output", "json", "--yes",
+			"--pull-request-provider", "github",
+			"workflow", "release", "support",
+			"--version", "2.8", "--dispatch",
+		)
+		assertProblemCode(t, err, problem.CodeExternalCommandFailed)
+	})
+}
+
 func TestInteractiveTicketStartReportsRemoteRefresh(t *testing.T) {
 	git := newBranchCommandGit(t, "feature/ABC-123-add-export")
 	application := newBranchCommandApplication(git, nil, &commandHelperPrompt{}, "human")
@@ -1022,10 +1152,25 @@ func TestTicketPublishScratchInputContracts(t *testing.T) {
 }
 
 type workflowRecordingPublisher struct {
-	calls   int
-	request port.PullRequest
-	result  port.PublishedPullRequest
-	err     error
+	calls            int
+	request          port.PullRequest
+	result           port.PublishedPullRequest
+	err              error
+	lifecycleCalls   int
+	lifecycleRequest port.ReleaseReconciliationRequest
+	lifecycleResult  port.ReleaseReconciliationEvidence
+	lifecycleSet     bool
+	lifecycleErr     error
+	dispatchCalls    int
+	dispatchRequest  port.SharedLineDispatchRequest
+	dispatchResult   port.SharedLineDispatchResult
+	dispatchErr      error
+}
+
+type plainWorkflowPublisher struct{}
+
+func (plainWorkflowPublisher) Publish(context.Context, port.PullRequestPublication) (port.PublishedPullRequest, error) {
+	return port.PublishedPullRequest{}, nil
 }
 
 func (publisher *workflowRecordingPublisher) Publish(
@@ -1037,4 +1182,50 @@ func (publisher *workflowRecordingPublisher) Publish(
 	return publisher.result, publisher.err
 }
 
+func (publisher *workflowRecordingPublisher) DispatchSharedLine(
+	_ context.Context,
+	request port.SharedLineDispatchRequest,
+) (port.SharedLineDispatchResult, error) {
+	publisher.dispatchCalls++
+	publisher.dispatchRequest = request
+	if publisher.dispatchErr != nil {
+		return port.SharedLineDispatchResult{}, publisher.dispatchErr
+	}
+	result := publisher.dispatchResult
+	if result.Branch.IsZero() {
+		result.Branch = request.Branch
+	}
+	if result.WorkflowRunURL == "" {
+		result.WorkflowRunURL = "https://example.invalid/actions/protected-line"
+	}
+	return result, nil
+}
+
+func (publisher *workflowRecordingPublisher) VerifyReleaseReconciliation(
+	_ context.Context,
+	request port.ReleaseReconciliationRequest,
+) (port.ReleaseReconciliationEvidence, error) {
+	publisher.lifecycleCalls++
+	publisher.lifecycleRequest = request
+	if publisher.lifecycleErr != nil {
+		return port.ReleaseReconciliationEvidence{}, publisher.lifecycleErr
+	}
+	result := publisher.lifecycleResult
+	version, _ := request.Release.ReleaseVersion()
+	if result.PromotionMergeCommit == "" {
+		result.PromotionMergeCommit = "0123456789abcdef0123456789abcdef01234567"
+	}
+	if result.Tag == "" {
+		result.Tag = "v" + version.String()
+	}
+	if result.ReleaseURL == "" {
+		result.ReleaseURL = "https://example.invalid/releases/" + result.Tag
+	}
+	if !publisher.lifecycleSet {
+		result.EffectiveDelta = true
+	}
+	return result, nil
+}
+
 var _ port.PullRequestPublisher = (*workflowRecordingPublisher)(nil)
+var _ port.ReleaseLifecycleProvider = (*workflowRecordingPublisher)(nil)
