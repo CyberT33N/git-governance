@@ -88,11 +88,12 @@ A Git-Governance **actual runtime invocation** is an invocation using `CLI`, `AU
 - For a named invocation, remove the `AUTO`/`MUT`/`DRY`/`GH` prefix and all runtime flags and values, retain the command path, then use `CLI <command-path> --help`.
 - Examples: `AUTO branch validate` requires `CLI branch validate --help`; `GH workflow ticket publish ...` requires `CLI workflow ticket publish --help`; `MUT workflow release cut ...` requires `CLI workflow release cut --help`.
 
-Immediately before **each individual** help reanchor and actual runtime invocation, emit this public COT-style status log with concrete values:
+Immediately before **each individual** help reanchor and actual runtime invocation, emit this public COT log:
 ```text
-🧭 Runtime COT | id=<monotonic-id> | what=<current workflow step> | action=<single specific action> | why=<command-specific purpose> | command=<exact non-secret command> | status=about-to-run
+🧭
+<One single sentence explaining what happens now and why it is necessary.>
 ```
-The log is a developer-experience audit record, not private chain-of-thought. `what`, `action`, and `why` must explain one command only; a generic “running command” message, a grouped explanation, or one log covering multiple commands is invalid. Do not include credentials, private keys, refresh values, access tokens, or other secrets in `command`.
+`🧭` is the sole UTF-8 marker reserved for COT logs and must stand alone on its own line. The following one-line sentence is the complete COT log: it describes only what is happening and why. Do not display an ID, a heading, field labels, a command, a status, credentials, private keys, refresh values, access tokens, or other private reasoning. A generic “running command” message, a grouped explanation, or one log covering multiple commands is invalid.
 
 For every actual runtime invocation, execute this strict sequence:
 1. Emit a runtime COT log for its command-specific help reanchor.
@@ -101,23 +102,24 @@ For every actual runtime invocation, execute this strict sequence:
 4. Emit a new runtime COT log for the actual invocation.
 5. Execute exactly that one already-defined actual command immediately after the log, without changing its arguments or interleaving text, another command, or a user prompt; wait for and record its real result.
 
-The help reanchor itself requires its own runtime COT log but does not recursively require another `--help` call. Never batch, parallelize, or reuse reanchors, help results, runtime COT logs, or actual invocations. A fresh help reanchor is required for every individual actual invocation, even when the same command path was checked earlier in the task. All literal actual command examples below are expanded by this sequence; their command text and arguments remain unchanged. Set `help_reanchoring_passed=true` and `runtime_command_observability_passed=true` only after every actual runtime invocation performed in the task has a valid preceding help result, COT logs, and recorded result.
-`<id>` always means the next global monotonic runtime-command identifier; it does not reset per section or code block.
+The help reanchor itself requires its own COT log but does not recursively require another `--help` call. Never batch, parallelize, or reuse reanchors, help results, COT logs, or actual invocations. A fresh help reanchor is required for every individual actual invocation, even when the same command path was checked earlier in the task. All literal actual command examples below are expanded by this sequence; their command text and arguments remain unchanged. Set `help_reanchoring_passed=true` and `runtime_command_observability_passed=true` only after every actual runtime invocation performed in the task has a valid preceding help result, COT logs, and recorded result.
 
 Before editing, execute in order:
 1. **Current-branch checkpoint — first workflow action.** Run the read-only command `git branch --show-current`; record the current branch, or `detached` when it returns no branch, and set `branch_context_checked=true`. Do not invoke another workflow command, edit, branch, commit, or publish before this check.
 2. Validate the current branch through this required help-reanchor and runtime-invocation sequence:
    ```text
-   🧭 Runtime COT | id=<id> | what=current-branch checkpoint | action=read branch-validation help | why=confirm the current source-CLI contract before validation | command=CLI branch validate --help | status=about-to-run
+   🧭
+   Read branch-validation help because the current CLI contract must be known before validation.
    CLI branch validate --help
-   🧭 Runtime COT | id=<id+1> | what=current-branch checkpoint | action=validate the checked-out branch | why=obtain authoritative grammar, local-reference, and family evidence | command=AUTO branch validate | status=about-to-run
+   🧭
+   Validate the checked-out branch because its grammar, local reference, and family determine the continuation path.
    AUTO branch validate
    ```
    Its result is the authority for current-branch grammar, local-reference validity, and family. Treat a CLI-valid branch in `feature`, `fix`, `docs`, `refactor`, `chore`, `test`, `perf`, `hotfix`, `scratch`, `release`, or `support` as a **continuation candidate**. Treat `main`, `develop`, `detached`, an invalid result, and every other branch as a normal-flow context. The source CLI and its policy remain final authority when this embedded set changes.
 3. Inspect the worktree, staged state, same-ticket branches when a ticket is known or extractable, and any active merge/rebase/cherry-pick state. This is read-only evidence for the branch decision and must be rechecked after any wait.
-4. For a continuation candidate, enter `WAITING_FOR_BRANCH_DECISION` and emit the following visible COT-style **status/audit record**; it must contain no private reasoning:
+4. For a continuation candidate, enter `WAITING_FOR_BRANCH_DECISION` and emit the following visible branch-decision audit record:
    ```text
-   🧭 Branch continuation checkpoint | branch=<name> | family=<family> | ticket=<ticket|not-applicable> | localValidation=PASS | worktree=<clean|dirty> | operation=<none|merge|rebase|cherry-pick> | status=awaiting-user
+   📋 Branch continuation checkpoint | branch=<name> | family=<family> | ticket=<ticket|not-applicable> | localValidation=PASS | worktree=<clean|dirty> | operation=<none|merge|rebase|cherry-pick>
    ```
    Then ask exactly one grouped interactive question:
    ```text
@@ -130,23 +132,29 @@ Before editing, execute in order:
 8. Determine host OS and architecture from reliable runtime metadata.
 9. Execute the source-CLI version check through this required help-reanchor and runtime-invocation sequence:
    ```text
-   🧭 Runtime COT | id=<id> | what=environment preflight | action=read root CLI help | why=reanchor the available root-level flags before checking the version | command=CLI --help | status=about-to-run
+   🧭
+   Read root CLI help because available global options must be known before checking the version.
    CLI --help
-   🧭 Runtime COT | id=<id> | what=environment preflight | action=read source-CLI version | why=verify the executable source entrypoint is available | command=CLI --version | status=about-to-run
+   🧭
+   Check the source CLI version because the workflow requires proof that its entrypoint is available.
    CLI --version
    ```
 10. Execute the policy snapshot through this required help-reanchor and runtime-invocation sequence:
    ```text
-   🧭 Runtime COT | id=<id> | what=environment preflight | action=read policy-description help | why=reanchor the current policy command contract before retrieving policy | command=CLI policy describe --help | status=about-to-run
+   🧭
+   Read policy-description help because the current policy contract must be known before retrieving governance.
    CLI policy describe --help
-   🧭 Runtime COT | id=<id> | what=environment preflight | action=describe active policy | why=make current executable governance authoritative before decisions | command=AUTO policy describe | status=about-to-run
+   🧭
+   Retrieve the active policy because it is the authoritative governance input for subsequent decisions.
    AUTO policy describe
    ```
 11. Execute repository diagnostics through this required help-reanchor and runtime-invocation sequence:
    ```text
-   🧭 Runtime COT | id=<id> | what=environment preflight | action=read doctor help | why=reanchor diagnostic availability before checking repository health | command=CLI doctor --help | status=about-to-run
+   🧭
+   Read doctor help because the available diagnostics must be known before checking repository health.
    CLI doctor --help
-   🧭 Runtime COT | id=<id> | what=environment preflight | action=run repository doctor | why=detect governing-environment blockers before mutation | command=AUTO doctor | status=about-to-run
+   🧭
+   Run repository diagnostics because governing-environment blockers must be detected before mutation.
    AUTO doctor
    ```
 12. Apply Section 2.0 to every selected command before each invocation; there is no reusable batch-help stage.
@@ -156,7 +164,7 @@ There is no `--silent` mode. `--interactive never` disables prompts, `--output j
 
 Audit:
 ```text
-🧭 Preflight | os=<os/arch> | cli=source-entrypoint | version=<value>
+📋 Preflight | os=<os/arch> | cli=source-entrypoint | version=<value>
 | policySchema=<value> | doctor=PASS|FAIL | helpReanchoring=PASS|FAIL | branchContext=<continuation|normal> | state=<state>
 ```
 
@@ -238,7 +246,7 @@ Supporting tests/docs do not change a feature/fix family. Mixed independent outc
 
 If omitted, select the highest score. If top score is below 70% or tied, ask one focused question. If supplied, verify twice: (1) lexical/workflow eligibility via CLI policy; (2) semantic fit via matrix. If correct, retain it. If not, show supplied/recommended values, concise evidence, and confidence delta; ask whether to switch. If declined, retain the supplied family only when the CLI accepts it for that workflow. For a confirmed ticket-scoped continuation, the selected family must also match the current branch family; a mismatch enters `WAITING_FOR_USER_DECISION`.
 ```text
-🧭 Family verification | supplied=<value|none> | lexical=PASS|FAIL
+📋 Family verification | supplied=<value|none> | lexical=PASS|FAIL
 | semantic=PASS|FAIL | selected=<family> | override=<bool>
 ```
 
@@ -250,7 +258,7 @@ stable terminology 15% | lexical compliance 10%
 ```
 If a CLI-valid alternative scores at least 10 points higher, propose it. If declined, retain the supplied slug only when CLI-valid. Invalid input cannot be forced through. For a confirmed ticket-scoped continuation, the selected slug must match the current CLI-validated branch slug unless the user explicitly chooses a new governed workflow.
 ```text
-🧭 Slug verification | supplied=<value|none> | lexical=PASS|FAIL
+📋 Slug verification | supplied=<value|none> | lexical=PASS|FAIL
 | semanticScore=<n> | selected=<slug> | override=<bool>
 ```
 
@@ -271,23 +279,27 @@ unknown dependency/performance behavior      10%
 ```
 External/irreversible risk still needs explicit approval; Scratch does not make external side effects safe.
 ```text
-🧭 Scratch decision | timing=proactive|reactive | score=<n>
+📋 Scratch decision | timing=proactive|reactive | score=<n>
 | result=official|clarify|scratch | evidence=<concise factors>
 ```
 Proactive Scratch uses the complete workflow:
 ```text
-🧭 Runtime COT | id=<id> | what=proactive Scratch decision | action=simulate Scratch ticket start | why=verify the proposed isolated branch and workflow inputs before mutation | command=DRY workflow ticket start --family <family> --key <KEY> --ticket <NUMBER> --slug <slug> --scratch [--scratch-slug <slug>] | status=about-to-run
+🧭
+Simulate the Scratch ticket workflow because its isolated branch and inputs must be valid before mutation.
 DRY workflow ticket start --family <family> --key <KEY> --ticket <NUMBER> --slug <slug> --scratch [--scratch-slug <slug>]
-🧭 Runtime COT | id=<id+1> | what=proactive Scratch decision | action=start the approved Scratch ticket workflow | why=create the isolated governed workspace only after the dry run passes | command=MUT workflow ticket start --family <family> --key <KEY> --ticket <NUMBER> --slug <slug> --scratch [--scratch-slug <slug>] | status=about-to-run
+🧭
+Start the approved Scratch ticket workflow because the isolated workspace may be created only after its dry run passes.
 MUT workflow ticket start --family <family> --key <KEY> --ticket <NUMBER> --slug <slug> --scratch [--scratch-slug <slug>]
 ```
 Without Scratch, omit `--scratch`.
 
 Reactive Scratch has no complete create-only workflow; from a clean local official branch use:
 ```text
-🧭 Runtime COT | id=<id> | what=reactive Scratch decision | action=simulate Scratch branch creation | why=validate the isolated branch against its official base before mutation | command=DRY branch create --family scratch --key <KEY> --ticket <NUMBER> --slug <scratch-slug> --base <official-branch> | status=about-to-run
+🧭
+Simulate Scratch branch creation because the isolated branch must be valid against its official base before mutation.
 DRY branch create --family scratch --key <KEY> --ticket <NUMBER> --slug <scratch-slug> --base <official-branch>
-🧭 Runtime COT | id=<id+1> | what=reactive Scratch decision | action=create the approved Scratch branch | why=preserve the official branch while isolating speculative work | command=MUT branch create --family scratch --key <KEY> --ticket <NUMBER> --slug <scratch-slug> --base <official-branch> | status=about-to-run
+🧭
+Create the approved Scratch branch because speculative work must remain isolated from the official branch.
 MUT branch create --family scratch --key <KEY> --ticket <NUMBER> --slug <scratch-slug> --base <official-branch>
 ```
 If dirty, stop. Never create a junk checkpoint. Ask whether to finish a genuinely complete semantic unit, explicitly stash, or handle changes another safe way.
@@ -300,12 +312,14 @@ For a new regular ticket, always start with `workflow ticket start`; never manua
 
 After implementation, verification, and governed commits:
 ```text
-🧭 Runtime COT | id=<id> | what=regular ticket publication | action=publish the prepared official ticket branch and create its pull request | why=submit the verified governed commit series for review | command=GH workflow ticket publish --push --create-pull-request | status=about-to-run
+🧭
+Publish the prepared official ticket branch because the verified governed commit series is ready for review.
 GH workflow ticket publish --push --create-pull-request
 ```
 From Scratch, provide the single squash-commit input:
 ```text
-🧭 Runtime COT | id=<id> | what=Scratch transfer publication | action=publish stable Scratch work through ticket workflow | why=transfer the verified experiment as one governed commit and create review | command=GH workflow ticket publish --type <commit-family> --subject "<subject>" --push --create-pull-request | status=about-to-run
+🧭
+Publish stable Scratch work because the verified experiment must transfer as one governed commit for review.
 GH workflow ticket publish --type <commit-family> --subject "<subject>" --push --create-pull-request
 ```
 Use `--target <official>` only if the source CLI reports multiple local same-ticket candidates.
@@ -313,33 +327,43 @@ Use `--target <official>` only if the source CLI reports multiple local same-tic
 ### 6.2 Hotfix
 For a new hotfix, choose the line actually carrying the defect; never default a production/release/support defect to `develop`. For a confirmed, matching existing hotfix branch, validate its ticket and affected line and do not rerun `workflow hotfix start`.
 ```text
-🧭 Runtime COT | id=<id> | what=hotfix preparation | action=simulate hotfix workflow start | why=validate the ticket, slug, and affected production line before mutation | command=DRY workflow hotfix start --key <KEY> --ticket <NUMBER> --slug <slug> --affected-line <line> | status=about-to-run
+🧭
+Simulate the hotfix workflow because its ticket, slug, and affected production line must be valid before mutation.
 DRY workflow hotfix start --key <KEY> --ticket <NUMBER> --slug <slug> --affected-line <line>
-🧭 Runtime COT | id=<id+1> | what=hotfix preparation | action=start the approved hotfix workflow | why=create the governed hotfix branch from the line that carries the defect | command=MUT workflow hotfix start --key <KEY> --ticket <NUMBER> --slug <slug> --affected-line <line> | status=about-to-run
+🧭
+Start the approved hotfix workflow because the governed correction branch must originate from the affected line.
 MUT workflow hotfix start --key <KEY> --ticket <NUMBER> --slug <slug> --affected-line <line>
-🧭 Runtime COT | id=<id+2> | what=hotfix publication | action=publish the prepared hotfix and create its pull request | why=submit the verified correction against its affected line | command=GH workflow hotfix publish --affected-line <same-line> --push --create-pull-request | status=about-to-run
+🧭
+Publish the prepared hotfix because the verified correction must be reviewed against its affected line.
 GH workflow hotfix publish --affected-line <same-line> --push --create-pull-request
 ```
 For each additional affected line:
 ```text
-🧭 Runtime COT | id=<id> | what=hotfix propagation | action=propagate the reviewed hotfix commit to one additional affected line | why=create a separately governed branch and pull request for that target line | command=GH workflow hotfix propagate --source <hotfix> --target-line <line> --commit <sha> --push --create-pull-request | status=about-to-run
+🧭
+Propagate the reviewed hotfix because each additional affected line requires its own governed branch and review.
 GH workflow hotfix propagate --source <hotfix> --target-line <line> --commit <sha> --push --create-pull-request
 ```
 Each line gets an explicit branch and PR; never assume propagation.
 
 ### 6.3 Release and support
 ```text
-🧭 Runtime COT | id=<id> | what=release preparation | action=request a release cut | why=prepare protected CI intent for a governed release line | command=MUT workflow release cut --version <semver> | status=about-to-run
+🧭
+Request the release cut because the governed release line must be prepared through protected CI.
 MUT workflow release cut --version <semver>
-🧭 Runtime COT | id=<id+1> | what=release stabilization | action=start release stabilization | why=create the ticket-scoped stabilization work from the frozen release line | command=MUT workflow release stabilize --release release/<semver> --kind <kind> --key <KEY> --ticket <NUMBER> --slug <slug> | status=about-to-run
+🧭
+Start release stabilization because the ticket-scoped work must originate from the frozen release line.
 MUT workflow release stabilize --release release/<semver> --kind <kind> --key <KEY> --ticket <NUMBER> --slug <slug>
-🧭 Runtime COT | id=<id+2> | what=release stabilization publication | action=publish the stabilization branch and create its pull request | why=submit the verified release-only change for review | command=GH workflow release publish-stabilization --release release/<semver> --push --create-pull-request | status=about-to-run
+🧭
+Publish the stabilization branch because the verified release-only change is ready for review.
 GH workflow release publish-stabilization --release release/<semver> --push --create-pull-request
-🧭 Runtime COT | id=<id+3> | what=release promotion | action=create the release-to-main pull request | why=promote the approved release through review without directly mutating main | command=GH workflow release promote --release release/<semver> --create-pull-request | status=about-to-run
+🧭
+Create the release-to-main review because the approved release must not directly mutate main.
 GH workflow release promote --release release/<semver> --create-pull-request
-🧭 Runtime COT | id=<id+4> | what=release backmerge | action=create the release-to-develop pull request | why=return approved release changes to the integration line through review | command=GH workflow release backmerge --release release/<semver> --create-pull-request | status=about-to-run
+🧭
+Create the release-to-develop review because approved release changes must return to the integration line safely.
 GH workflow release backmerge --release release/<semver> --create-pull-request
-🧭 Runtime COT | id=<id+5> | what=support preparation | action=request a support-line workflow | why=prepare protected CI intent for explicit maintenance obligations | command=MUT workflow release support --version <major.minor> | status=about-to-run
+🧭
+Request the support-line workflow because explicit maintenance obligations require protected CI preparation.
 MUT workflow release support --version <major.minor>
 ```
 `cut`/`support` produce protected-CI intents, not local remote-line creation. `promote`/`backmerge` create PRs but never tag or directly mutate shared lines. Do not report external transitions complete without authoritative evidence.
@@ -385,9 +409,11 @@ Target 1..3 clean commits. A fourth needs an independent implementation/test/doc
 
 Create each commit explicitly without immediate push:
 ```text
-🧭 Runtime COT | id=<id> | what=semantic commit planning | action=simulate governed commit creation | why=validate the ticket, message, and explicit staged paths before mutation | command=DRY commit create --type <type> --subject "<subject>" --stage <path> [--stage <path>...] | status=about-to-run
+🧭
+Simulate governed commit creation because its ticket, message, and explicit staged paths must be valid before mutation.
 DRY commit create --type <type> --subject "<subject>" --stage <path> [--stage <path>...]
-🧭 Runtime COT | id=<id+1> | what=semantic commit creation | action=create the validated governed commit | why=record one independently reviewable unit without implicit staging or push | command=MUT commit create --type <type> --subject "<subject>" --stage <path> [--stage <path>...] | status=about-to-run
+🧭
+Create the validated governed commit because one independently reviewable unit must be recorded without implicit staging or push.
 MUT commit create --type <type> --subject "<subject>" --stage <path> [--stage <path>...]
 ```
 Use body/footer/breaking inputs only when semantically true. Never mark internal refactors breaking. If one file contains inseparable proposed groups, keep one coherent commit or sequence complete units; never manufacture partial history.
@@ -423,7 +449,8 @@ Actual GitHub PR requirements:
 
 When explicit local authentication is required, use this serialized runtime pair and wait for its result before any publish command:
 ```text
-🧭 Runtime COT | id=<id> | what=GitHub publication prerequisite | action=initiate GitHub App login | why=establish the local authenticated session required for non-interactive publication | command=CLI auth login github | status=about-to-run
+🧭
+Initiate GitHub App login because non-interactive publication requires a local authenticated session.
 CLI auth login github
 ```
 
@@ -431,7 +458,8 @@ If provider/credentials are unavailable, never bypass the source CLI with anothe
 
 After successful Scratch transfer and PR creation, when appropriate:
 ```text
-🧭 Runtime COT | id=<id> | what=Scratch cleanup | action=remove the transferred local Scratch branch | why=clean private exploratory state only after successful transfer and review creation | command=MUT workflow cleanup --branch scratch/<ticket>-<slug> | status=about-to-run
+🧭
+Remove the transferred local Scratch branch because private exploratory state may be cleaned only after successful transfer and review creation.
 MUT workflow cleanup --branch scratch/<ticket>-<slug>
 ```
 Never clean remote or official branches.
@@ -448,15 +476,20 @@ On rebase, Scratch squash, cherry-pick, or controlled-merge conflict:
 
 Never assume every conflict rebases `develop`: hotfix uses its affected line, stabilization its release line, propagation its target line, and Scratch its official branch.
 ```text
-🧭 Runtime COT | id=<id> | what=ticket-publication conflict recovery | action=resume official ticket publication | why=continue the preserved publish operation after resolving exact conflicts | command=GH workflow ticket publish --branch <official> --resume --push --create-pull-request | status=about-to-run
+🧭
+Resume official ticket publication because the preserved operation can continue after exact conflicts are resolved.
 GH workflow ticket publish --branch <official> --resume --push --create-pull-request
-🧭 Runtime COT | id=<id+1> | what=Scratch-publication conflict recovery | action=resume Scratch transfer publication | why=continue the preserved squash-and-publish operation after resolution | command=GH workflow ticket publish --type <type> --subject "<subject>" [--target <official>] --resume --push --create-pull-request | status=about-to-run
+🧭
+Resume Scratch transfer publication because the preserved squash-and-publish operation can continue after resolution.
 GH workflow ticket publish --type <type> --subject "<subject>" [--target <official>] --resume --push --create-pull-request
-🧭 Runtime COT | id=<id+2> | what=hotfix-publication conflict recovery | action=resume hotfix publication | why=continue the preserved publish operation against its affected line | command=GH workflow hotfix publish --branch <hotfix> --affected-line <line> --resume --push --create-pull-request | status=about-to-run
+🧭
+Resume hotfix publication because the preserved correction can continue against its affected line after resolution.
 GH workflow hotfix publish --branch <hotfix> --affected-line <line> --resume --push --create-pull-request
-🧭 Runtime COT | id=<id+3> | what=release-stabilization conflict recovery | action=resume stabilization publication | why=continue the preserved release workflow after resolving conflicts | command=GH workflow release publish-stabilization --branch <branch> --release <release> --resume --push --create-pull-request | status=about-to-run
+🧭
+Resume stabilization publication because the preserved release workflow can continue after conflicts are resolved.
 GH workflow release publish-stabilization --branch <branch> --release <release> --resume --push --create-pull-request
-🧭 Runtime COT | id=<id+4> | what=hotfix-propagation conflict recovery | action=resume target-line propagation | why=continue the preserved propagation workflow after resolving conflicts | command=GH workflow hotfix propagate --source <hotfix> --target-line <line> --branch <fix-branch> --resume --push --create-pull-request | status=about-to-run
+🧭
+Resume target-line propagation because the preserved propagation workflow can continue after conflicts are resolved.
 GH workflow hotfix propagate --source <hotfix> --target-line <line> --branch <fix-branch> --resume --push --create-pull-request
 ```
 For a controlled published-branch merge conflict, resolve/stage exact paths, complete a governed merge with `commit create` using the branch ticket, rerun required checks, then return to publish. Never abort, take one side wholesale, or discard state without explicit authorization.
@@ -464,15 +497,15 @@ For a controlled published-branch merge conflict, resolve/stage exact paths, com
 ## [10] Audit and completion guard
 Emit compact material-gate records:
 ```text
-🧭 Branch context | branch=<name|detached> | family=<family|none> | classification=<continuation|normal> | decision=<continue|normal-flow|waiting> | cli=PASS|FAIL
-🧭 Intake | ticket=<id> | family=<family> | slug=<slug> | verification=PASS
-🧭 Scratch | timing=<proactive|reactive> | score=<n> | result=<value>
-🧭 Branch | workflow=<command> | branch=<name> | cli=PASS
-🧭 Commit | index=<n> | type=<type> | semanticScore=<n> | paths=<count> | cli=PASS
-🧭 Quality | required=<count> | passed=<count> | status=PASS|FAIL
-🧭 Help reanchor | id=<id> | command=<CLI command-path --help> | availability=PASS|FAIL
-🧭 Runtime result | id=<id> | command=<non-secret command> | log=PASS | result=PASS|FAIL | state=<state>
-🧭 Publish | pushed=<bool> | provider=<value> | pr=<url|blocked>
+📋 Branch context | branch=<name|detached> | family=<family|none> | classification=<continuation|normal> | decision=<continue|normal-flow|waiting> | cli=PASS|FAIL
+📋 Intake | ticket=<id> | family=<family> | slug=<slug> | verification=PASS
+📋 Scratch | timing=<proactive|reactive> | score=<n> | result=<value>
+📋 Branch | workflow=<command> | branch=<name> | cli=PASS
+📋 Commit | index=<n> | type=<type> | semanticScore=<n> | paths=<count> | cli=PASS
+📋 Quality | required=<count> | passed=<count> | status=PASS|FAIL
+📋 Help reanchor | availability=PASS|FAIL
+📋 Runtime result | result=PASS|FAIL | state=<state>
+📋 Publish | pushed=<bool> | provider=<value> | pr=<url|blocked>
 ```
 Before irreversible/external output, perform a hidden rubric self-check over completeness, governance, evidence, history quality, data preservation, and publication proof. Iterate internally until passing; never reveal rubric scores or private reasoning.
 
