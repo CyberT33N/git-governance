@@ -122,6 +122,27 @@ Before importing these Rulesets with active enforcement, the repository
 Without the first two prerequisites, GitHub will block every pull request
 because the Rulesets require results that do not exist yet.
 
+### Activate CodeQL
+
+This repository supplies the versioned advanced CodeQL workflow at
+[`../../../../.github/workflows/codeql.yml`](../../../../.github/workflows/codeql.yml).
+It scans Go code on pull requests to and pushes on every shared line, then
+uploads CodeQL results with only `security-events: write` in addition to
+read-only repository permissions.
+
+To activate it in GitHub:
+
+1. Open **Settings → Security → Code scanning** for the repository.
+2. If CodeQL setup is requested, choose **Advanced** setup so GitHub uses the
+   committed workflow rather than creating a second default-setup scanner.
+3. Merge or update a pull request containing `codeql.yml`.
+4. Verify that **CodeQL (go)** succeeds and that Code Scanning records its
+   results for the pull request target.
+
+The Code Scanning Ruleset gate will remain pending until that first successful
+analysis uploads results. Do not use `pull_request_target` for this workflow:
+untrusted pull-request code must run with the normal `pull_request` event.
+
 ### Required GitHub Code Quality coverage configuration
 
 The shared-line JSON files serialize GitHub's **Restrict code coverage** rule
