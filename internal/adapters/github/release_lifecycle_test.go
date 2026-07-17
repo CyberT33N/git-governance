@@ -424,21 +424,6 @@ func TestReleaseLifecycleTransportAndResponseFailurePaths(t *testing.T) {
 			})
 		}
 
-		server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-			_ = json.NewEncoder(writer).Encode(workflowRunsResponse{
-				WorkflowRuns: []workflowRunResponse{{DisplayTitle: "other-request", Status: "completed", Conclusion: "success"}},
-			})
-		}))
-		defer server.Close()
-		base, _ := url.Parse(server.URL)
-		publisher := New(Options{
-			Resolver:   testCredentialResolver(),
-			APIBaseURL: server.URL,
-			HTTPClient: &http.Client{Transport: server.Client().Transport, Timeout: time.Millisecond},
-		})
-		_, err = publisher.waitForWorkflowRun(context.Background(), base, repository, "create-protected-line.yml", "request")
-		assertProblem(t, err, problem.CodeExternalCommandFailed)
-
 		statusPublisher := New(Options{
 			Resolver: testCredentialResolver(),
 			HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -465,7 +450,7 @@ func TestReleaseLifecycleTransportAndResponseFailurePaths(t *testing.T) {
 					)),
 					Header: make(http.Header),
 				}, nil
-			})},
+			}), Timeout: time.Millisecond},
 		})
 		_, err = cancelPublisher.waitForWorkflowRun(cancelContext, statusBase, repository, "create-protected-line.yml", "request")
 		assertProblem(t, err, problem.CodeExternalCommandFailed)
