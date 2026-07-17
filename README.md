@@ -8,9 +8,9 @@ Start with the [documentation index](docs/index.md), then use the
 [CLI usage guide](docs/usage/index.md) for complete interactive and
 non-interactive command contracts.
 
-Hosting-platform contracts, including the GitHub requirement that `develop`
-is rebase-only managed, live under [docs/platforms](docs/platforms/index.md).
-Do not redefine those rules outside that tree.
+Hosting-platform contracts and their importable GitHub rulesets live under
+[docs/platforms](docs/platforms/index.md). Do not redefine those rules outside
+that tree.
 
 ## Command catalog
 
