@@ -1,5 +1,7 @@
 name: Create Protected Shared Line
 
+run-name: Create ${{ inputs.kind }} line ${{ inputs.version }} (${{ inputs.request_id || 'manual' }})
+
 on:
   workflow_dispatch:
     inputs:
@@ -13,6 +15,11 @@ on:
       version:
         description: "Release: major.minor.patch; support: major.minor"
         required: true
+        type: string
+      request_id:
+        description: "Auditable caller correlation ID"
+        required: false
+        default: "manual"
         type: string
 
 permissions:
@@ -41,9 +48,15 @@ jobs:
         shell: bash
         env:
           KIND: ${{ inputs.kind }}
+          REQUEST_ID: ${{ inputs.request_id }}
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
+
+          if ! [[ "${REQUEST_ID}" =~ ^[A-Za-z0-9_-]{1,64}$ ]]; then
+            echo "request_id must contain 1 to 64 ASCII letters, digits, underscores, or hyphens" >&2
+            exit 1
+          fi
 
           case "${KIND}" in
             release)
@@ -81,6 +94,7 @@ jobs:
 
           echo "source=${source}" >> "${GITHUB_OUTPUT}"
           echo "target=${target}" >> "${GITHUB_OUTPUT}"
+          echo "request_id=${REQUEST_ID}" >> "${GITHUB_OUTPUT}"
 
       - name: Create protected remote line from selected source
         shell: bash
