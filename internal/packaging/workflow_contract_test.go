@@ -54,6 +54,8 @@ func TestProtectedLineWorkflowKeepsSharedLineMutationInCI(t *testing.T) {
 	workflow := readWorkflow(t, "create-protected-line.yml")
 	for _, expected := range []string{
 		"workflow_dispatch:",
+		"run-name: Create ${{ inputs.kind }} line ${{ inputs.version }} (${{ inputs.request_id || 'manual' }})",
+		"request_id:",
 		"environment: release",
 		"source=\"origin/develop\"",
 		"source=\"origin/main\"",
