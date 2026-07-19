@@ -19,6 +19,29 @@ Without `--dispatch`, `cut` remains an intent-only plan. It is useful for
 review or a manually operated release process, but it does not prove that a
 release line exists and cannot advance the governed release lifecycle.
 
+## Managed broker release control
+
+The repository-local `release-control.yml` workflow is the only supported
+GitHub Actions entrypoint for a managed credential broker. It runs in the
+protected `release` environment and uses GitHub OIDC plus Google Workload
+Identity Federation to obtain a short-lived Cloud Run ID token. The workflow
+passes that token only in process memory to `git-governance`; it never stores a
+GitHub App key, an installation token, or a Google service-account key in
+GitHub.
+
+Configure these GitHub repository variables:
+
+```text
+GCP_BROKER_URL
+GCP_BROKER_WIF_PROVIDER
+GCP_BROKER_INVOKER_SERVICE_ACCOUNT
+```
+
+First dispatch `broker-smoke`. It proves that the broker accepts the approved
+`CyberT33N/git-governance` repository request and rejects an unapproved request
+without printing the returned installation token. Only after that smoke test
+passes may a release owner dispatch `release-cut` with a concrete SemVer value.
+
 ## Stabilization
 
 Only release-blocking fixes, final documentation, and release preparation are
