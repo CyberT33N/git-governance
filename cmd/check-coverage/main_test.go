@@ -158,7 +158,7 @@ func TestRun(t *testing.T) {
 	t.Run("normalizes a nil context", func(t *testing.T) {
 		stdout := &bytes.Buffer{}
 		exitCode := run(testNilContext(), nil, stdout, &bytes.Buffer{}, func(ctx context.Context, executable string, arguments ...string) ([]byte, error) {
-			if ctx == nil || executable != "go" || strings.Join(arguments, " ") != "test -count=1 -cover ./..." {
+			if ctx == nil || executable != "go" || strings.Join(arguments, " ") != "test -count=1 -cover -covermode=atomic ./..." {
 				t.Fatalf("coverage invocation = (%v, %q, %v)", ctx, executable, arguments)
 			}
 			return complete, nil
