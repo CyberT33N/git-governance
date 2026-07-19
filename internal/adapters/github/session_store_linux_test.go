@@ -70,17 +70,14 @@ func TestLinuxSecretServiceStoreWhiteboxErrorPaths(t *testing.T) {
 		if got := (linuxSecretTool{binary: "go"}).executable(); got != "go" {
 			t.Fatalf("configured secret-tool binary = %q", got)
 		}
-		if _, err := (linuxSecretTool{}).run(context.Background(), nil, "--help"); err != nil && !errors.Is(err, errSessionStoreUnavailable) {
-			t.Logf("default secret-tool help returned %v", err)
-		}
 		if _, err := (linuxSecretTool{binary: "go"}).run(context.Background(), nil, "version"); err != nil {
 			t.Fatalf("native runner success error = %v", err)
 		}
+		if _, err := (linuxSecretTool{binary: "go"}).run(context.Background(), nil, "tool", "definitely-not-a-go-tool"); err == nil || errors.Is(err, errSessionStoreUnavailable) {
+			t.Fatalf("controlled native runner failure = %v", err)
+		}
 		if _, err := (linuxSecretTool{binary: "git-governance-missing-secret-tool"}).run(context.Background(), nil, "version"); !errors.Is(err, errSessionStoreUnavailable) {
 			t.Fatalf("missing native runner error = %v", err)
-		}
-		if _, err := (linuxSecretTool{binary: "go"}).run(context.Background(), nil, "tool", "definitely-not-a-go-tool"); err == nil {
-			t.Fatal("native runner accepted a failing command")
 		}
 	})
 
