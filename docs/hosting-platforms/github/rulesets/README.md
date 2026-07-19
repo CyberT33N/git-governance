@@ -203,6 +203,19 @@ provide these separate controls:
 4. Release cleanup occurs only after delivery and either the backmerge merge or
    the recorded `not-required` reconciliation result.
 
+### Initial protected-line creation
+
+`04-release.json` and `05-support.json` set
+`required_status_checks.do_not_enforce_on_create` to `true`. A newly created
+`release/*` or `support/*` ref cannot have its own status-check results before
+it exists, so requiring them at creation time would reject the controlled
+workflow by construction.
+
+This exception is limited to first creation. The resulting shared line retains
+the deletion, non-fast-forward, pull-request, review, status-check, CodeQL,
+Code Quality, and coverage protections for every subsequent update. Do not use
+a broad Ruleset bypass merely to create a protected line.
+
 The automation identity must be narrowly scoped and auditable. Do not use an
 ordinary developer or a broad administrator bypass to create protected release
 lines, dispatch release workflows, or remove them after completion.
@@ -268,9 +281,11 @@ line can be deleted after its promotion, confirmed delivery, and completed
 reconciliation, configure an
 explicit, audited release-maintainer or release-automation bypass through the
 GitHub UI or API. The same identity decision is needed if release or support
-branch creation must be restricted to a release workflow. GitHub bypass is
-ruleset-wide, so use a dedicated, least-privileged actor rather than an
-unrestricted administrator bypass.
+branch cleanup requires an otherwise unavailable operation. Routine initial
+release or support branch creation uses the narrow
+`do_not_enforce_on_create` exception instead of a Ruleset-wide bypass. GitHub
+bypass is ruleset-wide, so use a dedicated, least-privileged actor rather than
+an unrestricted administrator bypass when a bypass is genuinely required.
 
 The rulesets require one approval and resolved review threads, which implement
 the governance recommendations. `require_code_owner_review` is `false` because
@@ -331,6 +346,11 @@ Shared-line rulesets require the CI job names from `.github/workflows/ci.yml`:
 
 If those check names change, update the `required_status_checks` arrays before
 import, or adjust them in the GitHub UI after import.
+
+For `04-release.json` and `05-support.json`, retain
+`do_not_enforce_on_create: true` while updating those arrays. It is required
+for the controlled first creation of a previously nonexistent protected line;
+it does not weaken checks on an existing line.
 
 ## Required repository merge settings
 
