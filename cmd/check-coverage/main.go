@@ -37,7 +37,7 @@ func run(
 		ctx = context.Background()
 	}
 
-	output, err := execute(ctx, "go", "test", "-count=1", "-cover", "./...")
+	output, err := execute(ctx, "go", "test", "-count=1", "-cover", "-covermode=atomic", "./...")
 	if len(output) > 0 {
 		_, _ = stdout.Write(output)
 	}
