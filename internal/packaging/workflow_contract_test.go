@@ -68,6 +68,44 @@ func TestProtectedLineWorkflowKeepsSharedLineMutationInCI(t *testing.T) {
 	}
 }
 
+func TestReleaseControlWorkflowUsesEphemeralBrokerIdentity(t *testing.T) {
+	t.Parallel()
+
+	workflow := readWorkflow(t, "release-control.yml")
+	for _, expected := range []string{
+		"workflow_dispatch:",
+		"broker-smoke",
+		"release-cut",
+		"environment: release",
+		"id-token: write",
+		"google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093",
+		"token_format: id_token",
+		"id_token_audience: ${{ vars.GCP_BROKER_URL }}",
+		"GIT_GOVERNANCE_GITHUB_CREDENTIAL_BROKER_URL",
+		"GIT_GOVERNANCE_WORKLOAD_IDENTITY_TOKEN",
+		`--dispatch`,
+		`"repository":"git-governance"`,
+		`"repository":"not-approved"`,
+		`test "$approved_status" = "200"`,
+		`test "$rejected_status" = "403"`,
+		`rm -f "$response"`,
+	} {
+		if !strings.Contains(workflow, expected) {
+			t.Fatalf("release-control workflow does not contain %q", expected)
+		}
+	}
+	for _, forbidden := range []string{
+		"GITHUB_RELEASE_APP_ID",
+		"GITHUB_RELEASE_APP_INSTALLATION_ID",
+		"echo \"$BROKER_ID_TOKEN\"",
+		"cat \"$response\"",
+	} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("release-control workflow must not contain %q", forbidden)
+		}
+	}
+}
+
 func readWorkflow(t *testing.T, name string) string {
 	t.Helper()
 
