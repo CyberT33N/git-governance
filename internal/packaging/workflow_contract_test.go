@@ -49,6 +49,29 @@ func TestTagApprovalExplicitlyDispatchesReleaseArtifacts(t *testing.T) {
 	}
 }
 
+func TestTagApprovalArtifactDispatchUsesJobToken(t *testing.T) {
+	t.Parallel()
+
+	workflow := readWorkflow(t, "tag-approved-release.yml")
+	dispatchStart := strings.Index(workflow, "- name: Dispatch artifact workflow for immutable tag")
+	if dispatchStart == -1 {
+		t.Fatal("tag workflow does not contain the artifact dispatch step")
+	}
+
+	dispatchStep := workflow[dispatchStart:]
+	for _, expected := range []string{
+		"GITHUB_TOKEN: ${{ github.token }}",
+		`--header "Authorization: Bearer ${GITHUB_TOKEN}"`,
+	} {
+		if !strings.Contains(dispatchStep, expected) {
+			t.Fatalf("artifact dispatch step does not contain %q", expected)
+		}
+	}
+	if strings.Contains(dispatchStep, "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}") {
+		t.Fatal("artifact dispatch step must use the job token, not a repository secret")
+	}
+}
+
 func TestProtectedLineWorkflowKeepsSharedLineMutationInCI(t *testing.T) {
 	t.Parallel()
 

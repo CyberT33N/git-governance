@@ -84,6 +84,7 @@ jobs:
         shell: bash
         env:
           TAG: ${{ steps.release.outputs.tag }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           curl --fail-with-body --request POST \
