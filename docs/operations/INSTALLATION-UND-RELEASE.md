@@ -282,6 +282,13 @@ Zielbranche. Eine GitHub-Ruleset- oder Branch-Protection-Regel muss den
 Workflow als erlaubten Erzeuger von `release/*` und `support/*` festlegen; die
 lokale CLI erhält dafür keine Push-Berechtigung.
 
+Wenn das `release/*`- oder `support/*`-Ruleset Required Status Checks
+erzwingt, muss dessen Status-Check-Regel
+`do_not_enforce_on_create: true` setzen. Andernfalls verlangt GitHub Checks
+für eine Zielbranch, bevor diese überhaupt existiert, und blockiert den
+kontrollierten Release- oder Support-Cut. Die Ausnahme gilt ausschließlich bei
+der ersten Ref-Erzeugung; alle Schutzregeln gelten danach unverändert.
+
 Ein mit `GITHUB_TOKEN` erzeugter Tag löst keinen weiteren Push-Workflow aus.
 Der Tag-Workflow startet deshalb den vorhandenen `workflow_dispatch`-Pfad des
 Artefaktworkflows explizit und übergibt den bestehenden Tag.

@@ -81,6 +81,45 @@ func TestPublisherDispatchSharedLine(t *testing.T) {
 		}
 	})
 
+	t.Run("accepts an OK dispatch response when the correlated workflow succeeds", func(t *testing.T) {
+		var requestID string
+		server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			switch request.URL.Path {
+			case "/repos/acme/governance/actions/workflows/create-protected-line.yml/dispatches":
+				var payload workflowDispatchRequest
+				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+					t.Fatal(err)
+				}
+				requestID = payload.Inputs["request_id"]
+				writer.WriteHeader(http.StatusOK)
+			case "/repos/acme/governance/actions/workflows/create-protected-line.yml/runs":
+				_ = json.NewEncoder(writer).Encode(workflowRunsResponse{
+					WorkflowRuns: []workflowRunResponse{{
+						Status:       "completed",
+						Conclusion:   "success",
+						HTMLURL:      "https://github.example/actions/runs/44",
+						DisplayTitle: requestID,
+					}},
+				})
+			default:
+				t.Fatalf("unexpected path %q", request.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		release, _ := branch.ParseName("release/2.8.0")
+		publisher := New(Options{Resolver: testCredentialResolver(), APIBaseURL: server.URL, HTTPClient: server.Client()})
+		result, err := publisher.DispatchSharedLine(context.Background(), port.SharedLineDispatchRequest{
+			RemoteURL: "https://" + server.URL[len("https://"):] + "/acme/governance.git",
+			Workflow:  "create-protected-line.yml",
+			Ref:       "main",
+			Branch:    release,
+		})
+		if err != nil || result.WorkflowRunURL != "https://github.example/actions/runs/44" || requestID == "" {
+			t.Fatalf("DispatchSharedLine() = (%#v, %v), requestID=%q", result, err, requestID)
+		}
+	})
+
 	t.Run("waits through an in-progress workflow", func(t *testing.T) {
 		var requestID string
 		calls := 0
@@ -269,6 +308,21 @@ func TestReleaseLifecycleHelpersAndFailures(t *testing.T) {
 		if !validWorkflowFile("release.yml") || validWorkflowFile("") || validWorkflowFile("release.yaml") ||
 			validWorkflowFile("../release.yml") || validWorkflowFile("release.yml\n") {
 			t.Fatal("workflow file validation is incorrect")
+		}
+		for _, testCase := range []struct {
+			status int
+			want   bool
+		}{
+			{status: http.StatusContinue, want: false},
+			{status: http.StatusOK, want: true},
+			{status: http.StatusAccepted, want: true},
+			{status: http.StatusNoContent, want: true},
+			{status: http.StatusMultipleChoices - 1, want: true},
+			{status: http.StatusMultipleChoices, want: false},
+		} {
+			if got := isSuccessfulHTTPStatus(testCase.status); got != testCase.want {
+				t.Fatalf("isSuccessfulHTTPStatus(%d) = %t, want %t", testCase.status, got, testCase.want)
+			}
 		}
 		requestID, err := newReleaseRequestID()
 		if err != nil || len(requestID) != 24 {

@@ -91,7 +91,7 @@ does not rely on any external governance repository or unpublished rule set.
 | Interactive and non-interactive conflict continuation | IMPLEMENTED | rebase, scratch-squash, and hotfix-propagation continuations remain explicit and can resume with `--resume` after manual conflict resolution |
 | Published branch synchronization | VERIFIED | recommends or performs explicit merge, never routine rebase |
 | Scratch branch | VERIFIED | private local branch from the same-ticket official local branch; transfer resolves an existing local official target by ticket ID and squashes to one governed commit |
-| Protected release-line dispatch | VERIFIED | GitHub lifecycle adapter dispatches the approved workflow, waits for its correlated result, then fetches and verifies the remote release or support line; adapter and CLI-contract tests pass |
+| Protected release-line dispatch | VERIFIED | GitHub lifecycle adapter accepts a successful dispatch response, waits for its correlated result, then fetches and verifies the remote release or support line; adapter and CLI-contract tests pass; live `release/1.0.0` creation was verified from `develop` |
 | Delivery-gated release reconciliation | VERIFIED | GitHub verifies the merged promotion, exact tag, published release, and effective release-to-develop delta; backmerge is required only when that delta exists; adapter and workflow whitebox tests pass |
 | Release stabilization and completion | IMPLEMENTED | constrained stabilization, promotion intent, dispatch, delivery-gated conditional backmerge, cleanup, and support-tag provenance are present |
 
@@ -135,7 +135,8 @@ does not rely on any external governance repository or unpublished rule set.
 | GitHub Actions CI | IMPLEMENTED | immutable action commits, pinned tool versions, read-only module execution, native Linux/macOS/Windows full-quality gates, uncached coverage, race, fuzz, vulnerability, Lefthook, smoke, and release-config gates are configured |
 | GitHub release artifacts | IMPLEMENTED | tag/manual-tag validation, checksums, SBOM, Cosign, provenance attestation, and Linux package formats are configured |
 | CI-owned release tag lifecycle | IMPLEMENTED | merged same-repository `release/<semver> -> main` creates an immutable annotated tag and explicitly dispatches the artifact workflow because `GITHUB_TOKEN` tag pushes do not trigger `push` workflows |
-| Live protected-line and delivery lifecycle | BLOCKED | requires an approved GitHub release-automation identity, Ruleset bypass configuration, and an actual release run; local adapter and workflow contracts are covered by tests |
+| Live protected-line creation | VERIFIED | `release/1.0.0` was created by the protected workflow from the verified `develop` revision; the release Ruleset applies after creation |
+| Live release delivery and reconciliation | PENDING | promotion to `main`, immutable tag, artifact publication, GitHub Release, and the conditional backmerge decision have not yet occurred |
 | Package-manager manifest templates | IMPLEMENTED | Homebrew, Scoop, and WinGet templates are version/checksum-driven under `packaging/` |
 | Package-manager publication | BLOCKED | maintainer-controlled tap, bucket, WinGet submission, and publisher identities are external prerequisites |
 | Platform-native signing and notarization | BLOCKED | Authenticode and Apple credentials are external publisher prerequisites; checksum Cosign signing remains configured |

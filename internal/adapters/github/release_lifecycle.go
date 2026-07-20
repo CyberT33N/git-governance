@@ -106,7 +106,7 @@ func (publisher *Publisher) DispatchSharedLine(
 		return port.SharedLineDispatchResult{}, err
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusNoContent {
+	if !isSuccessfulHTTPStatus(response.StatusCode) {
 		return port.SharedLineDispatchResult{}, lifecycleResponseProblem(
 			response.StatusCode,
 			"dispatch the protected-line creation workflow",
@@ -423,6 +423,13 @@ func validWorkflowFile(value string) bool {
 		!strings.ContainsAny(value, "/\\\r\n\t") &&
 		strings.TrimSpace(value) == value &&
 		value != ""
+}
+
+// isSuccessfulHTTPStatus accepts any successful dispatch response. The
+// correlated workflow run remains the authoritative proof that the requested
+// protected-line operation completed.
+func isSuccessfulHTTPStatus(status int) bool {
+	return status >= http.StatusOK && status < http.StatusMultipleChoices
 }
 
 func newReleaseRequestID() (string, error) {
