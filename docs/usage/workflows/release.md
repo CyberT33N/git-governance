@@ -15,6 +15,11 @@ waits for its successful correlated run, fetches the remote, and verifies that
 `origin/release/2.8.0` exists. The CLI never creates, switches to, or pushes a
 shared `release/*` branch itself.
 
+A successful dispatch response is only transport acknowledgement. The adapter
+accepts a successful HTTP `2xx` dispatch response, then requires the
+correlated workflow run to succeed and the requested remote line to exist
+before it reports the release cut as complete.
+
 Without `--dispatch`, `cut` remains an intent-only plan. It is useful for
 review or a manually operated release process, but it does not prove that a
 release line exists and cannot advance the governed release lifecycle.
