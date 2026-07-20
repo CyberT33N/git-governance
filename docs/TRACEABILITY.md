@@ -47,6 +47,7 @@ does not rely on any external governance repository or unpublished rule set.
 | One official regular branch per ticket | VERIFIED | local/remote branch discovery, whitebox test, and real-Git regression test |
 | Explicit staging only | VERIFIED | application and Git adapter tests |
 | Commit creation through stdin | VERIFIED | real local Git integration test |
+| Fail-closed Git transport authentication diagnostic | VERIFIED | non-interactive dry-run push adapter and same-package whitebox tests |
 | First-push publication detection | VERIFIED | real local Git integration test |
 | Base delta, merge, and rebase paths | VERIFIED | real local Git integration test |
 | Scratch-to-official squash transfer | VERIFIED | whitebox, CLI-contract, Git-adapter, and real local Git integration tests |
@@ -64,12 +65,13 @@ does not rely on any external governance repository or unpublished rule set.
 | `workflow ticket publish` | IMPLEMENTED | reports conditional rebase state, resumes resolved rebase and scratch-transfer conflicts interactively or with `--resume`, and creates a PR only through an explicit configured provider |
 | `workflow hotfix start` | IMPLEMENTED | affected-line selection is mandatory |
 | hotfix publish and propagation | IMPLEMENTED | affected-line publish plus `cherry-pick -x` forward/backport workflow, including non-interactive `--resume` continuation |
-| `workflow release cut`, `stabilize`, `promote`, `backmerge`, `support`, `cleanup` | IMPLEMENTED | stabilization constraints, release-to-main intent, explicit provider publication, cleanup, and support-tag provenance are enforced |
-| GitHub pull-request adapter | IMPLEMENTED | standard-library REST adapter, remote-derived repository resolution, explicit API versioning, bounded responses, and idempotent existing-PR lookup |
+| `workflow release cut`, `stabilize`, `promote`, `backmerge`, `support`, `cleanup` | IMPLEMENTED | protected-line dispatch/verification, stabilization constraints, release-to-main intent, delivery-gated conditional backmerge, cleanup, and support-tag provenance are enforced |
+| GitHub App pull-request adapter | IMPLEMENTED | just-in-time App credential resolution, host/repository isolation, bounded REST responses, and idempotent existing-PR lookup |
+| `auth login/status/logout github` | IMPLEMENTED | explicit Device Flow, redacted status, native secret-store session lifecycle, and CLI contract tests |
 | `validate pre-push` | IMPLEMENTED | parses every Git stdin ref update and validates the actual remote target |
 | `config key` | IMPLEMENTED | OS configuration directory, atomic JSON storage |
 | `policy describe`, `completion`, `version` | IMPLEMENTED | policy and environment inspection are read-only |
-| `doctor` | IMPLEMENTED | Git version, remote, Lefthook, policy, configuration, and in-progress-operation checks are read-only |
+| `doctor` | IMPLEMENTED | Git version, remote, fail-closed Git transport dry-run authentication, Lefthook, policy, configuration, and in-progress-operation checks |
 | Interactive Huh forms and accessible prompts | IMPLEMENTED | tested with accessible form input |
 | Interactive field validation retries | VERIFIED | invalid ticket, slug, commit-subject, and breaking-change values show field diagnostics and retry in place |
 | Workflow input failure summaries | VERIFIED | accepted command inputs accompany classified workflow and branch-creation failures |
@@ -89,7 +91,9 @@ does not rely on any external governance repository or unpublished rule set.
 | Interactive and non-interactive conflict continuation | IMPLEMENTED | rebase, scratch-squash, and hotfix-propagation continuations remain explicit and can resume with `--resume` after manual conflict resolution |
 | Published branch synchronization | VERIFIED | recommends or performs explicit merge, never routine rebase |
 | Scratch branch | VERIFIED | private local branch from the same-ticket official local branch; transfer resolves an existing local official target by ticket ID and squashes to one governed commit |
-| Release stabilization and completion | IMPLEMENTED | constrained stabilization, promotion intent, backmerge, cleanup, and support-tag provenance are present |
+| Protected release-line dispatch | VERIFIED | GitHub lifecycle adapter accepts a successful dispatch response, waits for its correlated result, then fetches and verifies the remote release or support line; adapter and CLI-contract tests pass; live `release/1.0.0` creation was verified from `develop` |
+| Delivery-gated release reconciliation | VERIFIED | GitHub verifies the merged promotion, exact tag, published release, and effective release-to-develop delta; backmerge is required only when that delta exists; adapter and workflow whitebox tests pass |
+| Release stabilization and completion | IMPLEMENTED | constrained stabilization, promotion intent, dispatch, delivery-gated conditional backmerge, cleanup, and support-tag provenance are present |
 
 ## Testing and quality
 
@@ -109,10 +113,11 @@ does not rely on any external governance repository or unpublished rule set.
 | Bounded fuzzing | VERIFIED | ticket, branch, commit, and configuration targets passed |
 | Race detection | VERIFIED | `CGO_ENABLED=1 go test -race ./...` passed locally with GCC 16.1.0 |
 | Vulnerability scan | VERIFIED | `govulncheck` v1.5.0 reported no vulnerabilities |
-| Windows amd64 native smoke | VERIFIED | version, policy, branch catalog, and doctor commands passed |
+| Windows amd64 native smoke | VERIFIED | version, policy, and branch-catalog commands passed; `doctor` is intentionally excluded because detached CI checkouts have no branch-bound Git credential |
 | Windows/macOS/Linux cross-builds | VERIFIED | all six promised OS/architecture binaries compiled with `CGO_ENABLED=0` |
+| Native primary-OS full-quality matrix | IMPLEMENTED | CI runs `cmd/build` natively on Linux, macOS, and Windows; each OS independently enforces lint, tests, uncached 100%-coverage, race, fuzz, and security gates |
 | Native ARM64 smoke tests | IMPLEMENTED | CI matrix contains Ubuntu ARM64, Windows ARM64, and macOS ARM64 runners; remote execution requires the first push |
-| macOS/Linux native smoke tests | BLOCKED | configured in CI but not executable on the local Windows host |
+| macOS/Linux native smoke tests | IMPLEMENTED | CI executes native smoke tests; local Windows execution is intentionally not a prerequisite |
 
 ## Delivery and operations
 
@@ -127,9 +132,11 @@ does not rely on any external governance repository or unpublished rule set.
 | Periodic dependency re-evaluation | IMPLEMENTED | the CI workflow runs daily in addition to pull-request, push, and manual triggers |
 | Dependency update intake | IMPLEMENTED | Dependabot opens daily reviewable update pull requests for the application module, the tools module, and GitHub Actions |
 | Hosted runner major-version pinning | IMPLEMENTED | GitHub workflows use concrete Ubuntu and Windows runner labels rather than `*-latest` labels |
-| GitHub Actions CI | IMPLEMENTED | immutable action commits, pinned tool versions, read-only module execution, complete-coverage, race, fuzz, vulnerability, Lefthook, native-smoke, and release-config gates are configured |
+| GitHub Actions CI | IMPLEMENTED | immutable action commits, pinned tool versions, read-only module execution, native Linux/macOS/Windows full-quality gates, uncached coverage, race, fuzz, vulnerability, Lefthook, smoke, and release-config gates are configured |
 | GitHub release artifacts | IMPLEMENTED | tag/manual-tag validation, checksums, SBOM, Cosign, provenance attestation, and Linux package formats are configured |
-| CI-owned release tag lifecycle | IMPLEMENTED | merged same-repository `release/<semver> -> main` creates an immutable annotated tag and dispatches the artifact workflow |
+| CI-owned release tag lifecycle | IMPLEMENTED | merged same-repository `release/<semver> -> main` creates an immutable annotated tag and explicitly dispatches the artifact workflow because `GITHUB_TOKEN` tag pushes do not trigger `push` workflows |
+| Live protected-line creation | VERIFIED | `release/1.0.0` was created by the protected workflow from the verified `develop` revision; the release Ruleset applies after creation |
+| Live release delivery and reconciliation | PENDING | promotion to `main`, immutable tag, artifact publication, GitHub Release, and the conditional backmerge decision have not yet occurred |
 | Package-manager manifest templates | IMPLEMENTED | Homebrew, Scoop, and WinGet templates are version/checksum-driven under `packaging/` |
 | Package-manager publication | BLOCKED | maintainer-controlled tap, bucket, WinGet submission, and publisher identities are external prerequisites |
 | Platform-native signing and notarization | BLOCKED | Authenticode and Apple credentials are external publisher prerequisites; checksum Cosign signing remains configured |
@@ -144,6 +151,9 @@ does not rely on any external governance repository or unpublished rule set.
 | Hotfix publish target | retain the actual affected line and route the first PR to that line | IMPLEMENTED |
 | Post-rebase verification | rerun branch, commit-series, policy, and configured quality validation | IMPLEMENTED |
 | Release lifecycle | add stabilization, release-to-main intent, controlled propagation, and cleanup | IMPLEMENTED |
+| Protected-line lifecycle | dispatch protected release/support creation through a least-privileged provider, wait for completion, and verify the remote reference | IMPLEMENTED |
+| Release reconciliation | require promotion/tag/delivery evidence, create a develop PR only for effective delta, and record `not-required` otherwise | IMPLEMENTED |
+| Tag-to-artifact trigger | explicitly dispatch the artifact workflow after a `GITHUB_TOKEN`-created immutable tag | IMPLEMENTED |
 | Direct scratch selection | require/select an official ticket-branch base before creation | IMPLEMENTED |
 | Application-level scratch base guard | reject remote-tracking scratch bases even for programmatic callers | IMPLEMENTED |
 | Regular ticket exclusivity | reject a second official regular branch for one ticket after fetch | IMPLEMENTED |

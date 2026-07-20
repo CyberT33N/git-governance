@@ -304,7 +304,8 @@ Eine fehlende Datei lautet stets `unconfigured`, nie `passed`.
 
 Remote-Löschung ist keine CLI-Aufgabe. Hosting-Plattform und CI steuern die
 Löschung gemergter Ticket- und Hotfix-Branches sowie den zeitlich späteren
-Release-Cleanup nach Promotion und Backmerge. Die CLI löscht ausschließlich:
+Release-Cleanup nach Promotion, bestätigter Delivery und Reconciliation. Die
+CLI löscht ausschließlich:
 
 - lokale `scratch/*`-Branches,
 - niemals offizielle Ticket-, Hotfix-, Release- oder Support-Branches,
@@ -315,6 +316,23 @@ Beim lokalen Löschen entfernt die CLI die zugehörige lokale
 `git-governance.workflow-bases`-Metadatenzeile. Merge-, PR- und
 Forward-/Backport-Nachweise gehören zu Hosting-/CI-Gates, solange kein
 konfigurierter Hosting-Adapter diese Daten autoritativ liefern kann.
+
+### 6.7 Release-Reconciliation
+
+Nach jeder Release-Delivery wird `release/<semver>` gegen `develop`
+reconciliert. Diese Prüfung ist verpflichtend, aber ein Backmerge-PR ist es
+nur bei effektivem Delta:
+
+- Der Lifecycle-Provider muss den gemergten Promotion-PR, den exakt zugehörigen
+  unveränderlichen Tag und die erfolgreiche Release-Delivery nachweisen.
+- Der Provider vergleicht anschließend `release/<semver>` mit `develop`.
+- Bei effektivem Delta erzeugt `workflow release backmerge` den PR nach
+  `develop`.
+- Ohne effektiven Delta meldet das Kommando `not-required`; der auditierbare
+  Nachweis belegt, dass kein Merge nötig ist.
+
+Ein offener Promotion-PR, ein bloßer Tagname oder eine fehlende
+Artefakt-Delivery sind keine zulässigen Backmerge-Voraussetzungen.
 
 ## 7. Commit-Typen
 

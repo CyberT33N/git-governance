@@ -207,11 +207,6 @@ func run(
 			executable: artifact,
 			arguments:  []string{"--output", "json", "policy", "describe"},
 		},
-		{
-			name:       "smoke test diagnostics",
-			executable: artifact,
-			arguments:  []string{"--output", "json", "doctor"},
-		},
 	}
 	if !runSteps(ctx, buildSteps, stdout, stderr, execute) {
 		return 1

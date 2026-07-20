@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"path/filepath"
+	"strings"
 
 	"github.com/CyberT33N/git-governance/internal/application/port"
 	"github.com/CyberT33N/git-governance/internal/domain/problem"
@@ -46,13 +47,24 @@ type Check struct {
 
 // DoctorResult is a non-mutating environment snapshot.
 type DoctorResult struct {
-	Repository port.RepositoryIdentity `json:"repository"`
-	Checks     []Check                 `json:"checks"`
+	Repository          port.RepositoryIdentity `json:"repository"`
+	Checks              []Check                 `json:"checks"`
+	authenticationError error
 }
 
 // Run checks the repository and configuration without installing, repairing,
 // fetching, or otherwise mutating anything.
 func (service *DoctorService) Run(ctx context.Context, directory string) (DoctorResult, error) {
+	return service.RunForRemote(ctx, directory, "")
+}
+
+// RunForRemote checks the repository using an explicit selected Git remote
+// when one was provided through the CLI's global remote option.
+func (service *DoctorService) RunForRemote(
+	ctx context.Context,
+	directory string,
+	remote string,
+) (DoctorResult, error) {
 	if ctx != nil && ctx.Err() != nil {
 		return DoctorResult{}, problem.Wrap(problem.Details{
 			Code:        problem.CodeOperationCancelled,
@@ -63,13 +75,21 @@ func (service *DoctorService) Run(ctx context.Context, directory string) (Doctor
 			Remediation: "retry with an active context",
 		}, ctx.Err())
 	}
-	result := DoctorResult{Checks: make([]Check, 0, 9)}
+	result := DoctorResult{Checks: make([]Check, 0, 10)}
 	if service.git == nil {
 		result.Checks = append(result.Checks, Check{
 			Name:   "git repository",
 			OK:     false,
 			Detail: "Git adapter is not configured",
 		})
+		result.appendGitAuthenticationFailure(problem.New(problem.Details{
+			Code:        problem.CodeConfigurationUnavailable,
+			Category:    problem.CategoryConfig,
+			Field:       "Git authentication",
+			Expected:    "a configured Git transport authentication inspector",
+			Rule:        "doctor requires Git transport authentication diagnostics",
+			Remediation: "repair the Git runtime composition and retry doctor",
+		}))
 	} else {
 		version, err := service.git.Version(ctx)
 		if err != nil {
@@ -94,6 +114,9 @@ func (service *DoctorService) Run(ctx context.Context, directory string) (Doctor
 				Detail: err.Error(),
 			})
 		} else {
+			if strings.TrimSpace(remote) != "" {
+				repository.Remote = remote
+			}
 			result.Repository = repository
 			result.appendRepositoryChecks(ctx, service.git, repository)
 		}
@@ -103,6 +126,12 @@ func (service *DoctorService) Run(ctx context.Context, directory string) (Doctor
 	result.appendPolicyCheck(ctx, service.policy)
 	result.appendConfigurationCheck(ctx, service.store)
 	return result, nil
+}
+
+// AuthenticationError returns the fail-closed Git transport readiness error,
+// if doctor could not verify an authenticated dry-run push.
+func (result DoctorResult) AuthenticationError() error {
+	return result.authenticationError
 }
 
 func (result *DoctorResult) appendRepositoryChecks(ctx context.Context, git port.GitRepository, repository port.RepositoryIdentity) {
@@ -166,6 +195,58 @@ func (result *DoctorResult) appendRepositoryChecks(ctx context.Context, git port
 		})
 	}
 
+	result.appendGitAuthenticationCheck(ctx, git, repository)
+}
+
+func (result *DoctorResult) appendGitAuthenticationCheck(
+	ctx context.Context,
+	git port.GitRepository,
+	repository port.RepositoryIdentity,
+) {
+	authenticator, ok := git.(port.GitTransportAuthenticator)
+	if !ok {
+		result.appendGitAuthenticationFailure(problem.New(problem.Details{
+			Code:        problem.CodeConfigurationUnavailable,
+			Category:    problem.CategoryConfig,
+			Field:       "Git authentication",
+			Expected:    "a Git transport authentication inspector",
+			Rule:        "doctor verifies Git transport authentication before governed work",
+			Remediation: "repair the Git adapter and retry doctor",
+		}))
+		return
+	}
+	if err := authenticator.CheckTransportAuthentication(ctx, repository); err != nil {
+		result.appendGitAuthenticationFailure(err)
+		return
+	}
+	result.Checks = append(result.Checks, Check{
+		Name:   "Git authentication",
+		OK:     true,
+		Detail: "authenticated dry-run push succeeded without an interactive prompt",
+	})
+}
+
+func (result *DoctorResult) appendGitAuthenticationFailure(err error) {
+	if _, classified := problem.As(err); !classified {
+		err = problem.Wrap(problem.Details{
+			Code:        problem.CodeGitCommandFailed,
+			Category:    problem.CategoryGit,
+			Field:       "Git authentication",
+			Expected:    "a non-interactive credential capable of an authenticated dry-run push",
+			Rule:        "doctor verifies Git transport authentication without mutating remote references",
+			Remediation: "authenticate Git transport with SSH or Git Credential Manager and retry doctor",
+		}, err)
+	}
+	detail := "Git transport authentication could not be verified"
+	if err != nil {
+		detail = err.Error()
+	}
+	result.Checks = append(result.Checks, Check{
+		Name:   "Git authentication",
+		OK:     false,
+		Detail: detail,
+	})
+	result.authenticationError = err
 }
 
 func (result *DoctorResult) appendToolChecks(ctx context.Context, tools port.ToolInspector) {

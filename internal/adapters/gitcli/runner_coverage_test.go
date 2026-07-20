@@ -46,6 +46,19 @@ func TestExecRunnerCoverageFailureAndTruncationPaths(t *testing.T) {
 			t.Fatalf("truncated stdout = %q", result.stdout)
 		}
 	})
+
+	t.Run("uses an explicit environment for non-interactive commands", func(t *testing.T) {
+		result := (execRunner{binary: "git", maxOutputBytes: 1 << 10}).runWithEnvironment(
+			context.Background(),
+			"",
+			nil,
+			[]string{"GIT_TERMINAL_PROMPT=0"},
+			"--version",
+		)
+		if result.err != nil || result.exitCode != 0 || !strings.Contains(result.stdout, "git version") {
+			t.Fatalf("runWithEnvironment() = %#v", result)
+		}
+	})
 }
 
 func TestNewBoundedBufferUsesDefaultLimitForNonPositiveInput(t *testing.T) {

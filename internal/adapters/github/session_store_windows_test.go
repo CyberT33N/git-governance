@@ -1,0 +1,444 @@
+//go:build windows
+
+package github
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"golang.org/x/sys/windows"
+)
+
+func TestDPAPISessionStoreRoundTripsAndRemovesEncryptedSessions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.dpapi")
+	store := newDPAPISessionStore(path)
+	ctx := context.Background()
+
+	if _, err := store.LoadActive(ctx, "github.com"); !errors.Is(err, errSessionNotFound) {
+		t.Fatalf("missing LoadActive() error = %v", err)
+	}
+	if err := store.SaveActive(ctx, Session{}); err == nil {
+		t.Fatal("SaveActive accepted an incomplete session")
+	}
+
+	octocat := testStoredSession("github.com", "octocat")
+	if err := store.SaveActive(ctx, octocat); err != nil {
+		t.Fatalf("SaveActive() error = %v", err)
+	}
+	encrypted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encrypted), octocat.RefreshToken) {
+		t.Fatal("DPAPI session file contains the plaintext refresh token")
+	}
+	loaded, err := store.LoadActive(ctx, "GitHub.COM")
+	if err != nil || loaded != octocat {
+		t.Fatalf("LoadActive() = (%#v, %v)", loaded, err)
+	}
+
+	enterprise := testStoredSession("github.enterprise.example", "hubot")
+	if err := store.SaveActive(ctx, enterprise); err != nil {
+		t.Fatalf("second SaveActive() error = %v", err)
+	}
+	if err := store.DeleteActive(ctx, enterprise.Host); err != nil {
+		t.Fatalf("DeleteActive() with another stored profile error = %v", err)
+	}
+	if _, err := store.LoadActive(ctx, enterprise.Host); !errors.Is(err, errSessionNotFound) {
+		t.Fatalf("deleted profile LoadActive() error = %v", err)
+	}
+	if _, err := store.LoadActive(ctx, octocat.Host); err != nil {
+		t.Fatalf("remaining profile LoadActive() error = %v", err)
+	}
+
+	if err := store.DeleteActive(ctx, octocat.Host); err != nil {
+		t.Fatalf("final DeleteActive() error = %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("session file stat error = %v, want not exist", err)
+	}
+	if err := store.DeleteActive(ctx, octocat.Host); !errors.Is(err, errSessionNotFound) {
+		t.Fatalf("second DeleteActive() error = %v", err)
+	}
+}
+
+func TestDPAPISessionStoreHandlesCorruptionCancellationAndHelpers(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "sessions.dpapi")
+	store := newDPAPISessionStore(path)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := store.LoadActive(ctx, "github.com"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled LoadActive() error = %v", err)
+	}
+	if err := store.SaveActive(ctx, testStoredSession("github.com", "octocat")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled SaveActive() error = %v", err)
+	}
+	if err := store.DeleteActive(ctx, "github.com"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled DeleteActive() error = %v", err)
+	}
+	if contextFailure(testNilContext()) != nil || contextFailure(context.Background()) != nil {
+		t.Fatal("context helper reported an active context as failed")
+	}
+
+	if err := os.WriteFile(path, []byte("not DPAPI data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.load(); err == nil {
+		t.Fatal("load accepted an undecryptable session")
+	}
+
+	invalidJSON, err := protectDPAPI([]byte("{"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, invalidJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.load(); err == nil {
+		t.Fatal("load accepted invalid JSON")
+	}
+
+	unsupported, err := protectDPAPI([]byte(`{"schemaVersion":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, unsupported, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.load(); err == nil {
+		t.Fatal("load accepted an unsupported schema")
+	}
+
+	emptyMaps, err := protectDPAPI([]byte(`{"schemaVersion":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, emptyMaps, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	document, err := store.load()
+	if err != nil || document.ActiveByHost == nil || document.Sessions == nil {
+		t.Fatalf("load initialized nil maps = (%#v, %v)", document, err)
+	}
+
+	plain := []byte("refresh-session")
+	protected, err := protectDPAPI(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip, err := unprotectDPAPI(protected)
+	if err != nil || string(roundTrip) != string(plain) {
+		t.Fatalf("DPAPI round trip = (%q, %v)", roundTrip, err)
+	}
+	if _, err := protectDPAPI(nil); err == nil {
+		t.Fatal("protectDPAPI accepted empty data")
+	}
+	if _, err := unprotectDPAPI(nil); err == nil {
+		t.Fatal("unprotectDPAPI accepted empty data")
+	}
+	freeDPAPIBlob(nil)
+	if normalizeHost(" GitHub.COM ") != "github.com" {
+		t.Fatal("normalizeHost did not canonicalize the host")
+	}
+	if document := emptySessionDocument(); document.SchemaVersion != sessionStoreSchemaVersion ||
+		len(document.ActiveByHost) != 0 || len(document.Sessions) != 0 {
+		t.Fatalf("empty session document = %#v", document)
+	}
+	if path, err := defaultDPAPISessionStorePath(); err != nil || !strings.HasSuffix(path, "github-app-sessions.dpapi") {
+		t.Fatalf("default session path = (%q, %v)", path, err)
+	}
+}
+
+func TestDPAPISessionStoreReportsFilesystemAndIndexFailures(t *testing.T) {
+	pathErr := errors.New("path unavailable")
+	store := &dpapiSessionStore{
+		path: func() (string, error) {
+			return "", pathErr
+		},
+	}
+	if _, err := store.load(); !errors.Is(err, pathErr) {
+		t.Fatalf("load path error = %v", err)
+	}
+	if err := store.save(emptySessionDocument()); !errors.Is(err, pathErr) {
+		t.Fatalf("save path error = %v", err)
+	}
+
+	root := t.TempDir()
+	path := filepath.Join(root, "sessions.dpapi")
+	store = newDPAPISessionStore(path)
+	document := emptySessionDocument()
+	document.ActiveByHost["github.com"] = "missing"
+	encrypted, err := protectDPAPI(mustJSON(t, document))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encrypted, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadActive(context.Background(), "github.com"); err == nil {
+		t.Fatal("LoadActive accepted an inconsistent active session index")
+	}
+
+	directoryPath := filepath.Join(root, "session-directory")
+	if err := os.Mkdir(directoryPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directoryPath, "keep"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	directoryStore := newDPAPISessionStore(directoryPath)
+	if err := directoryStore.save(emptySessionDocument()); err == nil {
+		t.Fatal("save accepted a directory in place of the session file")
+	}
+	if err := directoryStore.save(sessionDocument{
+		SchemaVersion: sessionStoreSchemaVersion,
+		ActiveByHost:  map[string]string{"github.com": "octocat"},
+		Sessions:      map[string]Session{sessionKey("github.com", "octocat"): testStoredSession("github.com", "octocat")},
+	}); err == nil {
+		t.Fatal("save replaced a directory as a session file")
+	}
+}
+
+func TestDPAPISessionStoreInjectableFailurePaths(t *testing.T) {
+	document := sessionDocument{
+		SchemaVersion: sessionStoreSchemaVersion,
+		ActiveByHost:  map[string]string{"github.com": "octocat"},
+		Sessions: map[string]Session{
+			sessionKey("github.com", "octocat"): testStoredSession("github.com", "octocat"),
+		},
+	}
+
+	t.Run("propagates read failures through every operation", func(t *testing.T) {
+		preserveWindowsStoreHooks(t)
+		readErr := errors.New("read failed")
+		readSessionFile = func(string) ([]byte, error) {
+			return nil, readErr
+		}
+		store := newDPAPISessionStore("session.dpapi")
+		if _, err := store.LoadActive(context.Background(), "github.com"); !errors.Is(err, readErr) {
+			t.Fatalf("LoadActive read error = %v", err)
+		}
+		if err := store.SaveActive(context.Background(), testStoredSession("github.com", "octocat")); !errors.Is(err, readErr) {
+			t.Fatalf("SaveActive read error = %v", err)
+		}
+		if err := store.DeleteActive(context.Background(), "github.com"); !errors.Is(err, readErr) {
+			t.Fatalf("DeleteActive read error = %v", err)
+		}
+	})
+
+	t.Run("reports user configuration directory failures", func(t *testing.T) {
+		preserveWindowsStoreHooks(t)
+		expected := errors.New("user config unavailable")
+		userConfigDirectory = func() (string, error) {
+			return "", expected
+		}
+		if _, err := defaultDPAPISessionStorePath(); !errors.Is(err, expected) {
+			t.Fatalf("defaultDPAPISessionStorePath() error = %v", err)
+		}
+	})
+
+	t.Run("reports DPAPI protection failures", func(t *testing.T) {
+		preserveWindowsStoreHooks(t)
+		expected := errors.New("protect failed")
+		cryptProtectData = func(
+			*windows.DataBlob,
+			*uint16,
+			*windows.DataBlob,
+			uintptr,
+			*windows.CryptProtectPromptStruct,
+			uint32,
+			*windows.DataBlob,
+		) error {
+			return expected
+		}
+		if _, err := protectDPAPI([]byte("plaintext")); !errors.Is(err, expected) {
+			t.Fatalf("protectDPAPI() error = %v", err)
+		}
+	})
+
+	t.Run("reports DPAPI unprotection failures", func(t *testing.T) {
+		preserveWindowsStoreHooks(t)
+		expected := errors.New("unprotect failed")
+		cryptUnprotectData = func(
+			*windows.DataBlob,
+			**uint16,
+			*windows.DataBlob,
+			uintptr,
+			*windows.CryptProtectPromptStruct,
+			uint32,
+			*windows.DataBlob,
+		) error {
+			return expected
+		}
+		if _, err := unprotectDPAPI([]byte("protected")); !errors.Is(err, expected) {
+			t.Fatalf("unprotectDPAPI() error = %v", err)
+		}
+	})
+
+	t.Run("reports filesystem write failures", func(t *testing.T) {
+		for _, testCase := range []struct {
+			name      string
+			configure func()
+		}{
+			{
+				name: "remove",
+				configure: func() {
+					removeSessionFile = func(string) error {
+						return errors.New("remove failed")
+					}
+				},
+			},
+			{
+				name: "mkdir",
+				configure: func() {
+					makeSessionDir = func(string, os.FileMode) error {
+						return errors.New("mkdir failed")
+					}
+				},
+			},
+			{
+				name: "encrypt",
+				configure: func() {
+					cryptProtectData = func(
+						*windows.DataBlob,
+						*uint16,
+						*windows.DataBlob,
+						uintptr,
+						*windows.CryptProtectPromptStruct,
+						uint32,
+						*windows.DataBlob,
+					) error {
+						return errors.New("encrypt failed")
+					}
+				},
+			},
+			{
+				name: "create temporary file",
+				configure: func() {
+					createSessionTemp = func(string, string) (sessionTemporaryFile, error) {
+						return nil, errors.New("create failed")
+					}
+				},
+			},
+			{
+				name: "chmod",
+				configure: func() {
+					createSessionTemp = func(string, string) (sessionTemporaryFile, error) {
+						return fakeSessionTemporaryFile{chmodErr: errors.New("chmod failed")}, nil
+					}
+				},
+			},
+			{
+				name: "write",
+				configure: func() {
+					createSessionTemp = func(string, string) (sessionTemporaryFile, error) {
+						return fakeSessionTemporaryFile{writeErr: errors.New("write failed")}, nil
+					}
+				},
+			},
+			{
+				name: "close",
+				configure: func() {
+					createSessionTemp = func(string, string) (sessionTemporaryFile, error) {
+						return fakeSessionTemporaryFile{closeErr: errors.New("close failed")}, nil
+					}
+				},
+			},
+			{
+				name: "rename",
+				configure: func() {
+					renameSessionFile = func(string, string) error {
+						return errors.New("rename failed")
+					}
+				},
+			},
+		} {
+			testCase := testCase
+			t.Run(testCase.name, func(t *testing.T) {
+				preserveWindowsStoreHooks(t)
+				makeSessionDir = func(string, os.FileMode) error { return nil }
+				createSessionTemp = func(string, string) (sessionTemporaryFile, error) {
+					return fakeSessionTemporaryFile{}, nil
+				}
+				renameSessionFile = func(string, string) error { return nil }
+				removeSessionFile = func(string) error { return nil }
+				testCase.configure()
+				store := newDPAPISessionStore("session.dpapi")
+				if testCase.name == "remove" {
+					if err := store.save(emptySessionDocument()); err == nil {
+						t.Fatal("save unexpectedly succeeded")
+					}
+					return
+				}
+				if err := store.save(document); err == nil {
+					t.Fatal("save unexpectedly succeeded")
+				}
+			})
+		}
+	})
+}
+
+type fakeSessionTemporaryFile struct {
+	chmodErr error
+	writeErr error
+	closeErr error
+}
+
+func (file fakeSessionTemporaryFile) Name() string {
+	return "temporary.dpapi"
+}
+
+func (file fakeSessionTemporaryFile) Chmod(os.FileMode) error {
+	return file.chmodErr
+}
+
+func (file fakeSessionTemporaryFile) Write(value []byte) (int, error) {
+	if file.writeErr != nil {
+		return 0, file.writeErr
+	}
+	return len(value), nil
+}
+
+func (file fakeSessionTemporaryFile) Close() error {
+	return file.closeErr
+}
+
+func preserveWindowsStoreHooks(t *testing.T) {
+	t.Helper()
+	originalUserConfigDirectory := userConfigDirectory
+	originalReadSessionFile := readSessionFile
+	originalRemoveSessionFile := removeSessionFile
+	originalMakeSessionDir := makeSessionDir
+	originalCreateSessionTemp := createSessionTemp
+	originalRenameSessionFile := renameSessionFile
+	originalCryptProtectData := cryptProtectData
+	originalCryptUnprotectData := cryptUnprotectData
+	originalFreeLocalMemory := freeLocalMemory
+	t.Cleanup(func() {
+		userConfigDirectory = originalUserConfigDirectory
+		readSessionFile = originalReadSessionFile
+		removeSessionFile = originalRemoveSessionFile
+		makeSessionDir = originalMakeSessionDir
+		createSessionTemp = originalCreateSessionTemp
+		renameSessionFile = originalRenameSessionFile
+		cryptProtectData = originalCryptProtectData
+		cryptUnprotectData = originalCryptUnprotectData
+		freeLocalMemory = originalFreeLocalMemory
+	})
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}

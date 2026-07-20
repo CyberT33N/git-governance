@@ -97,7 +97,23 @@ Konfiguration wird:
 - mit restriktiven Benutzerrechten angelegt
 - nie als Secret Store verwendet
 
-### 6.1 Repository-Quality-Gates
+### 6.1 GitHub App credentials
+
+The configuration file never stores GitHub tokens, refresh tokens, App private
+keys, client secrets, broker credentials, or authorization headers. A local
+user supplies only the public GitHub App client ID through
+`GIT_GOVERNANCE_GITHUB_APP_CLIENT_ID`, then completes `auth login github` in a
+real terminal. The refresh session is protected by DPAPI on Windows, Keychain
+on macOS, or Secret Service on Linux; no plaintext fallback is permitted.
+
+Managed CI does not reuse a developer refresh session. It supplies a
+workload-identity token and a HTTPS credential-broker endpoint at deployment
+time. The broker holds the GitHub App private key outside the repository and
+mints only short-lived, repository-bound installation tokens. See
+[GitHub App authentication](../usage/authentication.md) for the precise
+runtime contract.
+
+### 6.2 Repository-Quality-Gates
 
 Projekt- und programmiersprachenabhängige Build-, Test- und Lint-Kommandos
 gehören nicht in die Binary und nicht in die Benutzerkonfiguration. Ein
@@ -242,24 +258,36 @@ bestehenden SemVer-Tag gebaut.
 Der normale automatisierte Pfad lautet:
 
 ```text
-git-governance workflow release cut
+git-governance --pull-request-provider github workflow release cut --dispatch
 -> maschinenlesbarer Intent für create-protected-line.yml
 -> autorisierter CI-Workflow erzeugt release/<semver> aus origin/develop
+-> CLI wartet auf den korrelierten Workflow und verifiziert origin/release/<semver>
 -> kontrollierte Stabilisierung und PR nach main
 release/<semver> -> geschützter Merge nach main
 -> CI prüft den Merge-Commit
 -> CI erstellt den annotierten Tag v<semver> genau auf diesem Commit
 -> CI startet den Artefaktworkflow für diesen Tag
 -> GoReleaser baut, signiert, attestiert und veröffentlicht
+-> Lifecycle-Adapter prüft Promotion, Tag, veröffentlichte Delivery und Delta
+-> bei Delta: reviewbarer Backmerge-PR nach develop
+-> ohne Delta: auditierbares not-required, kein leerer PR
 ```
 
-`create-protected-line.yml` ist ausschließlich manuell über GitHub Actions
-oder über eine später explizit konfigurierte, privilegierte Dispatch-Integration
-auszuführen. Es prüft Version, Quelllinie, Release-Tag bei Support-Linien und
-die Nichtexistenz der Zielbranche. Eine GitHub-Ruleset- oder
-Branch-Protection-Regel muss den Workflow als erlaubten Erzeuger von
-`release/*` und `support/*` festlegen; die lokale CLI erhält dafür keine
-Push-Berechtigung.
+`create-protected-line.yml` wird für vollständige nicht-interaktive Abläufe
+über den GitHub-Lifecycle-Adapter dispatcht. Der Adapter benötigt eine
+least-privileged Release-Automation-Identität, wartet auf den korrelierten
+Workflow und verifiziert die erzeugte Remote-Linie. Es prüft Version,
+Quelllinie, Release-Tag bei Support-Linien und die Nichtexistenz der
+Zielbranche. Eine GitHub-Ruleset- oder Branch-Protection-Regel muss den
+Workflow als erlaubten Erzeuger von `release/*` und `support/*` festlegen; die
+lokale CLI erhält dafür keine Push-Berechtigung.
+
+Wenn das `release/*`- oder `support/*`-Ruleset Required Status Checks
+erzwingt, muss dessen Status-Check-Regel
+`do_not_enforce_on_create: true` setzen. Andernfalls verlangt GitHub Checks
+für eine Zielbranch, bevor diese überhaupt existiert, und blockiert den
+kontrollierten Release- oder Support-Cut. Die Ausnahme gilt ausschließlich bei
+der ersten Ref-Erzeugung; alle Schutzregeln gelten danach unverändert.
 
 Ein mit `GITHUB_TOKEN` erzeugter Tag löst keinen weiteren Push-Workflow aus.
 Der Tag-Workflow startet deshalb den vorhandenen `workflow_dispatch`-Pfad des

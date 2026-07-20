@@ -6,6 +6,7 @@
 - [Hotfix workflows](hotfix.md)
 - [Hotfix propagation](propagation.md)
 - [Release and support workflows](release.md)
+- [Release reconciliation](release-reconciliation.md)
 - [Automate release workflows](release-automation.md)
 - [Scratch cleanup](cleanup.md)
 

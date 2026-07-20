@@ -70,6 +70,13 @@ type GitRepository interface {
 	) (PushUpdateInspection, error)
 }
 
+// GitTransportAuthenticator is an optional diagnostic capability. It verifies
+// that the configured Git transport can perform a non-interactive dry-run push
+// without mutating remote references.
+type GitTransportAuthenticator interface {
+	CheckTransportAuthentication(context.Context, RepositoryIdentity) error
+}
+
 // CherryPickContinuator is consumed only by workflows that must resume a
 // user-resolved cherry-pick. Keeping it separate avoids forcing unrelated Git
 // adapters and test fakes to implement a mutation they never invoke.
@@ -248,4 +255,49 @@ type PullRequestPublisher interface {
 // can validate credentials and routing before a Git branch is pushed.
 type PullRequestPublisherPreflight interface {
 	Validate(ctx context.Context, publication PullRequestPublication) error
+}
+
+// SharedLineDispatchRequest describes a provider-owned request to create a
+// protected release or support line. The application never directly pushes a
+// shared line.
+type SharedLineDispatchRequest struct {
+	Repository RepositoryIdentity
+	RemoteURL  string
+	Workflow   string
+	Ref        string
+	Inputs     map[string]string
+	Branch     branch.BranchName
+}
+
+// SharedLineDispatchResult records the completed provider workflow and the
+// protected line it created.
+type SharedLineDispatchResult struct {
+	WorkflowRunURL string
+	Branch         branch.BranchName
+}
+
+// ReleaseReconciliationRequest identifies one released line that must be
+// checked against the integration line before a conditional backmerge.
+type ReleaseReconciliationRequest struct {
+	Repository RepositoryIdentity
+	RemoteURL  string
+	Release    branch.BranchName
+}
+
+// ReleaseReconciliationEvidence proves the causal release-delivery gates and
+// reports whether a release-only effective delta remains for develop.
+type ReleaseReconciliationEvidence struct {
+	PromotionPullRequestURL string
+	PromotionMergeCommit    string
+	Tag                     string
+	ReleaseURL              string
+	EffectiveDelta          bool
+}
+
+// ReleaseLifecycleProvider is an optional hosting capability. It dispatches
+// protected-line creation and verifies the delivery evidence required before a
+// release-to-develop reconciliation can create a pull request.
+type ReleaseLifecycleProvider interface {
+	DispatchSharedLine(ctx context.Context, request SharedLineDispatchRequest) (SharedLineDispatchResult, error)
+	VerifyReleaseReconciliation(ctx context.Context, request ReleaseReconciliationRequest) (ReleaseReconciliationEvidence, error)
 }

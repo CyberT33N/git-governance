@@ -48,9 +48,9 @@ git governance --interactive never --output json --yes workflow ticket publish `
   --push
 ```
 
-To create the GitHub pull request as part of the same explicit operation, set
-the provider, expose a fine-grained token with `pull_requests: write` through
-`GIT_GOVERNANCE_GITHUB_TOKEN`, and add `--create-pull-request`:
+To create the GitHub pull request as part of the same explicit operation, log
+in first with `auth login github` or configure the managed credential broker,
+then set the provider and add `--create-pull-request`:
 
 ```powershell
 git governance --interactive never --output json --yes `
@@ -59,7 +59,10 @@ git governance --interactive never --output json --yes `
   --create-pull-request
 ```
 
-The adapter derives the GitHub owner and repository from the selected remote,
-checks for an equivalent open pull request, and creates one only when none
-exists. `--create-pull-request` requires `--push`; the default remains an
-intent-only result.
+The adapter derives the GitHub host, owner, and repository from the selected
+remote. It resolves a short-lived GitHub App credential just in time, verifies
+the exact App/user or broker/repository authorization, checks for an equivalent
+open pull request, and creates one only when none exists.
+`--create-pull-request` requires `--push`; the default remains an intent-only
+result. Publication never starts browser login or accepts a GitHub token flag;
+see [GitHub App authentication](../../authentication.md).

@@ -39,9 +39,24 @@ and restores a temporary `.bak` recovery copy if an interrupted replacement
 leaves the target absent. It never stores secrets or a global default ticket
 number.
 
-GitHub tokens are separate deployment configuration. Set
-`GIT_GOVERNANCE_GITHUB_TOKEN` in the invoking environment; never place it in
-the preference file or a command-line flag.
+GitHub authentication is not stored in this preference file. Local users set
+only the non-secret GitHub App client ID in the invoking environment:
 
-For GitHub Enterprise, set `GIT_GOVERNANCE_GITHUB_API_URL` to the HTTPS API
-root. Public GitHub defaults to [api.github.com](https://api.github.com).
+```powershell
+$env:GIT_GOVERNANCE_GITHUB_APP_CLIENT_ID = "<GitHub-App-client-ID>"
+```
+
+Then run `git governance auth login github` interactively. The protected
+refresh session belongs to the operating system's native secret store; API
+access tokens remain in memory and are renewed just in time.
+
+Managed CI uses a broker endpoint and workload identity supplied by its
+deployment environment, not by this file:
+
+```text
+GIT_GOVERNANCE_GITHUB_CREDENTIAL_BROKER_URL
+GIT_GOVERNANCE_WORKLOAD_IDENTITY_TOKEN
+```
+
+See [GitHub App authentication](authentication.md) for the complete local
+login, broker, host-isolation, rotation, and logout contract.

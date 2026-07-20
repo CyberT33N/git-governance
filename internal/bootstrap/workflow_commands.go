@@ -987,7 +987,10 @@ func addQualityFields(fields map[string]string, result workflow.PublishTicketRes
 }
 
 func newReleaseCutCommand(application *application) *cobra.Command {
-	var versionRaw string
+	var (
+		versionRaw string
+		dispatch   bool
+	)
 	command := &cobra.Command{
 		Use:   "cut",
 		Short: "Prepare a protected CI request for release/<semver> from develop",
@@ -1013,24 +1016,41 @@ func newReleaseCutCommand(application *application) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			var dispatched port.SharedLineDispatchResult
+			if dispatch && !application.options.dryRun {
+				if services.lifecycle == nil {
+					return releaseLifecycleProviderUnavailable()
+				}
+				dispatched, err = services.releases.DispatchSharedLine(command.Context(), repository, result.Intent)
+				if err != nil {
+					return err
+				}
+			}
+			summary := "Protected release-line creation intent prepared."
+			if dispatch && !application.options.dryRun {
+				summary = "Protected release line created and verified."
+			}
 			return application.report(command, port.Report{
 				Operation: "workflow.release.cut",
 				Summary: application.withInteractiveFetchSummary(
-					"Protected release-line creation intent prepared.",
+					summary,
 					repository.Remote,
 					fetchCompleted(result.DryRun, result.Plan),
 				),
 				Fields: map[string]string{
-					"branch":   result.Intent.Branch.String(),
-					"base":     result.Intent.Source.String(),
-					"workflow": result.Intent.Workflow,
-					"dryRun":   boolString(result.DryRun),
+					"branch":            result.Intent.Branch.String(),
+					"base":              result.Intent.Source.String(),
+					"workflow":          result.Intent.Workflow,
+					"dispatchRequested": boolString(dispatch),
+					"workflowRunURL":    dispatched.WorkflowRunURL,
+					"dryRun":            boolString(result.DryRun),
 				},
 				Data: result.Intent,
 			})
 		}),
 	}
 	command.Flags().StringVar(&versionRaw, "version", "", "release semantic version")
+	command.Flags().BoolVar(&dispatch, "dispatch", false, "dispatch and verify the protected-line workflow through the configured provider")
 	return command
 }
 
@@ -1329,7 +1349,7 @@ func newReleaseBackmergeCommand(application *application) *cobra.Command {
 	var draft bool
 	command := &cobra.Command{
 		Use:   "backmerge",
-		Short: "Prepare the release/<semver> to develop pull request",
+		Short: "Verify release delivery and conditionally prepare a develop backmerge",
 		RunE: withWorkflowInputs(func(command *cobra.Command, inputs *workflowInputSummary) error {
 			services := application.services()
 			repository, err := application.discover(command.Context(), services)
@@ -1340,13 +1360,13 @@ func newReleaseBackmergeCommand(application *application) *cobra.Command {
 				command.Context(),
 				releaseRaw,
 				"Release branch",
-				"Enter the completed release/<semantic-version> branch to backmerge into develop. Example: release/2.8.0.",
+				"Enter the delivered release/<semantic-version> branch to reconcile with develop. Example: release/2.8.0.",
 			)
 			if err != nil {
 				return err
 			}
 			inputs.add("release branch", release.String())
-			result, err := services.releases.PrepareReleaseBackmerge(command.Context(), workflow.PrepareReleaseBackmergeRequest{
+			result, err := services.releases.AssessReleaseBackmerge(command.Context(), workflow.AssessReleaseBackmergeRequest{
 				Repository: repository,
 				Release:    release,
 				Draft:      draft,
@@ -1355,46 +1375,67 @@ func newReleaseBackmergeCommand(application *application) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			fields := map[string]string{
+				"status":                  string(result.Status),
+				"promotionPullRequestURL": result.Evidence.PromotionPullRequestURL,
+				"promotionMergeCommit":    result.Evidence.PromotionMergeCommit,
+				"tag":                     result.Evidence.Tag,
+				"releaseURL":              result.Evidence.ReleaseURL,
+				"effectiveDelta":          boolString(result.Evidence.EffectiveDelta),
+			}
+			if result.PullRequest == nil {
+				return application.report(command, port.Report{
+					Operation: "workflow.release.backmerge",
+					Summary:   "Release reconciliation completed; no backmerge pull request is required.",
+					Fields:    fields,
+					Data:      result,
+				})
+			}
 			create, err := application.resolvePullRequestPublication(
 				command.Context(),
 				services,
-				result.PullRequest,
+				*result.PullRequest,
 				createPullRequest,
 			)
 			if err != nil {
 				return err
 			}
 			if create {
-				if err := services.tickets.PreflightPullRequest(command.Context(), repository, result.PullRequest); err != nil {
+				if err := services.tickets.PreflightPullRequest(command.Context(), repository, *result.PullRequest); err != nil {
 					return err
 				}
-				publishedURL, err := services.tickets.PublishPullRequest(command.Context(), repository, result.PullRequest)
+				publishedURL, err := services.tickets.PublishPullRequest(command.Context(), repository, *result.PullRequest)
 				if err != nil {
 					return err
 				}
-				result.PublishedURL = publishedURL
+				fields["url"] = publishedURL
+			}
+			fields["source"] = result.PullRequest.Source.String()
+			fields["target"] = result.PullRequest.Target.String()
+			fields["title"] = result.PullRequest.Title
+			summary := "Release reconciliation requires a backmerge pull request."
+			if result.Status == workflow.ReleaseBackmergePlanned {
+				summary = "Release reconciliation plan prepared."
 			}
 			return application.report(command, port.Report{
 				Operation: "workflow.release.backmerge",
-				Summary:   "Release backmerge pull request prepared.",
-				Fields: map[string]string{
-					"source": result.PullRequest.Source.String(),
-					"target": result.PullRequest.Target.String(),
-					"title":  result.PullRequest.Title,
-					"url":    result.PublishedURL,
-				},
-				Data: result.PullRequest,
+				Summary:   summary,
+				Fields:    fields,
+				Data:      result,
 			})
 		}),
 	}
-	command.Flags().StringVar(&releaseRaw, "release", "", "release/<semver> branch")
+	command.Flags().StringVar(&releaseRaw, "release", "", "delivered release/<semver> branch")
 	command.Flags().BoolVar(&createPullRequest, "create-pull-request", false, "create the pull request through the configured provider")
 	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
 	return command
 }
 
 func newSupportPrepareCommand(application *application) *cobra.Command {
-	var versionRaw string
+	var (
+		versionRaw string
+		dispatch   bool
+	)
 	command := &cobra.Command{
 		Use:   "support",
 		Short: "Prepare a protected CI request for support/<major.minor> from main",
@@ -1420,23 +1461,40 @@ func newSupportPrepareCommand(application *application) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			var dispatched port.SharedLineDispatchResult
+			if dispatch && !application.options.dryRun {
+				if services.lifecycle == nil {
+					return releaseLifecycleProviderUnavailable()
+				}
+				dispatched, err = services.releases.DispatchSharedLine(command.Context(), repository, result.Intent)
+				if err != nil {
+					return err
+				}
+			}
+			summary := "Protected support-line creation intent prepared."
+			if dispatch && !application.options.dryRun {
+				summary = "Protected support line created and verified."
+			}
 			return application.report(command, port.Report{
 				Operation: "workflow.release.support",
 				Summary: application.withInteractiveFetchSummary(
-					"Protected support-line creation intent prepared.",
+					summary,
 					repository.Remote,
 					fetchCompleted(result.DryRun, result.Plan),
 				),
 				Fields: map[string]string{
-					"branch":   result.Intent.Branch.String(),
-					"base":     result.Intent.Source.String(),
-					"workflow": result.Intent.Workflow,
-					"dryRun":   boolString(result.DryRun),
+					"branch":            result.Intent.Branch.String(),
+					"base":              result.Intent.Source.String(),
+					"workflow":          result.Intent.Workflow,
+					"dispatchRequested": boolString(dispatch),
+					"workflowRunURL":    dispatched.WorkflowRunURL,
+					"dryRun":            boolString(result.DryRun),
 				},
 				Data: result.Intent,
 			})
 		}),
 	}
 	command.Flags().StringVar(&versionRaw, "version", "", "support major.minor version")
+	command.Flags().BoolVar(&dispatch, "dispatch", false, "dispatch and verify the protected-line workflow through the configured provider")
 	return command
 }

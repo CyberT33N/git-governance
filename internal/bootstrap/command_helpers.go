@@ -237,7 +237,18 @@ func pullRequestPublisherUnavailable() error {
 		Field:       "pull request publisher",
 		Expected:    "a configured hosting-provider adapter",
 		Rule:        "a real pull request can be created only through an explicit provider adapter",
-		Remediation: "set --pull-request-provider github and configure GIT_GOVERNANCE_GITHUB_TOKEN",
+		Remediation: "set --pull-request-provider github and complete auth login github or configure the managed credential broker",
+	})
+}
+
+func releaseLifecycleProviderUnavailable() error {
+	return problem.New(problem.Details{
+		Code:        problem.CodeExternalCommandFailed,
+		Category:    problem.CategoryExternal,
+		Field:       "release lifecycle provider",
+		Expected:    "a configured GitHub lifecycle adapter",
+		Rule:        "protected-line dispatch and release reconciliation require an explicit hosting provider",
+		Remediation: "set --pull-request-provider github and configure an authorized GitHub App session or managed credential broker",
 	})
 }
 

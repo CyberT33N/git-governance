@@ -54,6 +54,22 @@ func (waitingRunner) run(ctx context.Context, _ string, _ io.Reader, _ ...string
 	return processResult{err: ctx.Err(), exitCode: -1}
 }
 
+type environmentFakeRunner struct {
+	*fakeRunner
+	environments [][]string
+}
+
+func (runner *environmentFakeRunner) runWithEnvironment(
+	ctx context.Context,
+	directory string,
+	stdin io.Reader,
+	environment []string,
+	arguments ...string,
+) processResult {
+	runner.environments = append(runner.environments, append([]string(nil), environment...))
+	return runner.fakeRunner.run(ctx, directory, stdin, arguments...)
+}
+
 func TestRepositoryReadOperations(t *testing.T) {
 	t.Parallel()
 
@@ -190,6 +206,103 @@ func TestDoctorGitOperations(t *testing.T) {
 			t.Fatalf("ActiveOperation() = (%q, %t, %v)", operation, active, err)
 		}
 	})
+}
+
+func TestCheckTransportAuthenticationUsesNonInteractiveDryRunPush(t *testing.T) {
+	identity := testIdentity()
+	t.Run("succeeds through the environment-aware process runner", func(t *testing.T) {
+		runner := &environmentFakeRunner{fakeRunner: &fakeRunner{results: []processResult{
+			{stdout: "feature/ABC-123-add-export\n"},
+			{},
+		}}}
+		repository := &Repository{runner: runner, timeout: time.Second}
+		if err := repository.CheckTransportAuthentication(context.Background(), identity); err != nil {
+			t.Fatalf("CheckTransportAuthentication() error = %v", err)
+		}
+		if len(runner.calls) != 2 || len(runner.environments) != 2 {
+			t.Fatalf("authentication calls=%#v environments=%#v", runner.calls, runner.environments)
+		}
+		assertCall(t, runner.calls[0], identity.Root, "", "branch", "--show-current")
+		assertCall(
+			t,
+			runner.calls[1],
+			identity.Root,
+			"",
+			"push",
+			"--dry-run",
+			"--no-verify",
+			"--porcelain",
+			identity.Remote,
+			"HEAD:refs/heads/feature/ABC-123-add-export",
+		)
+		for _, environment := range runner.environments {
+			if strings.Join(environment, ",") != strings.Join(noPromptGitEnvironment, ",") {
+				t.Fatalf("non-interactive environment = %#v", environment)
+			}
+		}
+	})
+
+	t.Run("falls back to a regular runner and rejects a detached HEAD", func(t *testing.T) {
+		runner := &fakeRunner{results: []processResult{{stdout: ""}}}
+		repository := &Repository{runner: runner, timeout: time.Second}
+		err := repository.CheckTransportAuthentication(context.Background(), identity)
+		assertProblemCode(t, err, problem.CodeGitCommandFailed)
+		if len(runner.calls) != 1 {
+			t.Fatalf("fallback authentication calls = %#v", runner.calls)
+		}
+	})
+
+	for _, testCase := range []struct {
+		name    string
+		results []processResult
+		code    problem.Code
+	}{
+		{
+			name: "branch lookup failure",
+			results: []processResult{{
+				err:      errors.New("branch failed"),
+				exitCode: 1,
+			}},
+			code: problem.CodeGitCommandFailed,
+		},
+		{
+			name: "push authentication failure",
+			results: []processResult{
+				{stdout: "feature/ABC-123-add-export"},
+				{err: errors.New("authentication failed"), exitCode: 128},
+			},
+			code: problem.CodeGitCommandFailed,
+		},
+		{
+			name: "push timeout",
+			results: []processResult{
+				{stdout: "feature/ABC-123-add-export"},
+				{err: context.DeadlineExceeded, exitCode: -1},
+			},
+			code: problem.CodeExternalCommandFailed,
+		},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			runner := &fakeRunner{results: testCase.results}
+			repository := &Repository{runner: runner, timeout: time.Second}
+			err := repository.CheckTransportAuthentication(context.Background(), identity)
+			assertProblemCode(t, err, testCase.code)
+			value, _ := problem.As(err)
+			if value.Field != "Git authentication" || strings.Contains(value.Error(), "authentication failed") {
+				t.Fatalf("authentication problem = %#v", value)
+			}
+		})
+	}
+}
+
+func TestInvokeNoPromptUsesBackgroundForNilContext(t *testing.T) {
+	runner := &fakeRunner{results: []processResult{{stdout: "ok"}}}
+	repository := &Repository{runner: runner, timeout: time.Second}
+	result := repository.invokeNoPrompt(testNilContext(), "C:/repo", nil, "--version")
+	if result.stdout != "ok" || len(runner.calls) != 1 {
+		t.Fatalf("invokeNoPrompt() = %#v, calls=%#v", result, runner.calls)
+	}
 }
 
 func TestContinueCherryPick(t *testing.T) {

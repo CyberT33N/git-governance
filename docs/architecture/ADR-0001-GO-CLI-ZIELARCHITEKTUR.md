@@ -184,8 +184,10 @@ cmd/
     main.go
 internal/
   adapters/
+    browser/
     configfs/
     gitcli/
+    github/
     quality/
     report/
     system/
@@ -259,6 +261,28 @@ Ticket-Scope in Workflows zu duplizieren.
 
 Der anfängliche `SyntaxOnlyKeyPolicy` akzeptiert jeden syntaktisch gültigen Key. Ein späterer `BundleKeyPolicy` darf ihn ohne Änderung der Use Cases ersetzen.
 
+### 9.4 GitHub-App-Authentifizierung
+
+GitHub-Authentifizierung ist eine externe Plattform-Capability und bleibt
+außerhalb des Ticket-, Branch-, Commit- und providerneutralen PR-Modells.
+`PullRequestPublisher` bleibt der application-owned Port; der GitHub-Adapter
+löst seine Credentials unmittelbar vor REST-Aufrufen selbst auf.
+
+- Lokale Benutzer verwenden den expliziten OAuth Device Flow über
+  `auth login github`. Der Browser wird nur von diesem Command gestartet.
+- Der lokale Client besitzt weder GitHub-App-Private-Key noch Client-Secret.
+  Deshalb ist der Device Flow der korrekte native Client Flow; PKCE ersetzt bei
+  GitHubs Authorization-Code-Austausch kein Client-Secret.
+- Persistiert wird ausschließlich eine host-/accountgebundene Refresh-Sitzung
+  im nativen OS-Tresor. Access-Tokens verbleiben im Prozessspeicher.
+- Der Resolver rotiert Access-/Refresh-Tokens kontrolliert, isoliert Hosts und
+  prüft die konkrete App-/Benutzer-/Repository-Schnittmenge.
+- Verwaltete CI-Workloads verwenden einen zentralen Broker. Der Broker hält
+  den Private Key außerhalb des Clients und mintet repositorygebundene,
+  kurzlebige Installation-Tokens nach Workload-Policy-Prüfung.
+- Git-Transportauthentifizierung bleibt getrennt. `doctor` prüft sie mit
+  einem nicht-mutierenden, nicht-interaktiven Push-Dry-Run.
+
 ## 10. Kanonische CLI-Oberfläche
 
 Eine Binary stellt getrennte Subcommands für getrennte Use Cases bereit:
@@ -279,6 +303,10 @@ git governance workflow release cut
 git governance workflow release backmerge
 
 git governance validate pre-push
+
+git governance auth login github
+git governance auth status github
+git governance auth logout github
 
 git governance config key list
 git governance config key add
@@ -339,6 +367,17 @@ Ein Hotfix startet von der real betroffenen Linie: `main`, derselben `release/*`
 ### 11.4 Release und Support
 
 `release/*` und `support/*` werden nicht über den normalen Branch-Wizard erzeugt. Der Wizard zeigt sie vollständig an, verweist aber auf die governance-gebundenen Workflow-Kommandos. `main` und `develop` werden erklärt, aber nie als normale Arbeitsbranch-Auswahl angeboten.
+
+`workflow release cut --dispatch` und `workflow release support --dispatch`
+rufen einen autorisierten Hosting-Adapter auf, warten auf den korrelierten
+CI-Workflow und verifizieren die erzeugte Remote-Linie nach einem Fetch. Ohne
+`--dispatch` bleibt die Ausgabe bewusst ein providerneutraler Intent.
+
+Ein Backmerge ist eine verpflichtende Reconciliation, kein pauschaler PR:
+erst nach gemergter Main-Promotion, exakt zugehörigem Tag und erfolgreicher
+Release-Delivery prüft der Hosting-Adapter den effektiven
+`release/<semver>`-zu-`develop`-Delta. Nur ein Delta erzeugt den Backmerge-PR;
+ohne Delta wird ein auditierbares `not-required`-Ergebnis geliefert.
 
 ## 12. Lefthook: Ergänzung statt Ersatz
 
@@ -451,6 +490,10 @@ Im JSON-Modus geht genau ein versioniertes Resultat auf stdout; Diagnosen gehen 
 - Keine Fire-and-forget-Goroutines; Git-Schritte laufen bewusst sequenziell.
 - Konfigurationsdateien werden mit plattformgerechter Recovery-Strategie ersetzt
   und mit restriktiven Rechten angelegt.
+- GitHub-App-Tokens, Refresh-Tokens, Private Keys und Authorization-Header
+  erscheinen nie in Flags, Preferences, Logs, Fehlern, Human- oder
+  JSON-Reports. Ohne nativen Secret Store oder autorisierten Broker wird
+  fail-closed abgebrochen.
 - Policy-Bundles benötigen später Version, Herkunft, Signatur/Checksumme und Staleness-Regel.
 - Hooks sind lokale Frühprüfung; CI und Remote Protection bleiben bindend.
 
@@ -463,6 +506,12 @@ privilegienminimierter GitHub-Actions-Workflow `v<semver>` als annotierten,
 unveränderlichen Tag auf genau dem Merge-Commit. Weil ein durch `GITHUB_TOKEN`
 erzeugter Tag keinen weiteren Push-Workflow auslöst, startet dieser Workflow
 den vorhandenen Artefaktworkflow ausdrücklich per `workflow_dispatch`.
+
+Nach erfolgreicher Artefakt- und Release-Veröffentlichung prüft der
+GitHub-Lifecycle-Adapter den Promotion-Merge, den exakten Tag und den
+effektiven Delta von `release/<semver>` nach `develop`. Nur bei Delta wird ein
+reviewbarer Backmerge-PR erstellt; andernfalls ist das auditierbare Ergebnis
+`not-required` der Reconciliation-Abschluss.
 
 Installationsskripte dürfen nicht ungefragt `.bashrc`, `.zshrc` oder PowerShell-Profile verändern. Details stehen in `docs/operations/INSTALLATION-UND-RELEASE.md`.
 

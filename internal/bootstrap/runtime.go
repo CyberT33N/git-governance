@@ -3,9 +3,12 @@ package bootstrap
 import (
 	"context"
 	"io"
+	"net/http"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/CyberT33N/git-governance/internal/adapters/browser"
 	"github.com/CyberT33N/git-governance/internal/adapters/configfs"
 	"github.com/CyberT33N/git-governance/internal/adapters/gitcli"
 	"github.com/CyberT33N/git-governance/internal/adapters/github"
@@ -38,16 +41,21 @@ type appOptions struct {
 }
 
 type Runtime struct {
-	GitFactory       func(timeout time.Duration) port.GitRepository
-	StoreFactory     func(path string) port.PreferencesStore
-	KeyPolicy        port.KeyPolicy
-	Quality          port.QualityRunner
-	QualityFactory   func(path string, timeout time.Duration) port.QualityRunner
-	Publisher        port.PullRequestPublisher
-	Tools            port.ToolInspector
-	PromptFactory    func(accessible bool, color string) port.Prompt
-	InputIsTerminal  func() bool
-	OutputIsTerminal func() bool
+	GitFactory                func(timeout time.Duration) port.GitRepository
+	StoreFactory              func(path string) port.PreferencesStore
+	KeyPolicy                 port.KeyPolicy
+	Quality                   port.QualityRunner
+	QualityFactory            func(path string, timeout time.Duration) port.QualityRunner
+	Publisher                 port.PullRequestPublisher
+	GitHubAuthFactory         func(timeout time.Duration) github.AuthProvider
+	Browser                   browser.Opener
+	GitHubAppClientID         func() string
+	GitHubCredentialBrokerURL func() string
+	GitHubWorkloadIdentity    func() string
+	Tools                     port.ToolInspector
+	PromptFactory             func(accessible bool, color string) port.Prompt
+	InputIsTerminal           func() bool
+	OutputIsTerminal          func() bool
 }
 
 type application struct {
@@ -63,8 +71,10 @@ type services struct {
 	commits     *commitapp.Service
 	tickets     *workflow.TicketService
 	releases    *workflow.ReleaseService
+	lifecycle   port.ReleaseLifecycleProvider
 	preferences *policy.PreferencesService
 	doctor      *policy.DoctorService
+	githubAuth  github.AuthProvider
 }
 
 func defaultRuntime() Runtime {
@@ -81,6 +91,21 @@ func defaultRuntime() Runtime {
 				Path:           path,
 				DefaultTimeout: timeout,
 			})
+		},
+		GitHubAuthFactory: func(timeout time.Duration) github.AuthProvider {
+			return github.NewAuthService(github.AuthOptions{
+				HTTPClient: &http.Client{Timeout: timeout},
+			})
+		},
+		Browser: browser.New(browser.Options{}),
+		GitHubAppClientID: func() string {
+			return os.Getenv("GIT_GOVERNANCE_GITHUB_APP_CLIENT_ID")
+		},
+		GitHubCredentialBrokerURL: func() string {
+			return os.Getenv("GIT_GOVERNANCE_GITHUB_CREDENTIAL_BROKER_URL")
+		},
+		GitHubWorkloadIdentity: func() string {
+			return os.Getenv("GIT_GOVERNANCE_WORKLOAD_IDENTITY_TOKEN")
 		},
 		Tools: system.New(system.Options{}),
 		PromptFactory: func(accessible bool, color string) port.Prompt {
@@ -104,6 +129,21 @@ func newApplication(runtime Runtime, options *appOptions) *application {
 	if runtime.Quality == nil && runtime.QualityFactory == nil {
 		runtime.QualityFactory = defaultRuntime().QualityFactory
 	}
+	if runtime.GitHubAuthFactory == nil {
+		runtime.GitHubAuthFactory = defaultRuntime().GitHubAuthFactory
+	}
+	if runtime.Browser == nil {
+		runtime.Browser = defaultRuntime().Browser
+	}
+	if runtime.GitHubAppClientID == nil {
+		runtime.GitHubAppClientID = defaultRuntime().GitHubAppClientID
+	}
+	if runtime.GitHubCredentialBrokerURL == nil {
+		runtime.GitHubCredentialBrokerURL = defaultRuntime().GitHubCredentialBrokerURL
+	}
+	if runtime.GitHubWorkloadIdentity == nil {
+		runtime.GitHubWorkloadIdentity = defaultRuntime().GitHubWorkloadIdentity
+	}
 	if runtime.Tools == nil {
 		runtime.Tools = defaultRuntime().Tools
 	}
@@ -126,12 +166,20 @@ func (application *application) services() services {
 	if qualityRunner == nil {
 		qualityRunner = application.runtime.QualityFactory(application.options.qualityConfig, application.options.timeout)
 	}
+	githubAuth := application.runtime.GitHubAuthFactory(application.options.timeout)
+	credentialResolver := github.CredentialResolver(githubAuth)
+	if brokerURL := strings.TrimSpace(application.runtime.GitHubCredentialBrokerURL()); brokerURL != "" {
+		credentialResolver = github.NewBrokerResolver(github.BrokerOptions{
+			Endpoint:         brokerURL,
+			WorkloadIdentity: application.runtime.GitHubWorkloadIdentity,
+			HTTPClient:       &http.Client{Timeout: application.options.timeout},
+		})
+	}
 	publisher := application.runtime.Publisher
 	if publisher == nil && application.options.pullRequestProvider == "github" {
 		publisher = github.New(github.Options{
-			Token:      os.Getenv("GIT_GOVERNANCE_GITHUB_TOKEN"),
-			APIBaseURL: os.Getenv("GIT_GOVERNANCE_GITHUB_API_URL"),
-			Timeout:    application.options.timeout,
+			Resolver: credentialResolver,
+			Timeout:  application.options.timeout,
 		})
 	}
 	branches := branchapp.NewService(git, application.runtime.KeyPolicy)
@@ -140,7 +188,10 @@ func (application *application) services() services {
 	commits := commitapp.NewService(git, application.runtime.KeyPolicy, sync)
 	tickets := workflow.NewTicketService(branches, sync, git, qualityRunner, publisher).
 		WithScratchMerger(scratch)
-	releases := workflow.NewReleaseService(branches, git, publisher).WithTicketService(tickets)
+	lifecycle, _ := publisher.(port.ReleaseLifecycleProvider)
+	releases := workflow.NewReleaseService(branches, git, publisher).
+		WithTicketService(tickets).
+		WithReleaseLifecycleProvider(lifecycle)
 	policyInspector, _ := application.runtime.KeyPolicy.(port.PolicyInspector)
 	return services{
 		git:         git,
@@ -150,8 +201,10 @@ func (application *application) services() services {
 		commits:     commits,
 		tickets:     tickets,
 		releases:    releases,
+		lifecycle:   lifecycle,
 		preferences: policy.NewPreferencesService(store),
 		doctor:      policy.NewDoctorServiceWithDependencies(git, store, policyInspector, application.runtime.Tools),
+		githubAuth:  githubAuth,
 	}
 }
 

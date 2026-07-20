@@ -568,6 +568,20 @@ func TestPolicyDoctorAndReportContracts(t *testing.T) {
 		}
 	})
 
+	t.Run("fails the command when Git transport authentication is unavailable", func(t *testing.T) {
+		expected := errors.New("Git transport credentials unavailable")
+		git := &utilityAuthFailureGit{
+			utilityCommandGit: newUtilityCommandGit(t, "feature/ABC-123-add-export", nil),
+			authErr:           expected,
+		}
+		application := newUtilityCommandApplication(git, &utilityPreferencesStore{}, nil, nil)
+		_, _, err := executeUtilityCommand(t, newDoctorCommand(application), context.Background(), nil)
+		if !errors.Is(err, expected) {
+			t.Fatalf("doctor authentication error = %v, want %v", err, expected)
+		}
+		assertProblemCode(t, err, problem.CodeGitCommandFailed)
+	})
+
 	t.Run("stops diagnostics when the command context is cancelled", func(t *testing.T) {
 		application := newUtilityCommandApplication(
 			newUtilityCommandGit(t, "main", nil),
@@ -766,6 +780,15 @@ type utilityCommandGit struct {
 	fetchCalls       int
 	fetchContexts    []context.Context
 	discoverContexts []context.Context
+}
+
+type utilityAuthFailureGit struct {
+	*utilityCommandGit
+	authErr error
+}
+
+func (git *utilityAuthFailureGit) CheckTransportAuthentication(context.Context, port.RepositoryIdentity) error {
+	return git.authErr
 }
 
 func newUtilityCommandGit(t *testing.T, current string, messages []string) *utilityCommandGit {

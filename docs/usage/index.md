@@ -30,6 +30,10 @@ git governance workflow cleanup
 
 git governance validate pre-push
 
+git governance auth login github
+git governance auth status github
+git governance auth logout github
+
 git governance config key list
 git governance config key add
 git governance config key remove
@@ -41,6 +45,7 @@ git governance completion <shell>
 ```
 
 - [Global options and interaction](global-options.md)
+- [GitHub App authentication](authentication.md)
 - [Project-agnostic quality gates](quality-gates.md)
 - [Branch taxonomy](branches/taxonomy.md)
 - [Branch creation](branches/create.md)

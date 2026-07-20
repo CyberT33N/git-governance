@@ -49,6 +49,27 @@ func (publisher workflowFailurePublisher) Publish(context.Context, port.PullRequ
 	return port.PublishedPullRequest{}, publisher.err
 }
 
+func (workflowFailurePublisher) DispatchSharedLine(
+	context.Context,
+	port.SharedLineDispatchRequest,
+) (port.SharedLineDispatchResult, error) {
+	return port.SharedLineDispatchResult{}, nil
+}
+
+func (workflowFailurePublisher) VerifyReleaseReconciliation(
+	_ context.Context,
+	request port.ReleaseReconciliationRequest,
+) (port.ReleaseReconciliationEvidence, error) {
+	version, _ := request.Release.ReleaseVersion()
+	return port.ReleaseReconciliationEvidence{
+		PromotionPullRequestURL: "https://example.invalid/pr/release",
+		PromotionMergeCommit:    strings.Repeat("a", 40),
+		Tag:                     "v" + version.String(),
+		ReleaseURL:              "https://example.invalid/releases/" + version.String(),
+		EffectiveDelta:          true,
+	}, nil
+}
+
 type workflowPreflightFailurePublisher struct {
 	err error
 }
@@ -59,6 +80,27 @@ func (publisher workflowPreflightFailurePublisher) Publish(context.Context, port
 
 func (publisher workflowPreflightFailurePublisher) Validate(context.Context, port.PullRequestPublication) error {
 	return publisher.err
+}
+
+func (workflowPreflightFailurePublisher) DispatchSharedLine(
+	context.Context,
+	port.SharedLineDispatchRequest,
+) (port.SharedLineDispatchResult, error) {
+	return port.SharedLineDispatchResult{}, nil
+}
+
+func (workflowPreflightFailurePublisher) VerifyReleaseReconciliation(
+	_ context.Context,
+	request port.ReleaseReconciliationRequest,
+) (port.ReleaseReconciliationEvidence, error) {
+	version, _ := request.Release.ReleaseVersion()
+	return port.ReleaseReconciliationEvidence{
+		PromotionPullRequestURL: "https://example.invalid/pr/release",
+		PromotionMergeCommit:    strings.Repeat("a", 40),
+		Tag:                     "v" + version.String(),
+		ReleaseURL:              "https://example.invalid/releases/" + version.String(),
+		EffectiveDelta:          true,
+	}, nil
 }
 
 func (git *workflowCommandCoverageGit) Discover(context.Context, string) (port.RepositoryIdentity, error) {

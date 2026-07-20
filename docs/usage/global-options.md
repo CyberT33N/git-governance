@@ -31,9 +31,11 @@
 
 For automation, use `--interactive never --output json`. A pull request is
 created only when `--create-pull-request` is supplied to a workflow.
-GitHub requires `--pull-request-provider github` and
-`GIT_GOVERNANCE_GITHUB_TOKEN`; never pass secrets as flags or save them in
-preferences.
+GitHub requires `--pull-request-provider github` and either an existing
+GitHub App session or a managed credential broker. The interactive
+`auth login github` command is intentionally unavailable in automation; see
+[GitHub App authentication](authentication.md). Never pass a GitHub token as a
+flag or save credentials in preferences.
 
 When an interactive human workflow completes a remote refresh, its success
 header starts with:

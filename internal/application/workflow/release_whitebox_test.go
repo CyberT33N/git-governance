@@ -196,6 +196,66 @@ type releaseWhiteboxPublisher struct {
 	requests []port.PullRequest
 }
 
+type releaseWhiteboxLifecycle struct {
+	dispatchResult port.SharedLineDispatchResult
+	dispatchErr    error
+	evidence       port.ReleaseReconciliationEvidence
+	verifyErr      error
+	dispatches     []port.SharedLineDispatchRequest
+	reconciles     []port.ReleaseReconciliationRequest
+}
+
+func (lifecycle *releaseWhiteboxLifecycle) DispatchSharedLine(
+	ctx context.Context,
+	request port.SharedLineDispatchRequest,
+) (port.SharedLineDispatchResult, error) {
+	lifecycle.dispatches = append(lifecycle.dispatches, request)
+	if lifecycle.dispatchErr != nil {
+		return port.SharedLineDispatchResult{}, lifecycle.dispatchErr
+	}
+	return lifecycle.dispatchResult, nil
+}
+
+func (lifecycle *releaseWhiteboxLifecycle) VerifyReleaseReconciliation(
+	ctx context.Context,
+	request port.ReleaseReconciliationRequest,
+) (port.ReleaseReconciliationEvidence, error) {
+	lifecycle.reconciles = append(lifecycle.reconciles, request)
+	if lifecycle.verifyErr != nil {
+		return port.ReleaseReconciliationEvidence{}, lifecycle.verifyErr
+	}
+	return lifecycle.evidence, nil
+}
+
+type releaseLifecycleGit struct {
+	*releaseWhiteboxGit
+
+	remoteURLErr error
+	targetExists bool
+	targetErr    error
+}
+
+func (git *releaseLifecycleGit) RemoteURL(ctx context.Context, repository port.RepositoryIdentity) (string, error) {
+	if git.remoteURLErr != nil {
+		return "", git.remoteURLErr
+	}
+	return git.releaseWhiteboxGit.RemoteURL(ctx, repository)
+}
+
+func (git *releaseLifecycleGit) TargetBaseExists(
+	ctx context.Context,
+	repository port.RepositoryIdentity,
+	base branch.TargetBase,
+) (bool, error) {
+	if git.targetErr != nil {
+		return false, git.targetErr
+	}
+	if !git.targetExists {
+		return false, nil
+	}
+	return git.releaseWhiteboxGit.TargetBaseExists(ctx, repository, base)
+}
+
 type nonContinuingGit struct {
 	port.GitRepository
 }
@@ -500,6 +560,243 @@ func TestReleaseWhiteboxCutReleaseCreatesOnlyCIIntent(t *testing.T) {
 		}
 		assertReleaseNoCall(t, git.calls, "create-branch")
 		assertReleaseNoCall(t, git.calls, "push")
+	})
+}
+
+func TestReleaseWhiteboxDispatchAndAssessReleaseLifecycle(t *testing.T) {
+	release := mustBranch("release/2.8.0")
+	version := mustReleaseVersion(t, "2.8.0")
+
+	t.Run("dispatches a prepared protected line and verifies its fetched reference", func(t *testing.T) {
+		git := newReleaseWhiteboxGit()
+		lifecycle := &releaseWhiteboxLifecycle{
+			dispatchResult: port.SharedLineDispatchResult{
+				WorkflowRunURL: "https://example.invalid/actions/42",
+				Branch:         release,
+			},
+		}
+		service := newReleaseWhiteboxService(git, nil).WithReleaseLifecycleProvider(lifecycle)
+		intent, err := service.CutRelease(context.Background(), CutReleaseRequest{
+			Repository: testRepository(),
+			Version:    version,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := service.DispatchSharedLine(context.Background(), testRepository(), intent.Intent)
+		if err != nil || result != lifecycle.dispatchResult || len(lifecycle.dispatches) != 1 {
+			t.Fatalf("DispatchSharedLine() = (%#v, %v), dispatches=%#v", result, err, lifecycle.dispatches)
+		}
+		request := lifecycle.dispatches[0]
+		if request.Workflow != "create-protected-line.yml" || request.Ref != "main" ||
+			request.Inputs["kind"] != "release" || request.Inputs["version"] != "2.8.0" ||
+			request.Branch != release || request.RemoteURL == "" {
+			t.Fatalf("dispatch request = %#v", request)
+		}
+		if countCall(git.calls, "fetch") != 2 {
+			t.Fatalf("dispatch fetch calls = %v", git.calls)
+		}
+	})
+
+	t.Run("rejects incomplete dispatch dependencies, intents, provider failures, and mismatched lines", func(t *testing.T) {
+		intent := SharedLineIntent{
+			Workflow: "create-protected-line.yml",
+			Kind:     "release",
+			Branch:   release,
+			Inputs:   map[string]string{"kind": "release", "version": "2.8.0"},
+		}
+		_, err := (&ReleaseService{}).DispatchSharedLine(context.Background(), testRepository(), intent)
+		assertProblemCode(t, err, problem.CodeInternal)
+
+		git := newReleaseWhiteboxGit()
+		_, err = (&ReleaseService{git: git}).DispatchSharedLine(context.Background(), testRepository(), intent)
+		assertProblemCode(t, err, problem.CodeInternal)
+
+		service := newReleaseWhiteboxService(git, nil).WithReleaseLifecycleProvider(&releaseWhiteboxLifecycle{})
+		_, err = service.DispatchSharedLine(context.Background(), testRepository(), SharedLineIntent{})
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+
+		dispatchFailure := errors.New("dispatch failed")
+		service = newReleaseWhiteboxService(git, nil).WithReleaseLifecycleProvider(&releaseWhiteboxLifecycle{dispatchErr: dispatchFailure})
+		_, err = service.DispatchSharedLine(context.Background(), testRepository(), intent)
+		assertReleaseErrorIs(t, err, dispatchFailure)
+
+		service = newReleaseWhiteboxService(git, nil).WithReleaseLifecycleProvider(&releaseWhiteboxLifecycle{
+			dispatchResult: port.SharedLineDispatchResult{Branch: mustBranch("release/2.9.0")},
+		})
+		_, err = service.DispatchSharedLine(context.Background(), testRepository(), intent)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+	})
+
+	t.Run("covers dispatch repository, remote, fetch, target, and zero-value result paths", func(t *testing.T) {
+		intent := SharedLineIntent{
+			Workflow: "create-protected-line.yml",
+			Kind:     "release",
+			Branch:   release,
+			Inputs:   map[string]string{"kind": "release", "version": "2.8.0"},
+		}
+		newService := func(git *releaseLifecycleGit) *ReleaseService {
+			return newReleaseWhiteboxService(git, nil).WithReleaseLifecycleProvider(&releaseWhiteboxLifecycle{
+				dispatchResult: port.SharedLineDispatchResult{WorkflowRunURL: "https://example.invalid/actions/42"},
+			})
+		}
+
+		git := &releaseLifecycleGit{releaseWhiteboxGit: newReleaseWhiteboxGit(), targetExists: true}
+		service := newService(git)
+		result, err := service.DispatchSharedLine(context.Background(), testRepository(), intent)
+		if err != nil || result.Branch != release {
+			t.Fatalf("zero-value provider branch result = (%#v, %v)", result, err)
+		}
+
+		_, err = service.DispatchSharedLine(context.Background(), port.RepositoryIdentity{}, intent)
+		assertProblemCode(t, err, problem.CodeRepositoryNotFound)
+
+		git = &releaseLifecycleGit{
+			releaseWhiteboxGit: newReleaseWhiteboxGit(),
+			remoteURLErr:       errors.New("remote unavailable"),
+			targetExists:       true,
+		}
+		_, err = newService(git).DispatchSharedLine(context.Background(), testRepository(), intent)
+		if err == nil || !strings.Contains(err.Error(), "remote unavailable") {
+			t.Fatalf("remote URL error = %v", err)
+		}
+
+		git = &releaseLifecycleGit{releaseWhiteboxGit: newReleaseWhiteboxGit(), targetExists: true}
+		git.fetchErrors = []error{errors.New("fetch dispatched line")}
+		_, err = newService(git).DispatchSharedLine(context.Background(), testRepository(), intent)
+		if err == nil || !strings.Contains(err.Error(), "fetch dispatched line") {
+			t.Fatalf("dispatch fetch error = %v", err)
+		}
+
+		git = &releaseLifecycleGit{releaseWhiteboxGit: newReleaseWhiteboxGit(), targetExists: false}
+		_, err = newService(git).DispatchSharedLine(context.Background(), testRepository(), intent)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+
+		git = &releaseLifecycleGit{
+			releaseWhiteboxGit: newReleaseWhiteboxGit(),
+			targetExists:       true,
+			targetErr:          errors.New("target lookup failed"),
+		}
+		_, err = newService(git).DispatchSharedLine(context.Background(), testRepository(), intent)
+		if err == nil || !strings.Contains(err.Error(), "target lookup failed") {
+			t.Fatalf("dispatch target error = %v", err)
+		}
+
+		git = &releaseLifecycleGit{releaseWhiteboxGit: newReleaseWhiteboxGit(), targetExists: true}
+		_, err = newService(git).DispatchSharedLine(context.Background(), port.RepositoryIdentity{
+			Root:   testRepository().Root,
+			Remote: "invalid remote",
+		}, intent)
+		assertProblemCode(t, err, problem.CodeBranchBaseInvalid)
+	})
+
+	t.Run("plans a dry run and enforces lifecycle evidence for actual reconciliation", func(t *testing.T) {
+		git := newReleaseWhiteboxGit()
+		service := newReleaseWhiteboxService(git, nil)
+		planned, err := service.AssessReleaseBackmerge(context.Background(), AssessReleaseBackmergeRequest{
+			Repository: testRepository(),
+			Release:    release,
+			DryRun:     true,
+		})
+		if err != nil || planned.Status != ReleaseBackmergePlanned || planned.PullRequest == nil ||
+			planned.PullRequest.Target.String() != "develop" {
+			t.Fatalf("dry-run assessment = (%#v, %v)", planned, err)
+		}
+
+		_, err = service.AssessReleaseBackmerge(context.Background(), AssessReleaseBackmergeRequest{
+			Repository: testRepository(),
+			Release:    release,
+		})
+		assertProblemCode(t, err, problem.CodeInternal)
+
+		_, err = (&ReleaseService{lifecycle: &releaseWhiteboxLifecycle{}}).AssessReleaseBackmerge(
+			context.Background(),
+			AssessReleaseBackmergeRequest{Repository: testRepository(), Release: release},
+		)
+		assertProblemCode(t, err, problem.CodeInternal)
+
+		service = newReleaseWhiteboxService(git, nil).WithReleaseLifecycleProvider(&releaseWhiteboxLifecycle{})
+		_, err = service.AssessReleaseBackmerge(context.Background(), AssessReleaseBackmergeRequest{
+			Repository: port.RepositoryIdentity{},
+			Release:    release,
+		})
+		assertProblemCode(t, err, problem.CodeRepositoryNotFound)
+	})
+
+	t.Run("returns a no-op result only after verified delivery and creates an intent for an effective delta", func(t *testing.T) {
+		git := newReleaseWhiteboxGit()
+		evidence := port.ReleaseReconciliationEvidence{
+			PromotionPullRequestURL: "https://example.invalid/pr/8",
+			PromotionMergeCommit:    strings.Repeat("a", 40),
+			Tag:                     "v2.8.0",
+			ReleaseURL:              "https://example.invalid/releases/v2.8.0",
+			EffectiveDelta:          false,
+		}
+		lifecycle := &releaseWhiteboxLifecycle{evidence: evidence}
+		service := newReleaseWhiteboxService(git, nil).WithReleaseLifecycleProvider(lifecycle)
+		result, err := service.AssessReleaseBackmerge(context.Background(), AssessReleaseBackmergeRequest{
+			Repository: testRepository(),
+			Release:    release,
+		})
+		if err != nil || result.Status != ReleaseBackmergeNotRequired || result.PullRequest != nil ||
+			len(lifecycle.reconciles) != 1 {
+			t.Fatalf("no-op assessment = (%#v, %v), calls=%#v", result, err, lifecycle.reconciles)
+		}
+
+		lifecycle.evidence.EffectiveDelta = true
+		result, err = service.AssessReleaseBackmerge(context.Background(), AssessReleaseBackmergeRequest{
+			Repository: testRepository(),
+			Release:    release,
+			Draft:      true,
+		})
+		if err != nil || result.Status != ReleaseBackmergeRequired || result.PullRequest == nil ||
+			result.PullRequest.Target.String() != "develop" || !result.PullRequest.Draft {
+			t.Fatalf("required assessment = (%#v, %v)", result, err)
+		}
+	})
+
+	t.Run("rejects invalid reconciliation evidence and provider failures", func(t *testing.T) {
+		git := newReleaseWhiteboxGit()
+		verifyFailure := errors.New("verify delivery")
+		service := newReleaseWhiteboxService(git, nil).WithReleaseLifecycleProvider(&releaseWhiteboxLifecycle{verifyErr: verifyFailure})
+		_, err := service.AssessReleaseBackmerge(context.Background(), AssessReleaseBackmergeRequest{
+			Repository: testRepository(),
+			Release:    release,
+		})
+		assertReleaseErrorIs(t, err, verifyFailure)
+
+		service = newReleaseWhiteboxService(git, nil).WithReleaseLifecycleProvider(&releaseWhiteboxLifecycle{
+			evidence: port.ReleaseReconciliationEvidence{
+				PromotionMergeCommit: strings.Repeat("a", 40),
+				Tag:                  "v2.9.0",
+				ReleaseURL:           "https://example.invalid/releases/v2.9.0",
+			},
+		})
+		_, err = service.AssessReleaseBackmerge(context.Background(), AssessReleaseBackmergeRequest{
+			Repository: testRepository(),
+			Release:    release,
+		})
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+
+		_, err = service.AssessReleaseBackmerge(context.Background(), AssessReleaseBackmergeRequest{
+			Repository: testRepository(),
+			Release:    mustBranch("main"),
+		})
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+
+		lifecycleGit := &releaseLifecycleGit{
+			releaseWhiteboxGit: newReleaseWhiteboxGit(),
+			remoteURLErr:       errors.New("reconciliation remote unavailable"),
+			targetExists:       true,
+		}
+		service = newReleaseWhiteboxService(lifecycleGit, nil).WithReleaseLifecycleProvider(&releaseWhiteboxLifecycle{})
+		_, err = service.AssessReleaseBackmerge(context.Background(), AssessReleaseBackmergeRequest{
+			Repository: testRepository(),
+			Release:    release,
+		})
+		if err == nil || !strings.Contains(err.Error(), "reconciliation remote unavailable") {
+			t.Fatalf("reconciliation remote error = %v", err)
+		}
 	})
 }
 

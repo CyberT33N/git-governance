@@ -59,7 +59,7 @@ func TestPublisherCreatesAndReusesPullRequests(t *testing.T) {
 		defer server.Close()
 
 		publisher := New(Options{
-			Token:      "token",
+			Resolver:   testCredentialResolver(),
 			APIBaseURL: server.URL,
 			APIVersion: "test-version",
 			HTTPClient: server.Client(),
@@ -99,7 +99,7 @@ func TestPublisherCreatesAndReusesPullRequests(t *testing.T) {
 		}))
 		defer server.Close()
 
-		publisher := New(Options{Token: "token", APIBaseURL: server.URL, HTTPClient: server.Client()})
+		publisher := New(Options{Resolver: testCredentialResolver(), APIBaseURL: server.URL, HTTPClient: server.Client()})
 		result, err := publisher.Publish(context.Background(), testPublication(server.URL, false))
 		if err != nil || result.URL != "https://github.example/pr/existing" || calls != 1 {
 			t.Fatalf("Publish() = (%#v, %v), calls=%d", result, err, calls)
@@ -116,7 +116,7 @@ func TestPublisherRejectsInvalidConfigurationAndIntent(t *testing.T) {
 		assertProblem(t, err, problem.CodeConfigurationInvalid)
 	})
 
-	t.Run("missing token", func(t *testing.T) {
+	t.Run("missing credential resolver", func(t *testing.T) {
 		_, err := New(Options{}).Publish(context.Background(), publication)
 		assertProblem(t, err, problem.CodeConfigurationInvalid)
 	})
@@ -124,27 +124,43 @@ func TestPublisherRejectsInvalidConfigurationAndIntent(t *testing.T) {
 	t.Run("incomplete intent", func(t *testing.T) {
 		invalid := publication
 		invalid.PullRequest.Title = ""
-		_, err := New(Options{Token: "token"}).Publish(context.Background(), invalid)
+		_, err := New(Options{
+			Resolver:   testCredentialResolver(),
+			APIBaseURL: defaultAPIBaseURL,
+		}).Publish(context.Background(), invalid)
 		assertProblem(t, err, problem.CodeConfigurationInvalid)
 	})
 
 	t.Run("invalid API URL", func(t *testing.T) {
-		_, err := New(Options{Token: "token", APIBaseURL: "http://api.github.com"}).Publish(context.Background(), publication)
+		_, err := New(Options{Resolver: testCredentialResolver(), APIBaseURL: "http://api.github.com"}).Publish(context.Background(), publication)
 		assertProblem(t, err, problem.CodeConfigurationInvalid)
 	})
 
 	t.Run("invalid remote", func(t *testing.T) {
 		invalid := publication
 		invalid.RemoteURL = ""
-		_, err := New(Options{Token: "token"}).Publish(context.Background(), invalid)
+		_, err := New(Options{Resolver: testCredentialResolver()}).Publish(context.Background(), invalid)
 		assertProblem(t, err, problem.CodeConfigurationInvalid)
 	})
 
 	t.Run("remote host does not match API host", func(t *testing.T) {
 		invalid := publication
 		invalid.RemoteURL = "https://gitlab.example/acme/governance.git"
-		_, err := New(Options{Token: "token"}).Publish(context.Background(), invalid)
+		_, err := New(Options{
+			Resolver:   testCredentialResolver(),
+			APIBaseURL: defaultAPIBaseURL,
+		}).Publish(context.Background(), invalid)
 		assertProblem(t, err, problem.CodeConfigurationInvalid)
+	})
+
+	t.Run("derives a GitHub Enterprise API base from a broker-routed remote", func(t *testing.T) {
+		enterprise := publication
+		enterprise.RemoteURL = "https://github.enterprise.example/acme/governance.git"
+		apiBase, repository, err := New(Options{Resolver: testCredentialResolver()}).publicationTarget(enterprise)
+		if err != nil || apiBase.String() != "https://github.enterprise.example/api/v3" ||
+			repository.host != "github.enterprise.example" {
+			t.Fatalf("enterprise publication target = (%#v, %#v, %v)", apiBase, repository, err)
+		}
 	})
 }
 
@@ -188,7 +204,7 @@ func TestPublisherClassifiesHTTPAndResponseFailures(t *testing.T) {
 			}))
 			defer server.Close()
 
-			publisher := New(Options{Token: "token", APIBaseURL: server.URL, HTTPClient: server.Client()})
+			publisher := New(Options{Resolver: testCredentialResolver(), APIBaseURL: server.URL, HTTPClient: server.Client()})
 			_, err := publisher.Publish(context.Background(), testPublication(server.URL, false))
 			assertProblem(t, err, problem.CodeExternalCommandFailed)
 		})
@@ -198,29 +214,60 @@ func TestPublisherClassifiesHTTPAndResponseFailures(t *testing.T) {
 		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return nil, errors.New("network unavailable")
 		})}
-		publisher := New(Options{Token: "token", HTTPClient: client})
+		publisher := New(Options{Resolver: testCredentialResolver(), HTTPClient: client})
 		_, err := publisher.Publish(context.Background(), testPublication("https://github.com", false))
 		assertProblem(t, err, problem.CodeExternalCommandFailed)
 	})
+}
+
+func TestPublisherCredentialResolutionFailures(t *testing.T) {
+	publication := testPublication("https://github.com", false)
+	resolverErr := errors.New("credential unavailable")
+	publisher := New(Options{Resolver: &fakeCredentialResolver{err: resolverErr}})
+	if err := publisher.Validate(context.Background(), publication); !errors.Is(err, resolverErr) {
+		t.Fatalf("Validate() error = %v, want %v", err, resolverErr)
+	}
+	invalid := publication
+	invalid.PullRequest.Title = ""
+	if err := New(Options{Resolver: testCredentialResolver()}).Validate(context.Background(), invalid); err == nil {
+		t.Fatal("Validate() accepted an incomplete pull-request intent")
+	}
+	base, err := url.Parse("https://github.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publisher.request(
+		context.Background(),
+		repositoryRef{host: "github.com", owner: "acme", name: "governance"},
+		http.MethodGet,
+		base,
+		nil,
+	); !errors.Is(err, resolverErr) {
+		t.Fatalf("request() error = %v, want %v", err, resolverErr)
+	}
+	var nilPublisher *Publisher
+	if _, err := nilPublisher.resolveCredential(context.Background(), repositoryRef{}); err == nil {
+		t.Fatal("nil publisher resolved a credential")
+	}
 }
 
 func TestPublisherHelpersAndBoundaries(t *testing.T) {
 	t.Run("new applies defaults and preserves options", func(t *testing.T) {
 		defaults := New(Options{})
 		if defaults.apiBaseURL != defaultAPIBaseURL || defaults.apiVersion != defaultAPIVersion ||
-			defaults.client == nil || defaults.client.Timeout != 30*time.Second {
+			!defaults.deriveAPIBase || defaults.client == nil || defaults.client.Timeout != 30*time.Second {
 			t.Fatalf("default publisher = %#v", defaults)
 		}
 		client := &http.Client{}
 		configured := New(Options{
-			Token:      "token",
+			Resolver:   testCredentialResolver(),
 			APIBaseURL: "https://github.example/api/v3",
 			APIVersion: "configured",
 			Timeout:    time.Second,
 			HTTPClient: client,
 		})
 		if configured.client != client || configured.apiBaseURL != "https://github.example/api/v3" ||
-			configured.apiVersion != "configured" {
+			configured.deriveAPIBase || configured.apiVersion != "configured" {
 			t.Fatalf("configured publisher = %#v", configured)
 		}
 	})
@@ -265,6 +312,8 @@ func TestPublisherHelpersAndBoundaries(t *testing.T) {
 		}
 		if expectedGitHost("api.github.com") != "github.com" ||
 			expectedGitHost("github.example") != "github.example" ||
+			apiBaseURLForGitHost("github.com") != defaultAPIBaseURL ||
+			apiBaseURLForGitHost("github.enterprise.example") != "https://github.enterprise.example/api/v3" ||
 			!sameHost("GitHub.COM", "github.com") || sameHost("github.com", "gitlab.com") {
 			t.Fatal("host helpers returned unexpected results")
 		}
@@ -298,7 +347,7 @@ func TestPublisherHelpersAndBoundaries(t *testing.T) {
 			t.Fatal(err)
 		}
 		publisher := New(Options{
-			Token: "token",
+			Resolver: testCredentialResolver(),
 			HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 				return nil, errors.New("post unavailable")
 			})},
@@ -310,7 +359,7 @@ func TestPublisherHelpersAndBoundaries(t *testing.T) {
 		}, testPublication("https://github.com", false).PullRequest)
 		assertProblem(t, err, problem.CodeExternalCommandFailed)
 
-		_, err = publisher.request(context.Background(), "\n", base, nil)
+		_, err = publisher.request(context.Background(), repositoryRef{}, "\n", base, nil)
 		assertProblem(t, err, problem.CodeConfigurationInvalid)
 	})
 }
@@ -343,6 +392,24 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return function(request)
+}
+
+type fakeCredentialResolver struct {
+	token   string
+	err     error
+	targets []CredentialTarget
+}
+
+func testCredentialResolver() *fakeCredentialResolver {
+	return &fakeCredentialResolver{token: "token"}
+}
+
+func (resolver *fakeCredentialResolver) Resolve(_ context.Context, target CredentialTarget) (string, error) {
+	resolver.targets = append(resolver.targets, target)
+	if resolver.err != nil {
+		return "", resolver.err
+	}
+	return resolver.token, nil
 }
 
 type errReader struct{}
