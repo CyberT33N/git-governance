@@ -72,6 +72,32 @@ func TestTagApprovalArtifactDispatchUsesJobToken(t *testing.T) {
 	}
 }
 
+func TestCIWorkflowUsesBuildWorkspaceForNativeSmokeBinary(t *testing.T) {
+	t.Parallel()
+
+	workflow := readWorkflow(t, "ci.yml")
+	for _, expected := range []string{
+		"mkdir -p .build/bin",
+		`-o ".build/bin/git-governance${{ matrix.extension }}"`,
+		`"./.build/bin/git-governance${{ matrix.extension }}" --version`,
+		`"./.build/bin/git-governance${{ matrix.extension }}" --output json branch list`,
+		`"./.build/bin/git-governance${{ matrix.extension }}" --output json policy describe`,
+	} {
+		if !strings.Contains(workflow, expected) {
+			t.Fatalf("CI workflow does not contain %q", expected)
+		}
+	}
+	for _, forbidden := range []string{
+		"mkdir -p dist",
+		`-o "dist/git-governance${{ matrix.extension }}"`,
+		`"./dist/git-governance${{ matrix.extension }}"`,
+	} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("CI workflow must not contain %q", forbidden)
+		}
+	}
+}
+
 func TestProtectedLineWorkflowKeepsSharedLineMutationInCI(t *testing.T) {
 	t.Parallel()
 

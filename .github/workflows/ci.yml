@@ -143,11 +143,11 @@ jobs:
           set -euo pipefail
           test "$(go env GOOS)" = "${{ matrix.goos }}"
           test "$(go env GOARCH)" = "${{ matrix.goarch }}"
-          mkdir -p dist
-          go build -mod=readonly -trimpath -o "dist/git-governance${{ matrix.extension }}" ./cmd/git-governance
-          "./dist/git-governance${{ matrix.extension }}" --version
-          "./dist/git-governance${{ matrix.extension }}" --output json branch list
-          "./dist/git-governance${{ matrix.extension }}" --output json policy describe
+          mkdir -p .build/bin
+          go build -mod=readonly -trimpath -o ".build/bin/git-governance${{ matrix.extension }}" ./cmd/git-governance
+          "./.build/bin/git-governance${{ matrix.extension }}" --version
+          "./.build/bin/git-governance${{ matrix.extension }}" --output json branch list
+          "./.build/bin/git-governance${{ matrix.extension }}" --output json policy describe
 
   release-config:
     name: Release configuration

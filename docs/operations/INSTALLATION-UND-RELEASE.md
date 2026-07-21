@@ -221,8 +221,9 @@ Aktueller Artefaktvertrag:
 
 - Archive enthalten `README.md`, `CONTRIBUTING.md`, `LICENSE` und `NOTICE`.
 - Der vor dem Release ausgeführte Generator erstellt Bash-, Zsh-, Fish- und
-  PowerShell-Completions sowie Cobra-Manpages unter `dist/generated/`; diese
-  Dateien werden in jedes Archiv aufgenommen.
+  PowerShell-Completions sowie Cobra-Manpages unter `.build/generated/`; diese
+  Dateien werden in jedes Archiv aufgenommen. `dist/` bleibt ausschließlich
+  den von GoReleaser erzeugten Release-Artefakten vorbehalten.
 - GoReleaser erzeugt Linux-Pakete in `deb`, `rpm` und `apk`.
 - Windows-, Homebrew-, Scoop- und WinGet-Publikation benötigen weiterhin
   konkrete Publisher-, Bucket- oder Tap-Identitäten; diese werden nicht
