@@ -138,13 +138,15 @@ included only by a gate that explicitly selects it.
 ## Manual CLI smoke test
 
 ```powershell
-go build -o .\dist\git-governance.exe .\cmd\git-governance
-.\dist\git-governance.exe --version
-.\dist\git-governance.exe --output json branch list
-.\dist\git-governance.exe completion powershell
+New-Item -ItemType Directory -Force .build\bin | Out-Null
+go build -o .\.build\bin\git-governance.exe .\cmd\git-governance
+.\.build\bin\git-governance.exe --version
+.\.build\bin\git-governance.exe --output json branch list
+.\.build\bin\git-governance.exe completion powershell
 ```
 
-`dist/` is ignored. Do not commit locally built binaries.
+`.build/` is ignored and owns local build outputs. `dist/` is reserved for
+GoReleaser release artifacts. Do not commit either directory.
 
 ## Commit and branch conventions
 

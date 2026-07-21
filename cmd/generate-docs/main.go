@@ -26,7 +26,7 @@ func main() {
 func run(arguments []string, stderr io.Writer) int {
 	flags := flag.NewFlagSet("generate-docs", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	output := flags.String("out", "dist/generated", "output directory for completions and manpages")
+	output := flags.String("out", ".build/generated", "output directory for completions and manpages")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
 	}
