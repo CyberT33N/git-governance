@@ -175,12 +175,12 @@ func run(
 	if !runSteps(ctx, qualitySteps, stdout, stderr, execute) {
 		return 1
 	}
-	if err := makeDirectory("dist", 0o755); err != nil {
-		fmt.Fprintln(stderr, "create artifact directory:", err)
+	artifact := binaryPath()
+	if err := makeDirectory(filepath.Dir(artifact), 0o755); err != nil {
+		fmt.Fprintln(stderr, "create build directory:", err)
 		return 1
 	}
 
-	artifact := binaryPath()
 	buildSteps := []step{
 		{
 			name:       "build native binary",
@@ -307,7 +307,7 @@ func goFiles(root string) ([]string, error) {
 
 func ignoredDirectory(name string) bool {
 	switch name {
-	case ".git", ".cache", "coverage", "dist", "vendor":
+	case ".build", ".git", ".cache", "coverage", "dist", "vendor":
 		return true
 	default:
 		return false
@@ -323,7 +323,7 @@ func binaryPathFor(goos string) string {
 	if goos == "windows" {
 		name += ".exe"
 	}
-	return filepath.Join("dist", name)
+	return filepath.Join(".build", "bin", name)
 }
 
 func runCommand(ctx context.Context, executable string, arguments ...string) ([]byte, error) {

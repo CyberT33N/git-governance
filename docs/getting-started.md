@@ -36,8 +36,8 @@ go run ./cmd/build
 runs Staticcheck, typechecks packages and tests, runs unit, contract,
 integration, coverage, race, vet, vulnerability, fuzz, and Lefthook checks,
 then builds and smoke-tests the native binary. It stops at the first failed
-gate and writes `dist\git-governance.exe` on Windows or
-`dist/git-governance` on macOS and Linux.
+gate and writes `.build\bin\git-governance.exe` on Windows or
+`.build/bin/git-governance` on macOS and Linux.
 
 For a local development run without producing a binary:
 

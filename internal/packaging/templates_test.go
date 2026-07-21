@@ -80,14 +80,46 @@ func TestGoReleaserArchiveTemplateUsesGoTargetIdentifiers(t *testing.T) {
 	if !strings.Contains(text, `name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"`) {
 		t.Fatal("GoReleaser archive template must use .Os and .Arch identifiers")
 	}
+}
+
+func TestGoReleaserGeneratedDocsUseBuildWorkspace(t *testing.T) {
+	t.Parallel()
+
+	root := repositoryRoot(t)
+	contents, err := os.ReadFile(filepath.Join(root, ".goreleaser.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
 	for _, expected := range []string{
-		"go run -mod=readonly ./cmd/generate-docs --out dist/generated",
-		"dist/generated/completions/*",
-		"dist/generated/man/*",
+		"go run -mod=readonly ./cmd/generate-docs --out .build/generated",
+		".build/generated/completions/*",
+		".build/generated/man/*",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("GoReleaser configuration must include generated documentation path %q", expected)
 		}
+	}
+	for _, forbidden := range []string{
+		"--out dist/generated",
+		"dist/generated/completions/*",
+		"dist/generated/man/*",
+		".release/generated",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("GoReleaser configuration must not use generated documentation path %q", forbidden)
+		}
+	}
+
+	ignored, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(ignored), "/.build/") {
+		t.Fatal("build workspace must be ignored")
+	}
+	if strings.Contains(string(ignored), "/.release/") {
+		t.Fatal("obsolete release staging directory must not be ignored")
 	}
 }
 

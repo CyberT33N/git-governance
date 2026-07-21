@@ -58,6 +58,26 @@ func TestGenerateRejectsEmptyOutputDirectory(t *testing.T) {
 	}
 }
 
+func TestRunUsesBuildGeneratedDirectoryByDefault(t *testing.T) {
+	previous := generateFiles
+	t.Cleanup(func() {
+		generateFiles = previous
+	})
+
+	var outputDirectory string
+	generateFiles = func(output string) error {
+		outputDirectory = output
+		return nil
+	}
+
+	if code := run(nil, &bytes.Buffer{}); code != 0 {
+		t.Fatalf("run() exit code = %d", code)
+	}
+	if outputDirectory != ".build/generated" {
+		t.Fatalf("default output directory = %q, want %q", outputDirectory, ".build/generated")
+	}
+}
+
 func TestGenerateFilesystemFailurePaths(t *testing.T) {
 	t.Parallel()
 
