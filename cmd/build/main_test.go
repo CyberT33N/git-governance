@@ -33,8 +33,8 @@ func TestRunExecutesEveryQualityGateBeforeBuilding(t *testing.T) {
 			return []string{"first.go", "second.go"}, nil
 		},
 		func(path string, permission os.FileMode) error {
-			if path != "dist" || permission != 0o755 {
-				t.Fatalf("create artifact directory = (%q, %o)", path, permission)
+			if path != filepath.Join(".build", "bin") || permission != 0o755 {
+				t.Fatalf("create build directory = (%q, %o)", path, permission)
 			}
 			return nil
 		},
@@ -250,10 +250,10 @@ func TestRunStopsOnQualityFailure(t *testing.T) {
 	}
 }
 
-func TestRunStopsWhenArtifactDirectoryCannotBeCreated(t *testing.T) {
+func TestRunStopsWhenBuildDirectoryCannotBeCreated(t *testing.T) {
 	t.Parallel()
 
-	directoryErr := errors.New("cannot create dist")
+	directoryErr := errors.New("cannot create build directory")
 	stderr := &bytes.Buffer{}
 	exitCode := run(
 		context.Background(),
@@ -310,6 +310,7 @@ func TestGoFilesSkipsBuildOutputsAndSortsSourceFiles(t *testing.T) {
 	for _, path := range []string{
 		"z.go",
 		"nested/a.go",
+		".build/ignored.go",
 		".git/ignored.go",
 		".cache/ignored.go",
 		"coverage/ignored.go",
@@ -349,6 +350,7 @@ func TestIgnoredDirectory(t *testing.T) {
 		name string
 		want bool
 	}{
+		{name: ".build", want: true},
 		{name: ".git", want: true},
 		{name: ".cache", want: true},
 		{name: "coverage", want: true},
@@ -370,8 +372,8 @@ func TestBinaryPathFor(t *testing.T) {
 		goos string
 		want string
 	}{
-		{name: "Windows", goos: "windows", want: filepath.Join("dist", "git-governance.exe")},
-		{name: "Linux", goos: "linux", want: filepath.Join("dist", "git-governance")},
+		{name: "Windows", goos: "windows", want: filepath.Join(".build", "bin", "git-governance.exe")},
+		{name: "Linux", goos: "linux", want: filepath.Join(".build", "bin", "git-governance")},
 	}
 
 	for _, testCase := range testCases {

@@ -8,6 +8,7 @@
 - [Hosting platforms](hosting-platforms/index.md)
 - [GitHub importable rulesets](hosting-platforms/github/rulesets/README.md)
 - [Development verification](development/verification.md)
+- [Build and release artifact ownership](conventions/BUILD-UND-RELEASE-ARTEFAKT-OWNERSHIP.md)
 - [Architecture decision record](architecture/ADR-0001-GO-CLI-ZIELARCHITEKTUR.md)
 - [CLI contract](specification/CLI-VERTRAG.md)
 - [Policy and validation](specification/POLICY-UND-VALIDIERUNG.md)

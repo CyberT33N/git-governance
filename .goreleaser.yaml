@@ -4,7 +4,7 @@ project_name: git-governance
 
 before:
   hooks:
-    - go run -mod=readonly ./cmd/generate-docs --out dist/generated
+    - go run -mod=readonly ./cmd/generate-docs --out .build/generated
 
 builds:
   - id: git-governance
@@ -40,8 +40,8 @@ archives:
       - CONTRIBUTING.md
       - LICENSE
       - NOTICE
-      - dist/generated/completions/*
-      - dist/generated/man/*
+      - .build/generated/completions/*
+      - .build/generated/man/*
 
 nfpms:
   - id: linux-packages
