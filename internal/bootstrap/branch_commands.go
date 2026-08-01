@@ -7,6 +7,7 @@ import (
 	"github.com/CyberT33N/git-governance/internal/application/port"
 	"github.com/CyberT33N/git-governance/internal/domain/branch"
 	"github.com/CyberT33N/git-governance/internal/domain/commitmsg"
+	"github.com/CyberT33N/git-governance/internal/domain/problem"
 	"github.com/CyberT33N/git-governance/internal/domain/ticket"
 	"github.com/spf13/cobra"
 )
@@ -288,6 +289,15 @@ func newBranchSyncBaseCommand(application *application) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if nameRaw != "" {
+				current, err := services.git.CurrentBranch(command.Context(), repository)
+				if err != nil {
+					return err
+				}
+				if current.String() != name.String() {
+					return syncBaseBranchNotCurrent(current, name)
+				}
+			}
 			base, err := parseBase(baseRaw, repository.Remote)
 			if err != nil {
 				return err
@@ -350,13 +360,26 @@ func newBranchSyncBaseCommand(application *application) *cobra.Command {
 			})
 		},
 	}
-	command.Flags().StringVar(&nameRaw, "branch", "", "branch name; defaults to the current branch")
+	command.Flags().StringVar(&nameRaw, "branch", "", "branch name; must match the current branch when supplied")
 	command.Flags().StringVar(&baseRaw, "base", "", "explicit remote target base")
 	command.Flags().StringVar(&strategyRaw, "strategy", string(branchapp.SyncCheck), "check, auto, rebase, or merge")
 	command.Flags().StringVar(&mergeFamily, "merge-type", "", "commit family for --strategy merge")
 	command.Flags().StringVar(&mergeSubject, "merge-subject", "", "commit description for --strategy merge")
 	command.Flags().StringVar(&mergeMessage, "merge-message", "", "complete merge message compatibility input for --strategy merge")
 	return command
+}
+
+func syncBaseBranchNotCurrent(current, requested branch.BranchName) error {
+	return problem.New(problem.Details{
+		Code:        problem.CodeInvalidInput,
+		Category:    problem.CategoryRepository,
+		Field:       "branch",
+		Actual:      current.String(),
+		Expected:    requested.String(),
+		Rule:        "branch synchronization may mutate only the checked-out branch",
+		Example:     "git governance branch sync-base --strategy merge",
+		Remediation: "switch to the requested branch before running branch sync-base",
+	})
 }
 
 func branchCreationSummary(result branchapp.CreateResult) string {

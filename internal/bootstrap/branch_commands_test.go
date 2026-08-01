@@ -521,6 +521,44 @@ func TestBranchSyncBaseCommandContracts(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects an explicitly named branch that is not checked out", func(t *testing.T) {
+		git := newBranchCommandGit(t, "feature/ABC-123-add-export")
+		application := newBranchCommandApplication(git, nil, nil, "human")
+
+		_, _, err := executeBranchCommand(
+			t,
+			newBranchSyncBaseCommand(application),
+			context.Background(),
+			"--branch", "fix/ABC-123-other-work",
+			"--strategy", "merge",
+			"--merge-message", "fix(ABC-123): synchronize develop",
+		)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+		if git.fetchCalls != 0 || len(git.mergedBranches) != 0 {
+			t.Fatalf("noncurrent branch synchronization mutated Git: fetch=%d merge=%v", git.fetchCalls, git.mergedBranches)
+		}
+	})
+
+	t.Run("preserves current branch lookup failure for an explicit branch", func(t *testing.T) {
+		currentErr := errors.New("current branch unavailable")
+		git := newBranchCommandGit(t, "feature/ABC-123-add-export")
+		git.currentErr = currentErr
+		application := newBranchCommandApplication(git, nil, nil, "human")
+
+		_, _, err := executeBranchCommand(
+			t,
+			newBranchSyncBaseCommand(application),
+			context.Background(),
+			"--branch", "feature/ABC-123-add-export",
+		)
+		if !errors.Is(err, currentErr) {
+			t.Fatalf("explicit branch current lookup error = %v, want %v", err, currentErr)
+		}
+		if git.fetchCalls != 0 || len(git.mergedBranches) != 0 {
+			t.Fatalf("current branch lookup failure mutated Git: fetch=%d merge=%v", git.fetchCalls, git.mergedBranches)
+		}
+	})
+
 	t.Run("merges a published branch and reports post-mutation quality", func(t *testing.T) {
 		git := newBranchCommandGit(t, "feature/ABC-123-add-export")
 		git.publication = branch.PublicationPublished
