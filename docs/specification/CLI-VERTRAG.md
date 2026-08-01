@@ -650,7 +650,25 @@ Dieser Befehl validiert einen Stabilisierung-Branch gegen
 Release-Linie. `--create-pull-request` verlangt `--push`; nach manueller
 Rebase-Konfliktauflösung setzt `--resume` die vorhandene Stabilisierung fort.
 
-### 13.4 `workflow release promote`
+### 13.4 `workflow release align-promotion-base`
+
+```text
+git governance --pull-request-provider github workflow release align-promotion-base \
+  --release release/<semver> \
+  [--branch chore/<KEY-NUMBER>-<slug>] \
+  [--push --create-pull-request]
+```
+
+Der Befehl ist ausschließlich für eine `chore/*`-Release-Preparation-Branch
+zulässig, die durch `workflow release stabilize --kind release-prep` aus der
+angegebenen `release/<semver>`-Linie erzeugt wurde. Er prüft die gespeicherte
+Release-Basis, verlangt die ausgecheckte Branch und führt ausschließlich dort
+einen ticket-scoped Merge von `origin/main` aus. Nach der Quality-Suite kann
+er die Working-Branch pushen und ihren PR zurück auf die Release-Linie
+erstellen. Damit erfüllt ein striktes Main-Ruleset die Aktualitätsprüfung,
+ohne `Update branch`, Rebase oder Direktmutation einer Shared Line.
+
+### 13.5 `workflow release promote`
 
 Dieser Befehl erzeugt den providerneutralen PR-Intent:
 
@@ -665,7 +683,7 @@ unveränderlichen Tag. Ein echter Provider-PR ist nur mit
 `--pull-request-provider github --create-pull-request` und der expliziten
 Mutationsfreigabe möglich.
 
-### 13.5 `workflow release backmerge`
+### 13.6 `workflow release backmerge`
 
 Erzeugt keine stillen Direktcommits und keinen leeren Ritual-PR. Außerhalb
 eines Dry-Runs verlangt es einen konfigurierten Release-Lifecycle-Provider,
@@ -686,7 +704,7 @@ das Kommando `status=not-required`, den Delivery-Nachweis und keinen PR.
 Ein echter Provider-PR folgt derselben expliziten GitHub-Adapter-Konfiguration
 wie die Promotion.
 
-### 13.6 `workflow release support`
+### 13.7 `workflow release support`
 
 `support/<major.minor>` darf nur angefordert werden, wenn die aktuell
 gefetchte `origin/main`-Revision einen passenden
@@ -695,7 +713,7 @@ gefetchte `origin/main`-Revision einen passenden
 CI-Workflow und verifiziert die Remote-Support-Linie von dieser freigegebenen
 Main-Revision.
 
-### 13.7 `workflow cleanup`
+### 13.8 `workflow cleanup`
 
 `workflow cleanup` löscht niemals Remote-Branches. Remote-Löschung und
 Lifecycle-Nachweise gehören zu GitHub, GitLab oder CI:

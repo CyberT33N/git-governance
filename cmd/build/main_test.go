@@ -544,7 +544,7 @@ func expectedInvocations(files []string) []invocation {
 		},
 		{
 			executable: "go",
-			arguments:  []string{"test", "-mod=readonly", "./internal/adapters/quality", "-run=^$", "-fuzz=FuzzDecodeQualityConfiguration", "-fuzztime=2s", "-parallel=1"},
+			arguments:  []string{"test", "-mod=readonly", "./internal/adapters/quality", "-run=^$", "-fuzz=FuzzDecodeQualityConfiguration", "-fuzztime=50000x", "-parallel=1"},
 		},
 		{
 			executable: "go",

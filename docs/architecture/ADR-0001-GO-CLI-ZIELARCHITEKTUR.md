@@ -98,6 +98,23 @@ Zwischen Branch-Start und Pull Request liegt die eigentliche Entwicklung mit Com
 
 Es gibt keinen langlebigen Workflow-Prozess und keine versteckte Session-State-Machine.
 
+### 4.6 Release-Promotion-Base-Ausrichtung ist ein eigener Workflow
+
+Eine strukturell veraltete `release/<semver> -> main`-Promotion ist kein
+normaler `sync-base`-Fall. Der PR-Head kann selbst eine geschützte
+Release-Line sein; ein GitHub **Update branch** oder Rebase würde diese Shared
+Line direkt mutieren.
+
+Die Binary behandelt diesen Fall deshalb als begrenzten
+Release-Preparation-Workflow: Eine ticketgebundene `chore/*`-Working-Branch
+wird aus der Release-Line abgeleitet, nimmt die genehmigte Main-Ref per
+append-only Merge auf, besteht die Quality-Gates und kehrt per PR auf die
+Release-Line zurück. Erst dann wird der bestehende Promotion-PR erneut gegen
+`main` geprüft. Die kanonische Entscheidung und ihre providerneutrale Grenze
+sind in
+[ADR-0003](ADR-0003-GOVERNED-RELEASE-PROMOTION-BASE-ALIGNMENT.md)
+festgelegt.
+
 ## 5. Harte Gates
 
 | Gate | Go-Binary + Lefthook | Zwei Go-Binaries + Lefthook | Remote-Policy-Service + Client | Lefthook-only |
