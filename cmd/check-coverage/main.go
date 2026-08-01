@@ -37,7 +37,9 @@ func run(
 		ctx = context.Background()
 	}
 
-	output, err := execute(ctx, "go", "test", "-count=1", "-cover", "-covermode=atomic", "./...")
+	// Serialize package test processes for reproducible aggregate coverage while
+	// retaining atomic counters for concurrent code inside each test process.
+	output, err := execute(ctx, "go", "test", "-count=1", "-p=1", "-cover", "-covermode=atomic", "./...")
 	if len(output) > 0 {
 		_, _ = stdout.Write(output)
 	}
