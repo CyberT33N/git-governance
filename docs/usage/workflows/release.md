@@ -112,6 +112,34 @@ The command verifies those delivery facts with GitHub and compares
 - `status=not-required`: no effective release-only delta remains, so it
   creates no empty PR. Record this result before release-branch cleanup.
 
+When Develop requires a current pull-request head, do not update the delivered
+release line. First create a `release-prep` stabilization branch from the
+release line, then align that branch with Develop:
+
+```powershell
+git governance --interactive never --output json --yes `
+  workflow release stabilize `
+  --release release/2.8.0 `
+  --kind release-prep `
+  --key ABC `
+  --ticket 999 `
+  --slug align-release-reconciliation-base
+```
+
+```powershell
+git governance --interactive never --output json --yes `
+  workflow release align-reconciliation-base `
+  --release release/2.8.0 `
+  --push `
+  --create-pull-request
+```
+
+The command accepts only the checked-out, ticket-bound `chore/*` preparation
+branch created from the stated release line. It verifies delivery and an
+effective delta, merges current Develop into the preparation branch, runs
+quality gates, and opens a merge-commit PR from that branch to Develop. It
+never updates `release/2.8.0`.
+
 See [release reconciliation](release-reconciliation.md) for the complete
 state and evidence contract.
 

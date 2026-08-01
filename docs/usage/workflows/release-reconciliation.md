@@ -40,6 +40,33 @@ before comparing `release/2.8.0` with `develop`.
 A commit-count difference alone is not final authority. The provider comparison
 also checks whether an effective content delta remains.
 
+## Strict Develop base freshness
+
+After Main-promotion and delivery, new regular pull requests may merge into
+`develop`. Those commits belong to the next integration phase and must not be
+merged, rebased, or otherwise written back into the delivered
+`release/<semver>` reference.
+
+When the Develop protection policy accepts the release head, the controlled
+direct pull request `release/<semver> -> develop` remains valid. When the
+policy requires a current pull-request head, create a ticket-bound
+release-preparation branch from the unchanged release line and run:
+
+```text
+release/<semver>
+  -> chore/<ticket>-<reconciliation-alignment>
+  -> merge origin/develop into the preparation branch
+  -> quality and review gates
+  -> merge-commit pull request to develop
+```
+
+Use `workflow release align-reconciliation-base` only from that checked-out
+preparation branch. It verifies delivery and an effective release-only delta,
+then merges `develop` only into the preparation branch. It never updates the
+release ref. A rebase, a GitHub **Update branch** action, or a
+`develop -> release/<semver>` pull request is not a valid reconciliation
+substitute.
+
 ## Cleanup
 
 The release line remains protected until one reconciliation outcome is proven:

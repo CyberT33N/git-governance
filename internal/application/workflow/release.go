@@ -20,6 +20,7 @@ type ReleaseService struct {
 	publisher port.PullRequestPublisher
 	lifecycle port.ReleaseLifecycleProvider
 	tickets   *TicketService
+	quality   port.QualityRunner
 }
 
 var commitIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
@@ -62,6 +63,13 @@ func (service *ReleaseService) WithTicketService(tickets *TicketService) *Releas
 // and release-delivery verification into release workflows.
 func (service *ReleaseService) WithReleaseLifecycleProvider(provider port.ReleaseLifecycleProvider) *ReleaseService {
 	service.lifecycle = provider
+	return service
+}
+
+// WithQualityRunner wires repository-local quality gates into release
+// preparation workflows before they are published for review.
+func (service *ReleaseService) WithQualityRunner(quality port.QualityRunner) *ReleaseService {
+	service.quality = quality
 	return service
 }
 
