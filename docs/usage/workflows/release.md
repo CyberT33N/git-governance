@@ -47,6 +47,15 @@ First dispatch `broker-smoke`. It proves that the broker accepts the approved
 without printing the returned installation token. Only after that smoke test
 passes may a release owner dispatch `release-cut` with a concrete SemVer value.
 
+For a delivered release whose Backmerge target requires a current PR head,
+dispatch `reconciliation-align` from the workflow on `main` with `release`,
+`ticket_key`, `ticket`, and `slug`. The workflow builds the trusted
+control-plane binary before it switches the repository to the release-derived
+preparation branch. It obtains a masked, short-lived installation token for the
+ephemeral Git transport, removes that transport configuration before job exit,
+and uses the binary to create, align, validate, push, and publish the reviewed
+Preparation-Branch PR to `develop`.
+
 ## Stabilization
 
 Only release-blocking fixes, final documentation, and release preparation are
@@ -115,6 +124,10 @@ git governance --interactive never --output json --yes `
   --create-pull-request
 ```
 
+Adding `--dry-run` to promotion, backmerge, or any release workflow is strictly
+read-only: it returns a plan but never pushes, invokes a provider preflight, or
+creates a pull request.
+
 Do not invoke `backmerge` merely because the promotion PR exists. It is
 permitted only after the promotion merged, the immutable `v2.8.0` tag points
 to that merge commit, and the required release artifacts and GitHub Release
@@ -134,6 +147,13 @@ The command verifies those delivery facts with GitHub and compares
   `release/2.8.0 -> develop` PR.
 - `status=not-required`: no effective release-only delta remains, so it
   creates no empty PR. Record this result before release-branch cleanup.
+
+If Develop requires a current pull-request head, dispatch
+`reconciliation-align` from the protected `release-control.yml` workflow on
+`main`. The workflow builds the trusted control-plane binary before it creates
+the release-derived preparation branch, then aligns that branch and opens the
+reviewed PR to Develop. Do not use a local Device Flow session, GitHub
+**Update branch**, or a direct Develop-to-Release merge as a substitute.
 
 See [release reconciliation](release-reconciliation.md) for the complete
 state and evidence contract.

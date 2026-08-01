@@ -361,6 +361,14 @@ nur bei effektivem Delta:
 Ein offener Promotion-PR, ein bloßer Tagname oder eine fehlende
 Artefakt-Delivery sind keine zulässigen Backmerge-Voraussetzungen.
 
+Erzwingt das Develop-Ziel einen aktuellen PR-Head, startet nur die geschützte
+Main-Control-Plane die Reconciliation. Sie baut den vertrauenswürdigen
+CLI-Binary vor dem Preparation-Branch-Wechsel, erhält kurzlebige
+Broker-Identität und lässt ausschließlich diese Branch den aktuellen
+Develop-Stand mergen. Weder die ausgelieferte Release-Ref noch ein lokaler
+Dry-Run dürfen einen Provider-Publish oder eine Pull-Request-Erstellung
+auslösen.
+
 ## 7. Commit-Typen
 
 Zugelassene kanonische Typen:

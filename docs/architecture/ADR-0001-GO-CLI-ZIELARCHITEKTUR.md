@@ -396,6 +396,12 @@ Release-Delivery prüft der Hosting-Adapter den effektiven
 `release/<semver>`-zu-`develop`-Delta. Nur ein Delta erzeugt den Backmerge-PR;
 ohne Delta wird ein auditierbares `not-required`-Ergebnis geliefert.
 
+Erzwingt das Develop-Ziel einen aktuellen Pull-Request-Head, bleibt die
+ausgelieferte Release-Ref unverändert. Der geschützte Main-Control-Plane-
+Workflow baut vor dem Wechsel auf die Preparation-Branch einen
+vertrauenswürdigen Binary und führt die kontrollierte Reconciliation von dort
+aus. ADR-0004 beschreibt diese Ausführungsgrenze.
+
 ## 12. Lefthook: Ergänzung statt Ersatz
 
 Lefthook ist laut eigener Dokumentation ein Git-Hook-Manager: Konfigurationen werden in `.git/hooks` installiert und `lefthook run <hook-name>` führt konfigurierte Jobs aus. Eigene Hooks und interaktive Jobs sind möglich. Das macht Lefthook zu einem guten Runner, aber nicht zu einem Branch-/Commit-/Workflow-Domainprodukt.
