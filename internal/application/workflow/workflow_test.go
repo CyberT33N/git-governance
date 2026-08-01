@@ -784,6 +784,15 @@ func TestTicketWorkflowHelperContracts(t *testing.T) {
 		if err != nil || target.String() != "release/2.8.0" {
 			t.Fatalf("managed fix target = (%q, %v)", target, err)
 		}
+		for _, name := range []branch.BranchName{
+			mustBranch("docs/ABC-123-release-docs"),
+			mustBranch("chore/ABC-123-release-prep"),
+		} {
+			target, err = resolvePullRequestTarget(name, release, nil, true)
+			if err != nil || target.String() != "release/2.8.0" {
+				t.Fatalf("managed %s target = (%q, %v)", name.Family(), target, err)
+			}
+		}
 		wrong := mustBranch("main")
 		if _, err := resolvePullRequestTarget(feature, develop, &wrong, false); err == nil {
 			t.Fatal("regular ticket accepted a mismatched PR target")
