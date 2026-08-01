@@ -54,6 +54,12 @@ executes `workflow release align-reconciliation-base` there. The operation
 merges current Develop only into the preparation branch and opens the reviewed
 merge-commit PR to Develop. It never updates the release ref.
 
+In the target lifecycle, successful release delivery automatically dispatches
+this controller. It revalidates promotion, tag, published release, artifacts,
+attestations, ticket metadata, and idempotency before it creates a PR. Manual
+dispatch exists only for incident, retry, or recovery and follows the same
+checks.
+
 ## Cleanup
 
 The release line remains protected until one reconciliation outcome is proven:

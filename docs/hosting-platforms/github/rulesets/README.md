@@ -210,6 +210,12 @@ only in the ephemeral runner Git transport, clears that configuration on exit,
 and opens the reviewed merge-commit PR to Develop without updating the
 delivered release ref.
 
+The normal target path dispatches this controller automatically after verified
+release delivery. It remains idempotent, revalidates all delivery evidence,
+and creates a PR only for effective delta. Manual dispatch is retained only
+for incident, retry, and recovery; it cannot bypass Ruleset, review, quality,
+or audit gates.
+
 ### Initial protected-line creation
 
 `04-release.json` and `05-support.json` set

@@ -402,6 +402,11 @@ Workflow baut vor dem Wechsel auf die Preparation-Branch einen
 vertrauenswürdigen Binary und führt die kontrollierte Reconciliation von dort
 aus. ADR-0004 beschreibt diese Ausführungsgrenze.
 
+Nach vollständig bestätigter Delivery bewertet der Zielpfad die Reconciliation
+programmatisch und idempotent. Bei Delta erstellt er den reviewbaren
+Backmerge-PR; ohne Delta dokumentiert er `not-required`. Ein manueller Start
+bleibt ausschließlich Recovery-Fallback.
+
 ## 12. Lefthook: Ergänzung statt Ersatz
 
 Lefthook ist laut eigener Dokumentation ein Git-Hook-Manager: Konfigurationen werden in `.git/hooks` installiert und `lefthook run <hook-name>` führt konfigurierte Jobs aus. Eigene Hooks und interaktive Jobs sind möglich. Das macht Lefthook zu einem guten Runner, aber nicht zu einem Branch-/Commit-/Workflow-Domainprodukt.

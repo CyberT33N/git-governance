@@ -369,6 +369,13 @@ Develop-Stand mergen. Weder die ausgelieferte Release-Ref noch ein lokaler
 Dry-Run dürfen einen Provider-Publish oder eine Pull-Request-Erstellung
 auslösen.
 
+Nach bestätigter Delivery ist die Controller-Bewertung im Zielpfad
+programmatisch und idempotent. Sie erstellt bei effektivem Delta den
+reviewbaren PR oder dokumentiert `not-required`. Ein manueller
+`workflow_dispatch`-Aufruf ist ausschließlich Incident-, Retry- oder
+Recovery-Fallback und durchläuft dieselben Delivery-, Ticket-, Audit- und
+Quality-Prüfungen.
+
 ## 7. Commit-Typen
 
 Zugelassene kanonische Typen:

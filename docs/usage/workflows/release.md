@@ -56,6 +56,13 @@ ephemeral Git transport, removes that transport configuration before job exit,
 and uses the binary to create, align, validate, push, and publish the reviewed
 Preparation-Branch PR to `develop`.
 
+The target architecture dispatches this operation automatically after the
+release artifact workflow has confirmed the immutable tag, GitHub Release,
+artifacts, signatures, SBOMs, and attestations. The controller then verifies
+those facts again and either creates the reviewed PR or records
+`not-required`. Manual `workflow_dispatch` remains an incident, retry, and
+recovery fallback; it is not the normal delivery path.
+
 ## Stabilization
 
 Only release-blocking fixes, final documentation, and release preparation are

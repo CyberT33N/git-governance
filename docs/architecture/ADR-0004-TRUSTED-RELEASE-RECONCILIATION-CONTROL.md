@@ -40,6 +40,13 @@ Broker-Workload-Identität, konfiguriert den Git-Transport nur im ephemeren
 Runner mit einem maskierten Installation-Token und entfernt diese Konfiguration
 am Ende des Jobs.
 
+Nach erfolgreicher Tag-, Artefakt-, Attestations- und Release-Delivery wird
+die Reconciliation im regulären Zielpfad automatisch aus demselben
+Delivery-Lifecycle gestartet. Der Controller verifiziert alle Delivery-Fakten
+erneut und erstellt nur bei effektivem Delta den Preparation-Branch-PR nach
+`develop`. Ein manueller `workflow_dispatch`-Start ist ausschließlich
+Incident-, Retry- und Recovery-Fallback.
+
 Der Binary führt erst `workflow release stabilize --kind release-prep` und
 anschließend `workflow release align-reconciliation-base` aus. Der Broker
 bleibt ausschließlich Token-Aussteller; er erzeugt weder Branches noch Pull
@@ -59,6 +66,8 @@ Requests.
   ist der einzige Merge-Ort für den aktuellen Develop-Stand.
 - Der resultierende Pull Request zielt auf `develop` und verwendet einen Merge
   Commit.
+- Der Controller erstellt PRs idempotent, merged aber niemals direkt nach
+  `develop`; Review und Required Checks bleiben bindend.
 
 ## Konsequenzen
 
@@ -69,3 +78,5 @@ Requests.
   noch Pull-Request-Erstellung auslösen.
 - Die Reconciliation bleibt nachvollziehbar, ohne die veröffentlichte
   Release-Lineage zu verändern.
+- Der Normalpfad benötigt keinen manuellen Operatorstart; dessen manueller
+  Fallback bleibt für kontrollierte Recovery verfügbar.
