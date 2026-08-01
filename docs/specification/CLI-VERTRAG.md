@@ -329,7 +329,7 @@ Es mutiert nichts und eignet sich für lokale Diagnose und CI.
 
 ### 7.1 Zweck
 
-Stellt fest, ob der aktuelle offizielle Arbeitsbranch Commits seiner tatsächlichen Zielbasis vermisst. Das Kommando ersetzt keine Merge Queue und führt keinen blinden Rebase aus.
+Stellt fest, ob der aktuelle offizielle Arbeitsbranch Commits seiner tatsächlichen Zielbasis vermisst. Das Kommando ersetzt keine Merge Queue und führt keinen blinden Rebase aus. Ein optionales `--branch` ist eine explizite Erwartung an den aktuellen Branch und muss mit ihm übereinstimmen; das Kommando wechselt niemals still auf einen anderen Branch.
 
 ```text
 git governance branch sync-base \
@@ -344,7 +344,7 @@ Kompatibilitätseingang erhalten.
 
 ### 7.2 Entscheidungslogik
 
-1. aktuellen Branch parsen
+1. aktuellen Branch und optionales `--branch` gegeneinander prüfen
 2. tatsächliche Zielbasis bestimmen
 3. sauberen Arbeitsbaum prüfen
 4. `git fetch --prune <remote>`
