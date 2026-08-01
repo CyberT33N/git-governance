@@ -605,7 +605,11 @@ func resolvePullRequestTarget(
 ) (branch.BranchName, error) {
 	target := mustDevelop()
 	if name.Family() == branch.FamilyHotfix ||
-		(workflowManaged && name.Family() == branch.FamilyFix && base.Branch().Family() != branch.FamilyDevelop) {
+		(workflowManaged &&
+			(name.Family() == branch.FamilyFix ||
+				name.Family() == branch.FamilyDocs ||
+				name.Family() == branch.FamilyChore) &&
+			base.Branch().Family() != branch.FamilyDevelop) {
 		target = base.Branch()
 	}
 	if explicit != nil && explicit.String() != target.String() {
