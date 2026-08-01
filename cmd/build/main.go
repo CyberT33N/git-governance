@@ -107,27 +107,27 @@ var (
 		{
 			name:       "fuzz ticket parser",
 			executable: "go",
-			arguments:  []string{"test", "-mod=readonly", "./internal/domain/ticket", "-run=^$", "-fuzz=FuzzParseTicketValues", "-fuzztime=2s", "-parallel=1"},
+			arguments:  []string{"test", "-mod=readonly", "./internal/domain/ticket", "-run=^$", "-fuzz=FuzzParseTicketValues", "-fuzztime=50000x", "-parallel=1"},
 		},
 		{
 			name:       "fuzz branch parser",
 			executable: "go",
-			arguments:  []string{"test", "-mod=readonly", "./internal/domain/branch", "-run=^$", "-fuzz=FuzzParseBranchValues", "-fuzztime=2s", "-parallel=1"},
+			arguments:  []string{"test", "-mod=readonly", "./internal/domain/branch", "-run=^$", "-fuzz=FuzzParseBranchValues", "-fuzztime=50000x", "-parallel=1"},
 		},
 		{
 			name:       "fuzz commit-message parser",
 			executable: "go",
-			arguments:  []string{"test", "-mod=readonly", "./internal/domain/commitmsg", "-run=^$", "-fuzz=FuzzParseCommitMessage", "-fuzztime=2s", "-parallel=1"},
+			arguments:  []string{"test", "-mod=readonly", "./internal/domain/commitmsg", "-run=^$", "-fuzz=FuzzParseCommitMessage", "-fuzztime=50000x", "-parallel=1"},
 		},
 		{
 			name:       "fuzz preferences decoder",
 			executable: "go",
-			arguments:  []string{"test", "-mod=readonly", "./internal/adapters/configfs", "-run=^$", "-fuzz=FuzzDecodePreferences", "-fuzztime=2s", "-parallel=1"},
+			arguments:  []string{"test", "-mod=readonly", "./internal/adapters/configfs", "-run=^$", "-fuzz=FuzzDecodePreferences", "-fuzztime=50000x", "-parallel=1"},
 		},
 		{
 			name:       "fuzz quality configuration decoder",
 			executable: "go",
-			arguments:  []string{"test", "-mod=readonly", "./internal/adapters/quality", "-run=^$", "-fuzz=FuzzDecodeQualityConfiguration", "-fuzztime=2s", "-parallel=1"},
+			arguments:  []string{"test", "-mod=readonly", "./internal/adapters/quality", "-run=^$", "-fuzz=FuzzDecodeQualityConfiguration", "-fuzztime=50000x", "-parallel=1"},
 		},
 		{
 			name:       "validate Lefthook configuration",
