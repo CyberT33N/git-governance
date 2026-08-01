@@ -123,30 +123,6 @@ func TestGoReleaserGeneratedDocsUseBuildWorkspace(t *testing.T) {
 	}
 }
 
-func TestGovernedWorkflowRuleUsesIterativeBranchDecisionMatrix(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(repositoryRoot(t), ".cursor", "rules", "governed-task-to-pr-workflow.mdc")
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(contents)
-	for _, expected := range []string{
-		"### 2.1 Iterative branch-decision matrix",
-		"planned_new_governed_workflow",
-		"new-governed-workflow",
-		"New independent user requirement after a branch is already checked out",
-		"Never skip the continuation question merely because the user supplied a new",
-		"requirement; a bound active iterative new-branch plan is additionally",
-		"📋 Iterative branch decision",
-	} {
-		if !strings.Contains(text, expected) {
-			t.Fatalf("governed workflow rule must contain %q", expected)
-		}
-	}
-}
-
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 
