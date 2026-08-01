@@ -203,6 +203,14 @@ provide these separate controls:
 4. Release cleanup occurs only after delivery and either the backmerge merge or
    the recorded `not-required` reconciliation result.
 
+When the Develop Ruleset requires a current pull-request head, GitHub's
+**Update branch** action must not update the delivered `release/<semver>` ref.
+The governed reconciliation path instead uses a ticket-bound `chore/*`
+preparation branch created from the release line, merges current Develop only
+into that working branch, validates it, and opens a merge-commit PR from the
+working branch to Develop. Rulesets protect the shared release ref, but the
+source-aware provenance and delivery checks remain workflow responsibilities.
+
 ### Initial protected-line creation
 
 `04-release.json` and `05-support.json` set

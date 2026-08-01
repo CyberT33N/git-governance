@@ -115,6 +115,7 @@ git governance
 │       ├── publish-stabilization
 │       ├── promote
 │       ├── backmerge
+│       ├── align-reconciliation-base
 │       └── support
 │   └── cleanup
 ├── validate
@@ -685,6 +686,29 @@ Ist der Delta vorhanden, liefert `status=required` und erzeugt bei
 das Kommando `status=not-required`, den Delivery-Nachweis und keinen PR.
 Ein echter Provider-PR folgt derselben expliziten GitHub-Adapter-Konfiguration
 wie die Promotion.
+
+### 13.5.1 `workflow release align-reconciliation-base`
+
+Dieser Workflow behandelt ausschließlich einen Backmerge, dessen Ziel-Policy
+einen aktuellen Pull-Request-Head verlangt. Er akzeptiert nur eine aktuell
+ausgecheckte, ticketgebundene `chore/*`-Preparation-Branch mit gespeicherter
+Workflow-Basis `origin/release/<semver>`.
+
+Der Workflow:
+
+1. prüft die vollständige Release-Delivery und einen effektiven
+   Release-only-Delta;
+2. verifiziert die aktuelle `origin/develop`-Basis;
+3. merged `origin/develop` ausschließlich in die Preparation-Branch;
+4. validiert die Working-Branch erneut und führt die Repository-Quality-Gates
+   aus;
+5. pusht und erstellt optional einen Merge-Commit-PR der Preparation-Branch
+   nach `develop`.
+
+`release/<semver>` bleibt unverändert. Der Workflow akzeptiert weder eine
+direkte Release-Ref-Aktualisierung noch Rebase, Force Push oder einen
+`develop -> release/<semver>`-PR. Im Dry-Run führt er keinen Fetch, Merge,
+Quality-Gate, Push, Provider- oder PR-Aufruf aus.
 
 ### 13.6 `workflow release support`
 
