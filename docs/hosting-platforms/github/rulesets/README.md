@@ -382,3 +382,33 @@ repository-wide capability settings.
 No ruleset-only configuration can enforce the source-dependent merge decision
 for `develop`; retain the `git-governance` workflow, review policy, and CI as
 the authoritative controls for that remaining semantic rule.
+
+## Promotion-base alignment on release PR heads
+
+GitHub may show **Update branch** for a pull request. That action updates the
+PR head ref; it is not a harmless metadata refresh. For a promotion PR whose
+head is `release/<semver>`, an update or rebase would directly mutate a
+protected shared release line.
+
+`04-release.json` therefore protects the underlying `release/*` ref through
+PR-only updates, `non_fast_forward`, required review, required checks, and
+merge-only PR methods. GitHub Rulesets cannot independently hide the UI action
+based on the source branch family, so the expected behavior is that a direct
+attempt is rejected by the protected ref controls.
+
+When the `main` Ruleset requires a current promotion head, use the governed
+release-preparation flow:
+
+```text
+release/<semver>
+  -> ticket-bound chore/* release-preparation branch
+  -> controlled merge of origin/main
+  -> quality gates and review
+  -> merge-commit PR back to release/<semver>
+  -> re-evaluate the existing release/<semver> -> main PR
+```
+
+The alignment controller must verify that the incoming Main commits are
+release-compatible. It may be the repository CLI, a protected GitHub Actions
+workflow, or a narrowly scoped GitHub App, but it must never bypass the
+Ruleset to update an existing `release/*` ref directly.

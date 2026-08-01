@@ -44,6 +44,9 @@ Track proof fields:
 ```text
 branch_context_checked
 branch_continuation_decision_recorded
+iterative_context_checked
+iterative_process_active
+planned_new_branch_decision_recorded
 runtime_command_observability_passed
 help_reanchoring_passed
 os_verified
@@ -68,7 +71,7 @@ protected_line_verified
 release_delivery_verified
 release_reconciliation_status
 ```
-A transition is forbidden until every proof required by its destination is present. Missing output is never `PASS`. A confirmed continuation resumes at the earliest unmet proof: it never repeats a completed branch-start action, but it never waives current CLI/policy, ticket/family, branch-topology, worktree, acceptance, commit, or publication gates. `COMPLETE` requires `acceptance_items_passed == acceptance_items_total`, all required verification, a reviewed commit series, successful publication, and a non-empty PR URL.
+A transition is forbidden until every proof required by its destination is present. Missing output is never `PASS`. A confirmed continuation resumes at the earliest unmet proof: it never repeats a completed branch-start action, but it never waives current CLI/policy, ticket/family, branch-topology, worktree, acceptance, commit, or publication gates. An explicitly recorded iterative new-branch decision preserves the current branch and resumes at the new-workflow intake gate; it never treats the preserved branch as the new task's authority. `COMPLETE` requires `acceptance_items_passed == acceptance_items_total`, all required verification, a reviewed commit series, successful publication, and a non-empty PR URL.
 
 ## [2] Mandatory initial branch checkpoint, help reanchoring, and environment preflight
 Set the source-CLI command prefixes before the first CLI invocation:
@@ -108,6 +111,74 @@ For every actual runtime invocation, execute this strict sequence:
 
 The help reanchor itself requires its own COT log but does not recursively require another `--help` call. Never batch, parallelize, or reuse reanchors, help results, COT logs, or actual invocations. A fresh help reanchor is required for every individual actual invocation, even when the same command path was checked earlier in the task. All literal actual command examples below are expanded by this sequence; their command text and arguments remain unchanged. Set `help_reanchoring_passed=true` and `runtime_command_observability_passed=true` only after every actual runtime invocation performed in the task has a valid preceding help result, COT logs, and recorded result.
 
+### 2.1 Iterative branch-decision matrix
+
+The current branch checkpoint, CLI validation, and worktree inspection are
+always mandatory. The continuation question is not mandatory when it would
+contradict an already recorded new-branch decision inside the same active
+iterative governed process.
+
+Resolve these inputs after Section 2 step 3:
+
+```text
+iterative_process_active:
+  true only when the same context already has an active nonterminal governed
+  state and an acceptance ledger, pending external gate, or recorded branch
+  plan for the same iterative problem.
+
+planned_new_governed_workflow:
+  true only when the user has explicitly required a new governed branch or a
+  special workflow has already established that a new ticket-scoped branch is
+  required for the active iterative problem.
+
+new_branch_plan_bound:
+  true only when the known ticket or special-workflow ticket, family or kind,
+  intended base or affected line, and reason for preserving the current branch
+  are sufficient to continue intake without guessing.
+```
+
+Apply this matrix in order:
+
+| Condition | Required visible record | Continuation question | Decision and next state |
+|---|---|---|---|
+| No active iterative process; current branch is a continuation candidate | `📋 Branch continuation checkpoint` | Ask exactly once | `continue` on `YES`; otherwise `WAITING_FOR_USER_DECISION` |
+| Active iterative process; current branch matches the already confirmed active task branch | `📋 Iterative branch decision` with `decision=continue-existing` | Skip | Resume from the earliest unmet proof |
+| Active iterative process; `planned_new_governed_workflow=true`; `new_branch_plan_bound=true`; clean worktree; no active Git operation | `📋 Iterative branch decision` with `decision=new-governed-workflow` | Skip | Preserve the current branch unchanged; enter normal or applicable special-workflow intake for the planned branch |
+| Active iterative process; a new branch is known to be required but its ticket or workflow inputs are incomplete | `📋 Iterative branch decision` with `decision=wait-for-ticket-or-input` | Skip | Preserve the current branch and enter `WAITING_FOR_TICKET` or `WAITING_FOR_USER_DECISION` |
+| New independent user requirement after a branch is already checked out, but no active iterative new-branch plan is bound | `📋 Branch continuation checkpoint` | Ask exactly once | Branch continuation remains a user decision |
+| Dirty worktree, active merge/rebase/cherry-pick, ambiguous task continuity, or conflicting branch plan | `📋 Iterative branch decision` with `decision=waiting` | Ask exactly once when a user choice can resolve it | Preserve all state; do not mutate |
+
+`📋 Iterative branch decision` is an audit record, not a runtime COT log.
+`🧭` remains reserved exclusively for the per-command runtime COT contract.
+Use this exact form:
+
+```text
+📋 Iterative branch decision | context=<active|none> | plannedNewBranch=<true|false>
+| planBound=<true|false> | currentBranch=<name|detached> | decision=<continue-existing|new-governed-workflow|wait-for-ticket-or-input|waiting>
+| continuationQuestion=<asked|skipped> | reason=<concise evidence>
+```
+
+**MUST**
+- Record `iterative_context_checked=true` before applying the matrix.
+- Set `iterative_process_active` only from recorded current-context workflow
+  evidence; never infer it from the mere existence of a branch.
+- Set `planned_new_branch_decision_recorded=true` only when the matrix selects
+  `new-governed-workflow` or `wait-for-ticket-or-input`.
+- Preserve the current branch in every skipped-question path.
+- Reapply all ticket, family, slug or special-workflow, worktree, acceptance,
+  validation, commit, and publication gates to the planned new branch.
+
+**MUST NOT**
+- Never skip the branch checkpoint, CLI branch validation, or worktree and
+  active-operation inspection.
+- Never skip the continuation question merely because the user supplied a new
+  requirement; a bound active iterative new-branch plan is additionally
+  required.
+- Never reinterpret a preserved prior branch as authority for a ticket,
+  family, slug, release kind, base, or affected line of the planned branch.
+- Never use this matrix to bypass a dirty-worktree, conflict, authorization,
+  ticket, or special-workflow gate.
+
 Before editing, execute in order:
 1. **Current-branch checkpoint — first workflow action.** Run the read-only command `git branch --show-current`; record the current branch, or `detached` when it returns no branch, and set `branch_context_checked=true`. Do not invoke another workflow command, edit, branch, commit, or publish before this check.
 2. Validate the current branch through this required help-reanchor and runtime-invocation sequence:
@@ -121,7 +192,10 @@ Before editing, execute in order:
    ```
    Its result is the authority for current-branch grammar, local-reference validity, and family. Treat a CLI-valid branch in `feature`, `fix`, `docs`, `refactor`, `chore`, `test`, `perf`, `hotfix`, `scratch`, `release`, or `support` as a **continuation candidate**. Treat `main`, `develop`, `detached`, an invalid result, and every other branch as a normal-flow context. The source CLI and its policy remain final authority when this embedded set changes.
 3. Inspect the worktree, staged state, same-ticket branches when a ticket is known or extractable, and any active merge/rebase/cherry-pick state. This is read-only evidence for the branch decision and must be rechecked after any wait.
-4. For a continuation candidate, enter `WAITING_FOR_BRANCH_DECISION` and emit the following visible branch-decision audit record:
+4. Set `iterative_context_checked=true` and resolve Section 2.1 before any
+ branch continuation question. For a continuation candidate whose matrix
+ outcome is `asked`, enter `WAITING_FOR_BRANCH_DECISION` and emit the
+ following visible branch-decision audit record:
    ```text
    📋 Branch continuation checkpoint | branch=<name> | family=<family> | ticket=<ticket|not-applicable> | localValidation=PASS | worktree=<clean|dirty> | operation=<none|merge|rebase|cherry-pick>
    ```
@@ -131,10 +205,11 @@ Before editing, execute in order:
    ```
    For `release/<semver>` and `support/<major.minor>`, “continue” means continue the applicable special workflow from that line; it never authorizes direct ticket commits or direct pushes to the protected line.
 5. On an unambiguous `YES`, record `branch_continuation_decision_recorded=true` with `decision=continue`, preserve the existing branch, and resume at the earliest unmet proof. Do not run `workflow ticket start`, `workflow hotfix start`, or `branch create` again for an already valid matching ticket branch. For `release` and `support`, use only the applicable release/support workflow if it needs to create a ticket branch. On `NO` or an ambiguous answer, preserve the worktree, enter `WAITING_FOR_USER_DECISION`, and do not mutate anything.
-6. For a normal-flow context, record `branch_continuation_decision_recorded=true` with `decision=normal-flow`, then execute the normal workflow from help reanchoring without the continuation question. A branch named `main`, `develop`, or an unsupported family never skips intake, branch creation, or any other normal-flow gate.
-7. Once the branch decision permits execution, apply Section 2.0 before every individual actual runtime invocation. The workflow above and below supplies the complete command flow and its required arguments.
-8. Determine host OS and architecture from reliable runtime metadata.
-9. Execute the source-CLI version check through this required help-reanchor and runtime-invocation sequence:
+6. For a Section 2.1 `new-governed-workflow` outcome, record `branch_continuation_decision_recorded=true` with `decision=new-governed-workflow`, preserve the validated current branch unchanged, and continue from the planned branch's normal or applicable special-workflow intake gate. Do not ask whether to continue the preserved branch. A branch named `main`, `develop`, or an unsupported family never skips intake, branch creation, or any other normal-flow gate.
+7. For a normal-flow context, record `branch_continuation_decision_recorded=true` with `decision=normal-flow`, then execute the normal workflow from help reanchoring without the continuation question.
+8. Once the branch decision permits execution, apply Section 2.0 before every individual actual runtime invocation. The workflow above and below supplies the complete command flow and its required arguments.
+9. Determine host OS and architecture from reliable runtime metadata.
+10. Execute the source-CLI version check through this required help-reanchor and runtime-invocation sequence:
    ```text
    🧭
    Read root CLI help because available global options must be known before checking the version.
@@ -143,7 +218,7 @@ Before editing, execute in order:
    Check the source CLI version because the workflow requires proof that its entrypoint is available.
    CLI --version
    ```
-10. Execute the policy snapshot through this required help-reanchor and runtime-invocation sequence:
+11. Execute the policy snapshot through this required help-reanchor and runtime-invocation sequence:
    ```text
    🧭
    Read policy-description help because the current policy contract must be known before retrieving governance.
@@ -152,7 +227,7 @@ Before editing, execute in order:
    Retrieve the active policy because it is the authoritative governance input for subsequent decisions.
    AUTO policy describe
    ```
-11. Execute repository diagnostics through this required help-reanchor and runtime-invocation sequence:
+12. Execute repository diagnostics through this required help-reanchor and runtime-invocation sequence:
    ```text
    🧭
    Read doctor help because the available diagnostics must be known before checking repository health.
@@ -161,8 +236,8 @@ Before editing, execute in order:
    Run repository diagnostics because governing-environment blockers must be detected before mutation.
    AUTO doctor
    ```
-12. Apply Section 2.0 to every selected command before each invocation; there is no reusable batch-help stage.
-13. Reinspect the current branch, worktree, staged state, same-ticket branches, and active merge/rebase/cherry-pick state. If changes already exist, prove they belong to the supplied or confirmed ticket and the current official/Scratch branch. Otherwise stop before mutation and ask how to handle them. Never hide them with an automatic stash or low-quality commit.
+13. Apply Section 2.0 to every selected command before each invocation; there is no reusable batch-help stage.
+14. Reinspect the current branch, worktree, staged state, same-ticket branches, and active merge/rebase/cherry-pick state. If changes already exist, prove they belong to the supplied or confirmed ticket and the current official/Scratch branch. Otherwise stop before mutation and ask how to handle them. Never hide them with an automatic stash or low-quality commit.
 
 There is no `--silent` mode. `--interactive never` disables prompts, `--output json` preserves evidence, and `--yes` authorizes bounded mutation. Do not replace this with `--quiet`.
 
@@ -528,7 +603,8 @@ For a controlled published-branch merge conflict, resolve/stage exact paths, com
 ## [10] Audit and completion guard
 Emit compact material-gate records:
 ```text
-📋 Branch context | branch=<name|detached> | family=<family|none> | classification=<continuation|normal> | decision=<continue|normal-flow|waiting> | cli=PASS|FAIL
+📋 Branch context | branch=<name|detached> | family=<family|none> | classification=<continuation|normal> | decision=<continue|new-governed-workflow|normal-flow|waiting> | cli=PASS|FAIL
+📋 Iterative branch decision | context=<active|none> | plannedNewBranch=<true|false> | planBound=<true|false> | currentBranch=<name|detached> | decision=<continue-existing|new-governed-workflow|wait-for-ticket-or-input|waiting> | continuationQuestion=<asked|skipped> | reason=<concise evidence>
 📋 Intake | ticket=<id> | family=<family> | slug=<slug> | verification=PASS
 📋 Scratch | timing=<proactive|reactive> | score=<n> | result=<value>
 📋 Branch | workflow=<command> | branch=<name> | cli=PASS

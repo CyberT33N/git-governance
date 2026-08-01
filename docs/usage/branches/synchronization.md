@@ -22,10 +22,16 @@ git governance --interactive never --output json --yes branch sync-base `
 
 Policy:
 
-1. Fetch the selected remote.
-2. Compare `HEAD` with the real target base.
-3. If no base commits are missing, do nothing.
-4. An unpublished official branch may rebase only if the base advanced.
-5. A published official branch never routine-rebases; a controlled merge is
+1. Run the command on the branch to synchronize. If supplied, `--branch` must
+   match the checked-out branch; it never switches branches implicitly.
+2. Fetch the selected remote.
+3. Compare `HEAD` with the real target base.
+4. If no base commits are missing, do nothing.
+5. An unpublished official branch may rebase only if the base advanced.
+6. A published official branch never routine-rebases; a controlled merge is
    required instead.
-6. `scratch/*` remains private and is not a pull-request branch.
+7. `scratch/*` remains private and is not a pull-request branch.
+8. A release-preparation branch must not use this generic command to import
+   `main` for a release promotion. Use
+   `workflow release align-promotion-base` so the release provenance,
+   quality gate, and release-line PR target remain explicit.

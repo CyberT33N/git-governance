@@ -923,6 +923,7 @@ func newReleaseWorkflowCommand(application *application) *cobra.Command {
 		newReleaseCutCommand(application),
 		newReleaseStabilizeCommand(application),
 		newReleasePublishStabilizationCommand(application),
+		newReleaseAlignPromotionBaseCommand(application),
 		newReleasePromotionCommand(application),
 		newReleaseBackmergeCommand(application),
 		newSupportPrepareCommand(application),
@@ -1268,6 +1269,93 @@ func newReleasePublishStabilizationCommand(application *application) *cobra.Comm
 	command.Flags().BoolVar(&createPullRequest, "create-pull-request", false, "create the pull request through the configured provider after pushing")
 	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
 	command.Flags().BoolVar(&resume, "resume", false, "continue a manually resolved rebase")
+	return command
+}
+
+func newReleaseAlignPromotionBaseCommand(application *application) *cobra.Command {
+	var (
+		branchRaw         string
+		releaseRaw        string
+		push              bool
+		createPullRequest bool
+		draft             bool
+	)
+	command := &cobra.Command{
+		Use:   "align-promotion-base",
+		Short: "Align a release-preparation branch with main before promotion",
+		RunE: withWorkflowInputs(func(command *cobra.Command, inputs *workflowInputSummary) error {
+			services := application.services()
+			repository, err := application.discover(command.Context(), services)
+			if err != nil {
+				return err
+			}
+			name, err := currentOrSpecified(command.Context(), services, branchRaw, repository)
+			if err != nil {
+				return err
+			}
+			if name.Family() != branch.FamilyChore {
+				return invalidOption("branch", name.String(), "a chore release-preparation branch")
+			}
+			inputs.add("release-preparation branch", name.String())
+			release, err := application.resolveReleaseLine(
+				command.Context(),
+				releaseRaw,
+				"Release line",
+				"Enter the frozen release/<semantic-version> line whose main promotion must be aligned. Example: release/2.8.0.",
+			)
+			if err != nil {
+				return err
+			}
+			inputs.add("release line", release.String())
+			if err := application.validatePullRequestPublication(services, push, createPullRequest); err != nil {
+				return err
+			}
+			if err := application.confirmMutation(
+				command.Context(),
+				"Align release promotion base",
+				"Merge origin/main into "+name.String()+" and optionally publish its stabilization pull request to "+release.String()+"?",
+			); err != nil {
+				return err
+			}
+			result, err := services.releases.AlignReleasePromotionBase(command.Context(), workflow.AlignReleasePromotionBaseRequest{
+				Repository:        repository,
+				Release:           release,
+				Branch:            name,
+				Push:              push,
+				CreatePullRequest: createPullRequest,
+				Draft:             draft,
+				DryRun:            application.options.dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			fields := map[string]string{
+				"branch":               result.Branch.String(),
+				"release":              result.Release.String(),
+				"main":                 result.Main.String(),
+				"missingMainCommits":   boolString(result.MissingMainCommits),
+				"merged":               boolString(result.Merged),
+				"pushed":               boolString(result.Pushed),
+				"publishedPullRequest": result.PublishedURL,
+				"dryRun":               boolString(result.DryRun),
+			}
+			if result.Quality != nil {
+				fields["qualityStatus"] = string(result.Quality.Status)
+				fields["qualityDetail"] = result.Quality.Detail
+			}
+			return application.report(command, port.Report{
+				Operation: "workflow.release.align-promotion-base",
+				Summary:   "Release promotion base alignment completed.",
+				Fields:    fields,
+				Data:      result.PullRequest,
+			})
+		}),
+	}
+	command.Flags().StringVar(&branchRaw, "branch", "", "release-preparation branch; defaults to the current branch")
+	command.Flags().StringVar(&releaseRaw, "release", "", "release/<semver> target line")
+	command.Flags().BoolVar(&push, "push", false, "push the aligned release-preparation branch")
+	command.Flags().BoolVar(&createPullRequest, "create-pull-request", false, "create the release stabilization pull request after pushing")
+	command.Flags().BoolVar(&draft, "draft", false, "mark the pull request intent as a draft")
 	return command
 }
 

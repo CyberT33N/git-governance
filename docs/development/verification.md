@@ -12,9 +12,12 @@ go test -mod=readonly ./internal/integration -count=1
 go tool -modfile tools/go.mod govulncheck ./...
 ```
 
-`check-coverage` executes `go test -count=1 -cover ./...`. It fails when a Go
-package has no `_test.go` file or its executable statements do not reach
-`100.0%` coverage.
+`check-coverage` executes
+`go test -count=1 -p=1 -cover -covermode=atomic ./...`. It serializes package
+test processes for reproducible aggregate coverage while preserving atomic
+counters for concurrent code inside each process. It fails when a Go package
+has no `_test.go` file or its executable statements do not reach `100.0%`
+coverage.
 
 ## Platform verification model
 
