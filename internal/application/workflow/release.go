@@ -20,6 +20,7 @@ type ReleaseService struct {
 	publisher port.PullRequestPublisher
 	lifecycle port.ReleaseLifecycleProvider
 	tickets   *TicketService
+	quality   port.QualityRunner
 }
 
 var commitIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
@@ -55,6 +56,13 @@ func NewReleaseService(branches *branchapp.Service, git port.GitRepository, publ
 // making the release service depend on the CLI delivery layer.
 func (service *ReleaseService) WithTicketService(tickets *TicketService) *ReleaseService {
 	service.tickets = tickets
+	return service
+}
+
+// WithQualityRunner wires repository quality gates into release preparation
+// workflows that mutate a working branch before publication.
+func (service *ReleaseService) WithQualityRunner(quality port.QualityRunner) *ReleaseService {
+	service.quality = quality
 	return service
 }
 
