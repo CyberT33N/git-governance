@@ -258,6 +258,33 @@ Diese Branches starten aus `origin/release/<semver>` und zielen per PR auf
 dieselbe Release-Linie. Feature-, allgemeine Refactor- und themenfremde
 Arbeit ist im Stabilisierungspfad nicht zulässig.
 
+### 6.1.1 Promotion-Base-Ausrichtung
+
+Ein Promotion-PR `release/<semver> -> main` kann bei strikten
+Main-Statuschecks strukturell veraltet sein. Das ist keine generelle
+Rebase-Erlaubnis und erlaubt niemals eine direkte Aktualisierung der
+`release/*`-Ref über GitHub **Update branch**, einen Rebase oder einen
+Force Push.
+
+Eine Ausrichtung ist nur zulässig, wenn:
+
+1. `main` tatsächlich eine aktuelle Promotion-Basis verlangt;
+2. die fehlenden Main-Commits release-kompatibel sind;
+3. eine `release-prep`-`chore/*`-Branch mit gespeicherter
+   `origin/release/<semver>`-Basis aktiv ist.
+
+`workflow release align-promotion-base` prüft diese Herkunft, merged
+`origin/main` ausschließlich in die Working-Branch, führt die
+Repository-Quality-Suite aus und veröffentlicht einen PR zurück auf dieselbe
+Release-Linie. Der erzeugte Merge-Commit ist ticketgebunden und append-only.
+Erst nach dessen Merge werden der bestehende Promotion-PR und seine
+Main-Gates erneut bewertet.
+
+GitHub Rulesets schützen die zugrunde liegende Release-Ref, können aber die
+UI-Aktion anhand ihrer Head-Branch-Familie nicht eigenständig ausblenden.
+Deshalb müssen direkte Ref-Updates serverseitig abgewiesen und die
+source-aware Ausrichtung durch den Workflow kontrolliert werden.
+
 ### 6.2 Support-Provenance
 
 `support/<major.minor>` darf nur aus `origin/main` entstehen, wenn die
