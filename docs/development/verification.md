@@ -71,12 +71,13 @@ On Windows, the race detector needs a working C compiler and `CGO_ENABLED=1`.
 If the local host cannot provide that compiler, use the Ubuntu CI gate rather
 than claiming a skipped race run passed.
 
-Fuzz smoke tests:
+Fuzz smoke tests use a fixed iteration budget so runner scheduling cannot turn
+a time budget into a false failure:
 
 ```powershell
-go test ./internal/domain/ticket -run=^$ -fuzz=FuzzParseTicketValues -fuzztime=2s -parallel=1
-go test ./internal/domain/branch -run=^$ -fuzz=FuzzParseBranchValues -fuzztime=2s -parallel=1
-go test ./internal/domain/commitmsg -run=^$ -fuzz=FuzzParseCommitMessage -fuzztime=2s -parallel=1
-go test ./internal/adapters/configfs -run=^$ -fuzz=FuzzDecodePreferences -fuzztime=2s -parallel=1
-go test ./internal/adapters/quality -run=^$ -fuzz=FuzzDecodeQualityConfiguration -fuzztime=2s -parallel=1
+go test ./internal/domain/ticket -run=^$ -fuzz=FuzzParseTicketValues -fuzztime=50000x -parallel=1
+go test ./internal/domain/branch -run=^$ -fuzz=FuzzParseBranchValues -fuzztime=50000x -parallel=1
+go test ./internal/domain/commitmsg -run=^$ -fuzz=FuzzParseCommitMessage -fuzztime=50000x -parallel=1
+go test ./internal/adapters/configfs -run=^$ -fuzz=FuzzDecodePreferences -fuzztime=50000x -parallel=1
+go test ./internal/adapters/quality -run=^$ -fuzz=FuzzDecodeQualityConfiguration -fuzztime=50000x -parallel=1
 ```
