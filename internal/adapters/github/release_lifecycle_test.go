@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -289,6 +290,90 @@ func TestPublisherVerifyReleaseReconciliation(t *testing.T) {
 			Release:   release,
 		})
 		assertProblem(t, err, problem.CodeConfigurationInvalid)
+	})
+}
+
+func TestPublisherMergedPromotion(t *testing.T) {
+	t.Run("finds the matching merged promotion across pages without a provider head filter", func(t *testing.T) {
+		firstPage := make([]releasePullRequestResponse, releasePromotionPageSize)
+		for index := range firstPage {
+			firstPage[index] = releasePromotionResponseForTest(index+1, "release/other")
+		}
+		server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path != "/repos/acme/governance/pulls" {
+				t.Fatalf("unexpected path %q", request.URL.Path)
+			}
+			query := request.URL.Query()
+			if query.Get("base") != "main" || query.Get("state") != "closed" ||
+				query.Get("per_page") != "100" || query.Get("head") != "" {
+				t.Fatalf("promotion query = %q", request.URL.RawQuery)
+			}
+			switch query.Get("page") {
+			case "1":
+				_ = json.NewEncoder(writer).Encode(firstPage)
+			case "2":
+				_ = json.NewEncoder(writer).Encode([]releasePullRequestResponse{
+					releasePromotionResponseForTest(30, "release/2.8.0"),
+				})
+			default:
+				t.Fatalf("unexpected promotion page %q", query.Get("page"))
+			}
+		}))
+		defer server.Close()
+
+		base, _ := url.Parse(server.URL)
+		publisher := New(Options{Resolver: testCredentialResolver(), APIBaseURL: server.URL, HTTPClient: server.Client()})
+		promotion, err := publisher.mergedPromotion(
+			context.Background(),
+			base,
+			repositoryRef{host: "github.com", owner: "acme", name: "governance"},
+			"release/2.8.0",
+		)
+		if err != nil || promotion.Number != 30 || promotion.MergeCommitSHA != "merge-sha" ||
+			promotion.HTMLURL != "https://github.example/pull/30" {
+			t.Fatalf("mergedPromotion() = (%#v, %v)", promotion, err)
+		}
+	})
+
+	t.Run("rejects incomplete or mismatched provider evidence without credential details", func(t *testing.T) {
+		candidates := []releasePullRequestResponse{
+			releasePromotionResponseForTest(1, "release/2.8.0"),
+			releasePromotionResponseForTest(2, "release/2.8.0"),
+			releasePromotionResponseForTest(3, "release/other"),
+			releasePromotionResponseForTest(4, "release/2.8.0"),
+			releasePromotionResponseForTest(5, "release/2.8.0"),
+			releasePromotionResponseForTest(6, "release/2.8.0"),
+			releasePromotionResponseForTest(7, "release/2.8.0"),
+		}
+		candidates[0].Base.Ref = "develop"
+		candidates[1].Base.Repository.FullName = "acme/other"
+		candidates[3].Head.Repository.FullName = "acme/fork"
+		candidates[4].MergedAt = nil
+		candidates[5].MergeCommitSHA = ""
+		candidates[6].HTMLURL = ""
+
+		server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path != "/repos/acme/governance/pulls" || request.URL.Query().Get("page") != "1" {
+				t.Fatalf("unexpected promotion request %q", request.URL.String())
+			}
+			_ = json.NewEncoder(writer).Encode(candidates)
+		}))
+		defer server.Close()
+
+		base, _ := url.Parse(server.URL)
+		publisher := New(Options{Resolver: testCredentialResolver(), APIBaseURL: server.URL, HTTPClient: server.Client()})
+		_, err := publisher.mergedPromotion(
+			context.Background(),
+			base,
+			repositoryRef{host: "github.com", owner: "acme", name: "governance"},
+			"release/2.8.0",
+		)
+		value, ok := problem.As(err)
+		if !ok || value.Code != problem.CodeConfigurationInvalid ||
+			value.Actual != "no merged release/2.8.0 -> main pull request with complete provider evidence" ||
+			strings.Contains(strings.ToLower(value.Actual), "token") {
+			t.Fatalf("mergedPromotion() problem = %#v", err)
+		}
 	})
 }
 
@@ -765,14 +850,14 @@ func lifecycleServer(t *testing.T, effectiveDelta, annotatedTag bool) *httptest.
 	return httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/repos/acme/governance/pulls":
-			if request.URL.Query().Get("base") != "main" || request.URL.Query().Get("head") != "acme:release/2.8.0" {
+			if request.URL.Query().Get("base") != "main" || request.URL.Query().Get("state") != "closed" ||
+				request.URL.Query().Get("per_page") != "100" || request.URL.Query().Get("page") != "1" ||
+				request.URL.Query().Get("head") != "" {
 				t.Fatalf("promotion query = %q", request.URL.RawQuery)
 			}
-			_ = json.NewEncoder(writer).Encode([]releasePullRequestResponse{{
-				HTMLURL:        "https://github.example/pull/8",
-				MergedAt:       timePtr(time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)),
-				MergeCommitSHA: "merge-sha",
-			}})
+			_ = json.NewEncoder(writer).Encode([]releasePullRequestResponse{
+				releasePromotionResponseForTest(8, "release/2.8.0"),
+			})
 		case "/repos/acme/governance/git/ref/tags/v2.8.0":
 			objectType := "commit"
 			objectSHA := "merge-sha"
@@ -805,11 +890,26 @@ func lifecycleServer(t *testing.T, effectiveDelta, annotatedTag bool) *httptest.
 }
 
 func writeMergedPromotion(writer http.ResponseWriter) {
-	_ = json.NewEncoder(writer).Encode([]releasePullRequestResponse{{
-		HTMLURL:        "https://github.example/pull/8",
+	_ = json.NewEncoder(writer).Encode([]releasePullRequestResponse{
+		releasePromotionResponseForTest(8, "release/2.8.0"),
+	})
+}
+
+func releasePromotionResponseForTest(number int, release string) releasePullRequestResponse {
+	return releasePullRequestResponse{
+		Number:         number,
+		HTMLURL:        "https://github.example/pull/" + strconv.Itoa(number),
 		MergedAt:       timePtr(time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)),
 		MergeCommitSHA: "merge-sha",
-	}})
+		Base: releasePullRequestBranchResponse{
+			Ref:        "main",
+			Repository: releasePullRequestRepositoryResponse{FullName: "acme/governance"},
+		},
+		Head: releasePullRequestBranchResponse{
+			Ref:        release,
+			Repository: releasePullRequestRepositoryResponse{FullName: "acme/governance"},
+		},
+	}
 }
 
 func writeReleaseTagCommit(writer http.ResponseWriter) {
