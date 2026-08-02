@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,7 +17,10 @@ import (
 	"github.com/CyberT33N/git-governance/internal/domain/problem"
 )
 
-const releaseWorkflowWaitLimit = 30 * time.Second
+const (
+	releaseWorkflowWaitLimit = 30 * time.Second
+	releasePromotionPageSize = 100
+)
 
 var releaseRequestIDGenerator = newReleaseRequestID
 var releaseRandomReader io.Reader = rand.Reader
@@ -38,9 +42,21 @@ type workflowRunResponse struct {
 }
 
 type releasePullRequestResponse struct {
-	HTMLURL        string     `json:"html_url"`
-	MergedAt       *time.Time `json:"merged_at"`
-	MergeCommitSHA string     `json:"merge_commit_sha"`
+	Number         int                              `json:"number"`
+	HTMLURL        string                           `json:"html_url"`
+	MergedAt       *time.Time                       `json:"merged_at"`
+	MergeCommitSHA string                           `json:"merge_commit_sha"`
+	Base           releasePullRequestBranchResponse `json:"base"`
+	Head           releasePullRequestBranchResponse `json:"head"`
+}
+
+type releasePullRequestBranchResponse struct {
+	Ref        string                               `json:"ref"`
+	Repository releasePullRequestRepositoryResponse `json:"repo"`
+}
+
+type releasePullRequestRepositoryResponse struct {
+	FullName string `json:"full_name"`
 }
 
 type gitReferenceResponse struct {
@@ -279,36 +295,65 @@ func (publisher *Publisher) mergedPromotion(
 	repository repositoryRef,
 	release string,
 ) (releasePullRequestResponse, error) {
-	query := url.Values{
-		"base":     {"main"},
-		"head":     {repository.owner + ":" + release},
-		"per_page": {"100"},
-		"state":    {"closed"},
-	}
-	endpoint := repositoryEndpoint(apiBase, repository, "pulls", query)
-	response, err := publisher.request(ctx, repository, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return releasePullRequestResponse{}, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return releasePullRequestResponse{}, lifecycleResponseProblem(response.StatusCode, "inspect the release promotion pull request")
-	}
-	var pullRequests []releasePullRequestResponse
-	if err := decodeResponse(response.Body, &pullRequests); err != nil {
-		return releasePullRequestResponse{}, err
-	}
-	for _, pullRequest := range pullRequests {
-		if pullRequest.MergedAt != nil && strings.TrimSpace(pullRequest.MergeCommitSHA) != "" &&
-			strings.TrimSpace(pullRequest.HTMLURL) != "" {
-			return pullRequest, nil
+	for page := 1; ; page++ {
+		query := url.Values{
+			"base":     {"main"},
+			"page":     {strconv.Itoa(page)},
+			"per_page": {strconv.Itoa(releasePromotionPageSize)},
+			"state":    {"closed"},
+		}
+		endpoint := repositoryEndpoint(apiBase, repository, "pulls", query)
+		response, err := publisher.request(ctx, repository, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return releasePullRequestResponse{}, err
+		}
+		if response.StatusCode != http.StatusOK {
+			_ = response.Body.Close()
+			return releasePullRequestResponse{}, lifecycleResponseProblem(response.StatusCode, "inspect the release promotion pull request")
+		}
+		var pullRequests []releasePullRequestResponse
+		decodeErr := decodeResponse(response.Body, &pullRequests)
+		_ = response.Body.Close()
+		if decodeErr != nil {
+			return releasePullRequestResponse{}, decodeErr
+		}
+		for _, pullRequest := range pullRequests {
+			if isMergedReleasePromotion(pullRequest, repository, release) {
+				return pullRequest, nil
+			}
+		}
+		if len(pullRequests) < releasePromotionPageSize {
+			break
 		}
 	}
-	return releasePullRequestResponse{}, lifecycleConfigurationProblem(
-		"release promotion",
-		"a merged release/<semver> -> main pull request",
-		"merge the approved release promotion before requesting backmerge reconciliation",
-	)
+	return releasePullRequestResponse{}, lifecyclePromotionNotFoundProblem(release)
+}
+
+func isMergedReleasePromotion(
+	pullRequest releasePullRequestResponse,
+	repository repositoryRef,
+	release string,
+) bool {
+	fullName := repository.owner + "/" + repository.name
+	return pullRequest.Base.Ref == "main" &&
+		strings.EqualFold(strings.TrimSpace(pullRequest.Base.Repository.FullName), fullName) &&
+		pullRequest.Head.Ref == release &&
+		strings.EqualFold(strings.TrimSpace(pullRequest.Head.Repository.FullName), fullName) &&
+		pullRequest.MergedAt != nil &&
+		strings.TrimSpace(pullRequest.MergeCommitSHA) != "" &&
+		strings.TrimSpace(pullRequest.HTMLURL) != ""
+}
+
+func lifecyclePromotionNotFoundProblem(release string) error {
+	return problem.New(problem.Details{
+		Code:        problem.CodeConfigurationInvalid,
+		Category:    problem.CategoryConfig,
+		Field:       "release promotion",
+		Actual:      "no merged " + release + " -> main pull request with complete provider evidence",
+		Expected:    "a merged release/<semver> -> main pull request with an exact source, target, merge SHA, and URL",
+		Rule:        "release lifecycle automation requires verified provider evidence",
+		Remediation: "verify the provider-visible promotion source, target, merge status, merge SHA, and pull request URL before requesting backmerge reconciliation",
+	})
 }
 
 func (publisher *Publisher) tagCommit(
