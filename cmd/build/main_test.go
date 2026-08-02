@@ -528,19 +528,19 @@ func expectedInvocations(files []string) []invocation {
 		},
 		{
 			executable: "go",
-			arguments:  []string{"test", "-mod=readonly", "./internal/domain/ticket", "-run=^$", "-fuzz=FuzzParseTicketValues", "-fuzztime=2s", "-parallel=1"},
+			arguments:  []string{"test", "-mod=readonly", "./internal/domain/ticket", "-run=^$", "-fuzz=FuzzParseTicketValues", "-fuzztime=50000x", "-parallel=1"},
 		},
 		{
 			executable: "go",
-			arguments:  []string{"test", "-mod=readonly", "./internal/domain/branch", "-run=^$", "-fuzz=FuzzParseBranchValues", "-fuzztime=2s", "-parallel=1"},
+			arguments:  []string{"test", "-mod=readonly", "./internal/domain/branch", "-run=^$", "-fuzz=FuzzParseBranchValues", "-fuzztime=50000x", "-parallel=1"},
 		},
 		{
 			executable: "go",
-			arguments:  []string{"test", "-mod=readonly", "./internal/domain/commitmsg", "-run=^$", "-fuzz=FuzzParseCommitMessage", "-fuzztime=2s", "-parallel=1"},
+			arguments:  []string{"test", "-mod=readonly", "./internal/domain/commitmsg", "-run=^$", "-fuzz=FuzzParseCommitMessage", "-fuzztime=50000x", "-parallel=1"},
 		},
 		{
 			executable: "go",
-			arguments:  []string{"test", "-mod=readonly", "./internal/adapters/configfs", "-run=^$", "-fuzz=FuzzDecodePreferences", "-fuzztime=2s", "-parallel=1"},
+			arguments:  []string{"test", "-mod=readonly", "./internal/adapters/configfs", "-run=^$", "-fuzz=FuzzDecodePreferences", "-fuzztime=50000x", "-parallel=1"},
 		},
 		{
 			executable: "go",

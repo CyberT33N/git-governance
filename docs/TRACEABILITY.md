@@ -65,7 +65,7 @@ does not rely on any external governance repository or unpublished rule set.
 | `workflow ticket publish` | IMPLEMENTED | reports conditional rebase state, resumes resolved rebase and scratch-transfer conflicts interactively or with `--resume`, and creates a PR only through an explicit configured provider |
 | `workflow hotfix start` | IMPLEMENTED | affected-line selection is mandatory |
 | hotfix publish and propagation | IMPLEMENTED | affected-line publish plus `cherry-pick -x` forward/backport workflow, including non-interactive `--resume` continuation |
-| `workflow release cut`, `stabilize`, `align-promotion-base`, `promote`, `backmerge`, `support`, `cleanup` | IMPLEMENTED | protected-line dispatch/verification, stabilization constraints, governed promotion-base alignment, release-to-main intent, delivery-gated conditional backmerge, cleanup, and support-tag provenance are enforced |
+| `workflow release cut`, `stabilize`, `align-promotion-base`, `align-reconciliation-base`, `promote`, `backmerge`, `support`, `cleanup` | IMPLEMENTED | protected-line dispatch/verification, stabilization constraints, governed promotion- and reconciliation-base alignment, release-to-main intent, delivery-gated conditional backmerge, cleanup, and support-tag provenance are enforced |
 | GitHub App pull-request adapter | IMPLEMENTED | just-in-time App credential resolution, host/repository isolation, bounded REST responses, and idempotent existing-PR lookup |
 | `auth login/status/logout github` | IMPLEMENTED | explicit Device Flow, redacted status, native secret-store session lifecycle, and CLI contract tests |
 | `validate pre-push` | IMPLEMENTED | parses every Git stdin ref update and validates the actual remote target |
@@ -94,6 +94,7 @@ does not rely on any external governance repository or unpublished rule set.
 | Scratch branch | VERIFIED | private local branch from the same-ticket official local branch; transfer resolves an existing local official target by ticket ID and squashes to one governed commit |
 | Protected release-line dispatch | VERIFIED | GitHub lifecycle adapter accepts a successful dispatch response, waits for its correlated result, then fetches and verifies the remote release or support line; adapter and CLI-contract tests pass; live `release/1.0.0` creation was verified from `develop` |
 | Delivery-gated release reconciliation | VERIFIED | GitHub verifies the merged promotion, exact tag, published release, and effective release-to-develop delta; backmerge is required only when that delta exists; adapter and workflow whitebox tests pass |
+| Strict-base reconciliation alignment | IMPLEMENTED | a ticket-bound chore branch from release merges current Develop, validates the combined state, and prepares a Merge-Commit PR to Develop without modifying the delivered release ref |
 | Release stabilization and completion | IMPLEMENTED | constrained stabilization, promotion intent, dispatch, delivery-gated conditional backmerge, cleanup, and support-tag provenance are present |
 
 ## Testing and quality
@@ -154,6 +155,7 @@ does not rely on any external governance repository or unpublished rule set.
 | Release lifecycle | add stabilization, release-to-main intent, controlled propagation, and cleanup | IMPLEMENTED |
 | Protected-line lifecycle | dispatch protected release/support creation through a least-privileged provider, wait for completion, and verify the remote reference | IMPLEMENTED |
 | Release reconciliation | require promotion/tag/delivery evidence, create a develop PR only for effective delta, and record `not-required` otherwise | IMPLEMENTED |
+| Strict-base reconciliation alignment | retain the delivered release ref, merge Develop only into a ticket-bound preparation branch, then review a merge-commit PR to Develop | IMPLEMENTED |
 | Tag-to-artifact trigger | explicitly dispatch the artifact workflow after a `GITHUB_TOKEN`-created immutable tag | IMPLEMENTED |
 | Direct scratch selection | require/select an official ticket-branch base before creation | IMPLEMENTED |
 | Application-level scratch base guard | reject remote-tracking scratch bases even for programmatic callers | IMPLEMENTED |

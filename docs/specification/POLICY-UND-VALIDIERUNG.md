@@ -361,6 +361,15 @@ nur bei effektivem Delta:
 Ein offener Promotion-PR, ein bloßer Tagname oder eine fehlende
 Artefakt-Delivery sind keine zulässigen Backmerge-Voraussetzungen.
 
+Erzwingt das Develop-Ziel einen aktuellen PR-Head, darf die veröffentlichte
+`release/<semver>`-Ref nicht aktualisiert werden. In diesem Fall erstellt eine
+ticketgebundene, release-abgeleitete `chore/*`-Preparation-Branch den geprüften
+Kombinationsstand: Sie merged `origin/develop`, durchläuft Quality-Gates und
+erzeugt einen Merge-Commit-PR nach `develop`. Der Workflow verlangt die
+gespeicherte Release-Basis, einen effektiven Delta und vollständige
+Delivery-Evidenz. Ein Rebase, Force Push, Plattform-Update der Release-Ref oder
+ein `develop -> release/<semver>`-PR verletzt den Vertrag.
+
 ## 7. Commit-Typen
 
 Zugelassene kanonische Typen:
