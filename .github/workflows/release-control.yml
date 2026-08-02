@@ -173,7 +173,7 @@ jobs:
     name: Reconcile delivered release
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    environment: release
+    environment: release-reconciliation
     steps:
       - name: Check out trusted control-plane source
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
@@ -200,13 +200,13 @@ jobs:
           SLUG: ${{ inputs.slug }}
           OPERATION: ${{ inputs.operation }}
           RESOLUTION_BRANCH: ${{ inputs.resolution_branch }}
-          BROKER_URL: ${{ vars.GCP_BROKER_URL }}
-          WIF_PROVIDER: ${{ vars.GCP_BROKER_WIF_PROVIDER }}
-          INVOKER_SERVICE_ACCOUNT: ${{ vars.GCP_BROKER_INVOKER_SERVICE_ACCOUNT }}
+          PUBLISHER_BROKER_URL: ${{ vars.GCP_RECONCILIATION_PUBLISHER_BROKER_URL }}
+          PUBLISHER_WIF_PROVIDER: ${{ vars.GCP_RECONCILIATION_PUBLISHER_WIF_PROVIDER }}
+          PUBLISHER_INVOKER_SERVICE_ACCOUNT: ${{ vars.GCP_RECONCILIATION_PUBLISHER_INVOKER_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/main"
-          for variable in RELEASE TICKET_KEY TICKET SLUG BROKER_URL WIF_PROVIDER INVOKER_SERVICE_ACCOUNT; do
+          for variable in RELEASE TICKET_KEY TICKET SLUG PUBLISHER_BROKER_URL PUBLISHER_WIF_PROVIDER PUBLISHER_INVOKER_SERVICE_ACCOUNT; do
             test -n "${!variable:-}" || { echo "missing release-control input: $variable" >&2; exit 1; }
           done
           if test "$OPERATION" = "reconciliation-resume"; then
@@ -218,14 +218,14 @@ jobs:
           fi
 
       - name: Obtain short-lived broker audience token
-        id: broker_auth
+        id: publisher_auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           create_credentials_file: false
-          workload_identity_provider: ${{ vars.GCP_BROKER_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_BROKER_INVOKER_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ vars.GCP_RECONCILIATION_PUBLISHER_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_RECONCILIATION_PUBLISHER_INVOKER_SERVICE_ACCOUNT }}
           token_format: id_token
-          id_token_audience: ${{ vars.GCP_BROKER_URL }}
+          id_token_audience: ${{ vars.GCP_RECONCILIATION_PUBLISHER_BROKER_URL }}
 
       - name: Build trusted release-control binary
         shell: bash
@@ -238,8 +238,8 @@ jobs:
       - name: Create, align, or publish governed reconciliation branch
         shell: bash
         env:
-          BROKER_URL: ${{ vars.GCP_BROKER_URL }}
-          BROKER_ID_TOKEN: ${{ steps.broker_auth.outputs.id_token }}
+          PUBLISHER_BROKER_URL: ${{ vars.GCP_RECONCILIATION_PUBLISHER_BROKER_URL }}
+          PUBLISHER_BROKER_ID_TOKEN: ${{ steps.publisher_auth.outputs.id_token }}
           RELEASE: ${{ inputs.release }}
           TICKET_KEY: ${{ inputs.ticket_key }}
           TICKET: ${{ inputs.ticket }}
@@ -258,8 +258,8 @@ jobs:
           trap cleanup EXIT
 
           status="$(curl --silent --show-error --output "$response" --write-out '%{http_code}' \
-            --request POST "$BROKER_URL/v1/github/installations/token" \
-            --header "Authorization: Bearer $BROKER_ID_TOKEN" \
+            --request POST "$PUBLISHER_BROKER_URL/v1/github/installations/token" \
+            --header "Authorization: Bearer $PUBLISHER_BROKER_ID_TOKEN" \
             --header "Content-Type: application/json" \
             --data '{"host":"github.com","owner":"CyberT33N","repository":"git-governance"}')"
           test "$status" = "200"
@@ -270,8 +270,8 @@ jobs:
           echo "::add-mask::$transport_header"
           git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $transport_header"
 
-          export GIT_GOVERNANCE_GITHUB_CREDENTIAL_BROKER_URL="$BROKER_URL"
-          export GIT_GOVERNANCE_WORKLOAD_IDENTITY_TOKEN="$BROKER_ID_TOKEN"
+          export GIT_GOVERNANCE_GITHUB_CREDENTIAL_BROKER_URL="$PUBLISHER_BROKER_URL"
+          export GIT_GOVERNANCE_WORKLOAD_IDENTITY_TOKEN="$PUBLISHER_BROKER_ID_TOKEN"
           export GIT_TERMINAL_PROMPT=0
 
           if test "$OPERATION" = "reconciliation-align"; then

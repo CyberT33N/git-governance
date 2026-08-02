@@ -406,6 +406,13 @@ privilegierte `reconciliation-resume`-Pfad akzeptiert die Branch nur, wenn:
 Erst der geschützte Controller publiziert den PR nach `develop`. Er merged
 niemals selbst nach `develop`.
 
+Die Controller-Publikation verwendet eine eigene Reconciliation-Publisher-
+Identität aus dem geschützten `release-reconciliation` Environment. Diese
+Identität erhält ausschließlich die minimalen Contents- und Pull-Request-
+Rechte für den validierten `chore/*` Kandidatenpfad. Sie besitzt keinen
+Ruleset-Bypass, keine Release-Line-Dispatch- und keine direkte Shared-Line-
+Mutation-Berechtigung.
+
 ## 7. Commit-Typen
 
 Zugelassene kanonische Typen:

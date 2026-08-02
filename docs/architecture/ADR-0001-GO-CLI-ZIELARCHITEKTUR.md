@@ -400,7 +400,8 @@ Erzwingt das Develop-Ziel einen aktuellen Pull-Request-Head, bleibt die
 ausgelieferte Release-Ref unverändert. Der geschützte Main-Control-Plane-
 Workflow baut vor dem Wechsel auf die Preparation-Branch einen
 vertrauenswürdigen Binary und führt die kontrollierte Reconciliation von dort
-aus. ADR-0004 beschreibt diese Ausführungsgrenze.
+aus. ADR-0004 beschreibt diese Ausführungsgrenze; ADR-0005 trennt die
+Reconciliation-Publisher-Identität von der Release-Automation.
 
 Nach vollständig bestätigter Delivery bewertet der Zielpfad die Reconciliation
 programmatisch und idempotent. Bei Delta erstellt er den reviewbaren
