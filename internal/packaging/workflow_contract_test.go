@@ -148,6 +148,8 @@ func TestReleaseControlWorkflowUsesEphemeralBrokerIdentity(t *testing.T) {
 		`workflow release align-reconciliation-base`,
 		`git config --local http.https://github.com/.extraheader`,
 		`git config --local --unset-all http.https://github.com/.extraheader`,
+		`git config --local user.name "github-actions[bot]"`,
+		`git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"`,
 		`echo "::add-mask::$transport_token"`,
 		`echo "::add-mask::$transport_header"`,
 	} {
@@ -164,6 +166,33 @@ func TestReleaseControlWorkflowUsesEphemeralBrokerIdentity(t *testing.T) {
 		"cat \"$response\"",
 	} {
 		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("release-control workflow must not contain %q", forbidden)
+		}
+	}
+}
+
+func TestReleaseControlWorkflowConfiguresLocalReconciliationCommitIdentity(t *testing.T) {
+	t.Parallel()
+
+	workflow := readWorkflow(t, "release-control.yml")
+	stepStart := strings.Index(workflow, "- name: Create and align governed reconciliation branch")
+	if stepStart == -1 {
+		t.Fatal("release-control workflow does not contain the reconciliation step")
+	}
+	step := workflow[stepStart:]
+	nameIndex := strings.Index(step, `git config --local user.name "github-actions[bot]"`)
+	emailIndex := strings.Index(step, `git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"`)
+	stabilizeIndex := strings.Index(step, `workflow release stabilize`)
+	alignIndex := strings.Index(step, `workflow release align-reconciliation-base`)
+	if nameIndex == -1 || emailIndex == -1 || stabilizeIndex == -1 || alignIndex == -1 ||
+		nameIndex > stabilizeIndex || emailIndex > stabilizeIndex || nameIndex > alignIndex || emailIndex > alignIndex {
+		t.Fatal("release-control workflow must configure the local commit identity before reconciliation commands")
+	}
+	for _, forbidden := range []string{
+		"git config --global user.name",
+		"git config --global user.email",
+	} {
+		if strings.Contains(step, forbidden) {
 			t.Fatalf("release-control workflow must not contain %q", forbidden)
 		}
 	}
