@@ -596,6 +596,17 @@ func (repository *Repository) ContinueRebase(ctx context.Context, identity port.
 	return nil
 }
 
+// ContinueMerge advances an already started merge after the resolver stages
+// every conflicted path. A non-interactive editor preserves the governed merge
+// message recorded when the merge began.
+func (repository *Repository) ContinueMerge(ctx context.Context, identity port.RepositoryIdentity) error {
+	result := repository.invoke(ctx, identity.Root, nil, "-c", "core.editor=true", "merge", "--continue")
+	if result.err != nil {
+		return repository.commandProblem(problem.CodeGitCommandFailed, identity, "continue the resolved merge", result)
+	}
+	return nil
+}
+
 // Merge merges the target base with an explicit governed merge message.
 func (repository *Repository) Merge(ctx context.Context, identity port.RepositoryIdentity, base branch.TargetBase, message commitmsg.Message) error {
 	result := repository.invoke(ctx, identity.Root, nil, "merge", "--no-ff", "--no-edit", "-m", message.String(), base.String())
@@ -603,6 +614,71 @@ func (repository *Repository) Merge(ctx context.Context, identity port.Repositor
 		return repository.commandProblem(problem.CodeGitCommandFailed, identity, "merge the target base", result)
 	}
 	return nil
+}
+
+// HeadIsMergeOf proves that HEAD is an exact two-parent merge with the
+// delivered release ref as first parent and the pinned develop ref as second
+// parent. It is used before privileged reconciliation publication accepts a
+// resolution candidate prepared outside the controller runner.
+func (repository *Repository) HeadIsMergeOf(
+	ctx context.Context,
+	identity port.RepositoryIdentity,
+	release branch.TargetBase,
+	develop branch.TargetBase,
+) (bool, error) {
+	releaseRevision, developRevision, err := repository.ResolveReconciliationBases(ctx, identity, release, develop)
+	if err != nil {
+		return false, err
+	}
+	result := repository.invoke(ctx, identity.Root, nil, "show", "-s", "--format=%P", "HEAD")
+	if result.err != nil {
+		return false, repository.commandProblem(problem.CodeGitCommandFailed, identity, "inspect reconciliation merge parents", result)
+	}
+	parents := strings.Fields(result.stdout)
+	return len(parents) == 2 && parents[0] == releaseRevision && parents[1] == developRevision, nil
+}
+
+// ResolveReconciliationBases returns the immutable commit identities used by a
+// conflict manifest and prepared-branch provenance check.
+func (repository *Repository) ResolveReconciliationBases(
+	ctx context.Context,
+	identity port.RepositoryIdentity,
+	release branch.TargetBase,
+	develop branch.TargetBase,
+) (string, string, error) {
+	releaseRevision, err := repository.resolveCommit(ctx, identity, release, "resolve the delivered release base")
+	if err != nil {
+		return "", "", err
+	}
+	developRevision, err := repository.resolveCommit(ctx, identity, develop, "resolve the pinned develop base")
+	if err != nil {
+		return "", "", err
+	}
+	return releaseRevision, developRevision, nil
+}
+
+func (repository *Repository) resolveCommit(
+	ctx context.Context,
+	identity port.RepositoryIdentity,
+	base branch.TargetBase,
+	operation string,
+) (string, error) {
+	result := repository.invoke(ctx, identity.Root, nil, "rev-parse", "--verify", base.String()+"^{commit}")
+	if result.err != nil {
+		return "", repository.commandProblem(problem.CodeGitCommandFailed, identity, operation, result)
+	}
+	revision := strings.TrimSpace(result.stdout)
+	if revision == "" {
+		return "", problem.New(problem.Details{
+			Code:        problem.CodeGitCommandFailed,
+			Category:    problem.CategoryGit,
+			Field:       "Git revision",
+			Expected:    "a non-empty commit revision",
+			Rule:        "reconciliation recovery requires immutable release and develop commit identities",
+			Remediation: "fetch the selected remote and verify the reconciliation input refs before retrying",
+		})
+	}
+	return revision, nil
 }
 
 // SquashMerge stages the net changes from a private branch without preserving
@@ -1017,3 +1093,5 @@ func parseWorkflowBase(remote, raw string) (branch.TargetBase, error) {
 
 var _ port.GitRepository = (*Repository)(nil)
 var _ port.GitTransportAuthenticator = (*Repository)(nil)
+var _ port.MergeContinuator = (*Repository)(nil)
+var _ port.ReconciliationMergeInspector = (*Repository)(nil)

@@ -4,31 +4,36 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Verify the broker, request a protected release cut, or reconcile a delivered release.
+        description: Verify the broker, request a protected release cut, align a delivered release, or publish a validated reconciliation resolution.
         required: true
         type: choice
         options:
           - broker-smoke
           - release-cut
           - reconciliation-align
+          - reconciliation-resume
       version:
         description: SemVer release version without a leading v; required for release-cut.
         required: false
         type: string
       release:
-        description: Delivered release/<semver> line; required for reconciliation-align.
+        description: Delivered release/<semver> line; required for reconciliation operations.
         required: false
         type: string
       ticket_key:
-        description: Ticket key for reconciliation-align.
+        description: Ticket key for reconciliation operations.
         required: false
         type: string
       ticket:
-        description: Ticket number for reconciliation-align.
+        description: Ticket number for reconciliation operations.
         required: false
         type: string
       slug:
         description: Kebab-case reconciliation preparation description.
+        required: false
+        type: string
+      resolution_branch:
+        description: Ticket-bound resolved reconciliation branch; required for reconciliation-resume.
         required: false
         type: string
 
@@ -37,7 +42,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: release-control-${{ inputs.operation }}-${{ inputs.version || inputs.release || github.ref }}
+  group: release-control-${{ inputs.version || inputs.release || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -164,8 +169,8 @@ jobs:
             --dispatch
 
   reconciliation-align:
-    if: ${{ inputs.operation == 'reconciliation-align' }}
-    name: Align delivered release reconciliation
+    if: ${{ inputs.operation == 'reconciliation-align' || inputs.operation == 'reconciliation-resume' }}
+    name: Reconcile delivered release
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: release
@@ -193,6 +198,8 @@ jobs:
           TICKET_KEY: ${{ inputs.ticket_key }}
           TICKET: ${{ inputs.ticket }}
           SLUG: ${{ inputs.slug }}
+          OPERATION: ${{ inputs.operation }}
+          RESOLUTION_BRANCH: ${{ inputs.resolution_branch }}
           BROKER_URL: ${{ vars.GCP_BROKER_URL }}
           WIF_PROVIDER: ${{ vars.GCP_BROKER_WIF_PROVIDER }}
           INVOKER_SERVICE_ACCOUNT: ${{ vars.GCP_BROKER_INVOKER_SERVICE_ACCOUNT }}
@@ -202,6 +209,13 @@ jobs:
           for variable in RELEASE TICKET_KEY TICKET SLUG BROKER_URL WIF_PROVIDER INVOKER_SERVICE_ACCOUNT; do
             test -n "${!variable:-}" || { echo "missing release-control input: $variable" >&2; exit 1; }
           done
+          if test "$OPERATION" = "reconciliation-resume"; then
+            test -n "$RESOLUTION_BRANCH" || { echo "reconciliation-resume requires resolution_branch" >&2; exit 1; }
+            [[ "$RESOLUTION_BRANCH" =~ ^chore/[A-Z][A-Z0-9]*-[1-9][0-9]*-[a-z0-9]+(-[a-z0-9]+)*$ ]] ||
+              { echo "resolution_branch must be a ticket-bound chore branch" >&2; exit 1; }
+            test "$RESOLUTION_BRANCH" = "chore/${TICKET_KEY}-${TICKET}-${SLUG}" ||
+              { echo "resolution_branch must match the supplied ticket and slug" >&2; exit 1; }
+          fi
 
       - name: Obtain short-lived broker audience token
         id: broker_auth
@@ -221,7 +235,7 @@ jobs:
           go build -mod=readonly -trimpath -o .build/bin/git-governance ./cmd/git-governance
           ./.build/bin/git-governance --version
 
-      - name: Create and align governed reconciliation branch
+      - name: Create, align, or publish governed reconciliation branch
         shell: bash
         env:
           BROKER_URL: ${{ vars.GCP_BROKER_URL }}
@@ -230,6 +244,8 @@ jobs:
           TICKET_KEY: ${{ inputs.ticket_key }}
           TICKET: ${{ inputs.ticket }}
           SLUG: ${{ inputs.slug }}
+          OPERATION: ${{ inputs.operation }}
+          RESOLUTION_BRANCH: ${{ inputs.resolution_branch }}
         run: |
           set -euo pipefail
           git config --local user.name "github-actions[bot]"
@@ -258,17 +274,39 @@ jobs:
           export GIT_GOVERNANCE_WORKLOAD_IDENTITY_TOKEN="$BROKER_ID_TOKEN"
           export GIT_TERMINAL_PROMPT=0
 
+          if test "$OPERATION" = "reconciliation-align"; then
+            ./.build/bin/git-governance \
+              --interactive never \
+              --output json \
+              --yes \
+              --pull-request-provider github \
+              workflow release stabilize \
+              --release "$RELEASE" \
+              --kind release-prep \
+              --key "$TICKET_KEY" \
+              --ticket "$TICKET" \
+              --slug "$SLUG"
+
+            ./.build/bin/git-governance \
+              --interactive never \
+              --output json \
+              --yes \
+              --pull-request-provider github \
+              workflow release align-reconciliation-base \
+              --release "$RELEASE" \
+              --push \
+              --create-pull-request
+            exit 0
+          fi
+
+          git fetch origin "refs/heads/$RESOLUTION_BRANCH:refs/remotes/origin/$RESOLUTION_BRANCH"
+          git switch --create "$RESOLUTION_BRANCH" --track "origin/$RESOLUTION_BRANCH"
+
           ./.build/bin/git-governance \
             --interactive never \
             --output json \
-            --yes \
-            --pull-request-provider github \
-            workflow release stabilize \
-            --release "$RELEASE" \
-            --kind release-prep \
-            --key "$TICKET_KEY" \
-            --ticket "$TICKET" \
-            --slug "$SLUG"
+            branch validate \
+            --branch "$RESOLUTION_BRANCH"
 
           ./.build/bin/git-governance \
             --interactive never \
@@ -276,6 +314,8 @@ jobs:
             --yes \
             --pull-request-provider github \
             workflow release align-reconciliation-base \
+            --branch "$RESOLUTION_BRANCH" \
             --release "$RELEASE" \
+            --prepared \
             --push \
             --create-pull-request

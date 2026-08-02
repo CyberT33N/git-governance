@@ -376,6 +376,36 @@ reviewbaren PR oder dokumentiert `not-required`. Ein manueller
 Recovery-Fallback und durchläuft dieselben Delivery-, Ticket-, Audit- und
 Quality-Prüfungen.
 
+### 6.7.1 Reconciliation-Konflikt-Recovery
+
+Konflikte beim kontrollierten Merge von `origin/develop` in eine
+release-abgeleitete Preparation-Branch sind fail-closed. Die Controller-Ausgabe
+ist der Konfliktnachweis; sie enthält Release, Develop, Ticket, Branch und
+konfliktbezogene Git-Diagnostik, aber keine Credentials oder vertraulichen
+Transportdaten.
+
+Nicht zulässig sind:
+
+- `release/*` aktualisieren, rebasen oder per Plattform-Button synchronisieren;
+- `develop` direkt mergen oder einen leeren Backmerge-PR erzeugen;
+- eine globale `ours`/`theirs`-Strategie;
+- einen frei gewählten Branch als privilegierten CI-Recovery-Eingang behandeln.
+
+Eine autorisierte Resolution entsteht nur in einer nicht-shared,
+ticketgebundenen `chore/*`-Preparation-Branch. Nach manueller Resolution und
+exaktem Staging setzt `align-reconciliation-base --resume` den vorhandenen
+Merge fort und kann ausschließlich die Kandidatenbranch pushen. Der
+privilegierte `reconciliation-resume`-Pfad akzeptiert die Branch nur, wenn:
+
+1. Branch, Ticket und Slug übereinstimmen;
+2. HEAD ein exakter Zwei-Parent-Merge aus unverändertem Release-Ref und
+   aktuellem Develop-Ref ist;
+3. Develop seit der Resolution nicht weitergelaufen ist;
+4. Delivery, Delta, Quality, Security und Review erneut bestanden sind.
+
+Erst der geschützte Controller publiziert den PR nach `develop`. Er merged
+niemals selbst nach `develop`.
+
 ## 7. Commit-Typen
 
 Zugelassene kanonische Typen:

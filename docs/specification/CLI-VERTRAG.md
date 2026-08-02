@@ -717,6 +717,37 @@ verifiziert die aktuelle `origin/develop`-Basis, merged diese ausschließlich
 in die Preparation-Branch, führt Quality-Gates aus und publiziert optional
 einen Merge-Commit-PR nach `develop`.
 
+Bei einem Konflikt bleibt der normale Merge-Zustand in der nicht-shared,
+ticketgebundenen Preparation-Branch erhalten. Nach expliziter Resolution und
+Staging der genauen Konfliktpfade setzt `--resume` ausschließlich diesen Merge
+fort; der Befehl übernimmt keine automatische `ours`/`theirs`-Entscheidung.
+
+```text
+git governance workflow release align-reconciliation-base \
+  --release release/<semver> \
+  [--branch chore/<KEY-NUMBER>-<slug>] \
+  [--resume] \
+  [--prepared] \
+  [--push --create-pull-request]
+```
+
+`--resume` und `--prepared` schließen sich aus:
+
+- `--resume` verlangt einen aktiven, konfliktfreien und vollständig gestagten
+  Merge in derselben lokalen Preparation-Branch. Nach dem Merge muss
+  `origin/develop` weiterhin enthalten sein; sonst wird die Kandidatenbranch
+  fail-closed abgewiesen.
+- `--prepared` ist der serverseitige Recovery-Eingang für eine bereits
+  konfliktbereinigte, gepushte Preparation-Branch. Fehlende lokale
+  Workflow-Metadaten sind nur dann zulässig, wenn die CLI unabhängig beweist,
+  dass HEAD exakt den unveränderten Release-Ref als ersten und den aktuellen
+  Develop-Ref als zweiten Merge-Parent besitzt.
+
+Ein beliebiger Branch-Name genügt nie als Recovery-Nachweis. Der geschützte
+`reconciliation-resume`-Workflow validiert Ticket, Slug, Branch-Grammatik,
+Merge-Provenance, Delivery und Quality erneut, bevor er einen PR nach
+`develop` erstellt.
+
 `release/<semver>` bleibt unverändert. Im Dry-Run führt kein CLI-Workflow
 einen Fetch, Merge, Push, Provider-Preflight oder Provider-Publish aus.
 

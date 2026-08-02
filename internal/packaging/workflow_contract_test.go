@@ -126,9 +126,11 @@ func TestReleaseControlWorkflowUsesEphemeralBrokerIdentity(t *testing.T) {
 		"broker-smoke",
 		"release-cut",
 		"reconciliation-align",
+		"reconciliation-resume",
 		"ticket_key:",
 		"ticket:",
 		"slug:",
+		"resolution_branch:",
 		"environment: release",
 		"id-token: write",
 		"google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093",
@@ -146,6 +148,10 @@ func TestReleaseControlWorkflowUsesEphemeralBrokerIdentity(t *testing.T) {
 		`go build -mod=readonly -trimpath -o .build/bin/git-governance ./cmd/git-governance`,
 		`workflow release stabilize`,
 		`workflow release align-reconciliation-base`,
+		`--prepared`,
+		`git fetch origin "refs/heads/$RESOLUTION_BRANCH:refs/remotes/origin/$RESOLUTION_BRANCH"`,
+		`git switch --create "$RESOLUTION_BRANCH" --track "origin/$RESOLUTION_BRANCH"`,
+		`resolution_branch must match the supplied ticket and slug`,
 		`git config --local http.https://github.com/.extraheader`,
 		`git config --local --unset-all http.https://github.com/.extraheader`,
 		`git config --local user.name "github-actions[bot]"`,
@@ -175,7 +181,7 @@ func TestReleaseControlWorkflowConfiguresLocalReconciliationCommitIdentity(t *te
 	t.Parallel()
 
 	workflow := readWorkflow(t, "release-control.yml")
-	stepStart := strings.Index(workflow, "- name: Create and align governed reconciliation branch")
+	stepStart := strings.Index(workflow, "- name: Create, align, or publish governed reconciliation branch")
 	if stepStart == -1 {
 		t.Fatal("release-control workflow does not contain the reconciliation step")
 	}
