@@ -125,6 +125,10 @@ func TestReleaseControlWorkflowUsesEphemeralBrokerIdentity(t *testing.T) {
 		"workflow_dispatch:",
 		"broker-smoke",
 		"release-cut",
+		"reconciliation-align",
+		"ticket_key:",
+		"ticket:",
+		"slug:",
 		"environment: release",
 		"id-token: write",
 		"google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093",
@@ -138,6 +142,14 @@ func TestReleaseControlWorkflowUsesEphemeralBrokerIdentity(t *testing.T) {
 		`test "$approved_status" = "200"`,
 		`test "$rejected_status" = "403"`,
 		`rm -f "$response"`,
+		`test "$GITHUB_REF" = "refs/heads/main"`,
+		`go build -mod=readonly -trimpath -o .build/bin/git-governance ./cmd/git-governance`,
+		`workflow release stabilize`,
+		`workflow release align-reconciliation-base`,
+		`git config --local http.https://github.com/.extraheader`,
+		`git config --local --unset-all http.https://github.com/.extraheader`,
+		`echo "::add-mask::$transport_token"`,
+		`echo "::add-mask::$transport_header"`,
 	} {
 		if !strings.Contains(workflow, expected) {
 			t.Fatalf("release-control workflow does not contain %q", expected)
@@ -147,6 +159,8 @@ func TestReleaseControlWorkflowUsesEphemeralBrokerIdentity(t *testing.T) {
 		"GITHUB_RELEASE_APP_ID",
 		"GITHUB_RELEASE_APP_INSTALLATION_ID",
 		"echo \"$BROKER_ID_TOKEN\"",
+		"echo \"$transport_token\"",
+		"echo \"$transport_header\"",
 		"cat \"$response\"",
 	} {
 		if strings.Contains(workflow, forbidden) {

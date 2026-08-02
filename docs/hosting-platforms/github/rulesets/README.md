@@ -203,6 +203,19 @@ provide these separate controls:
 4. Release cleanup occurs only after delivery and either the backmerge merge or
    the recorded `not-required` reconciliation result.
 
+When Develop requires a current PR head, the protected Main release-control
+workflow builds a trusted binary before it creates the release-derived
+preparation branch. It uses a short-lived, masked broker installation token
+only in the ephemeral runner Git transport, clears that configuration on exit,
+and opens the reviewed merge-commit PR to Develop without updating the
+delivered release ref.
+
+The normal target path dispatches this controller automatically after verified
+release delivery. It remains idempotent, revalidates all delivery evidence,
+and creates a PR only for effective delta. Manual dispatch is retained only
+for incident, retry, and recovery; it cannot bypass Ruleset, review, quality,
+or audit gates.
+
 ### Initial protected-line creation
 
 `04-release.json` and `05-support.json` set

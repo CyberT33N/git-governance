@@ -40,6 +40,26 @@ before comparing `release/2.8.0` with `develop`.
 A commit-count difference alone is not final authority. The provider comparison
 also checks whether an effective content delta remains.
 
+## Strict Develop base freshness
+
+New regular pull requests may merge into `develop` between Main-promotion and
+reconciliation. They belong to the next integration phase and must never be
+merged, rebased, or otherwise written back into the delivered
+`release/<semver>` reference.
+
+When Develop requires a current pull-request head, the protected
+`reconciliation-align` operation in `release-control.yml` builds a trusted
+binary from `main`, creates a ticket-bound release-preparation branch, and
+executes `workflow release align-reconciliation-base` there. The operation
+merges current Develop only into the preparation branch and opens the reviewed
+merge-commit PR to Develop. It never updates the release ref.
+
+In the target lifecycle, successful release delivery automatically dispatches
+this controller. It revalidates promotion, tag, published release, artifacts,
+attestations, ticket metadata, and idempotency before it creates a PR. Manual
+dispatch exists only for incident, retry, or recovery and follows the same
+checks.
+
 ## Cleanup
 
 The release line remains protected until one reconciliation outcome is proven:
