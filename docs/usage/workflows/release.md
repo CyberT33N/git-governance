@@ -42,6 +42,23 @@ GCP_BROKER_WIF_PROVIDER
 GCP_BROKER_INVOKER_SERVICE_ACCOUNT
 ```
 
+These variables remain scoped to the protected `release` environment and the
+existing release-automation identity.
+
+Reconciliation publication uses the separately protected
+`release-reconciliation` environment and its dedicated publisher identity:
+
+```text
+GCP_RECONCILIATION_PUBLISHER_BROKER_URL
+GCP_RECONCILIATION_PUBLISHER_WIF_PROVIDER
+GCP_RECONCILIATION_PUBLISHER_INVOKER_SERVICE_ACCOUNT
+```
+
+The reconciliation publisher App is limited to repository contents and pull
+request publication for a provenance-validated `chore/*` candidate. It has no
+Ruleset bypass, release-line dispatch, workflow-write, administration, or
+shared-line mutation role.
+
 First dispatch `broker-smoke`. It proves that the broker accepts the approved
 `CyberT33N/git-governance` repository request and rejects an unapproved request
 without printing the returned installation token. Only after that smoke test
@@ -69,9 +86,10 @@ ticket-bound Preparation-Branch with
 `workflow release align-reconciliation-base --resume --push`. Then dispatch
 `reconciliation-resume` on `main` with `resolution_branch`; CI independently
 verifies the exact release/develop merge-parent topology before it publishes
-the Develop PR. Do not pass an arbitrary branch, use a local Device Flow
-session to create the PR, update `release/*`, or select `ours`/`theirs`
-globally. See [release reconciliation](release-reconciliation.md).
+the candidate and Develop PR through the dedicated publisher broker. Do not
+pass an arbitrary branch, use a local Device Flow session to create the PR,
+update `release/*`, or select `ours`/`theirs` globally. See
+[release reconciliation](release-reconciliation.md).
 
 ## Stabilization
 

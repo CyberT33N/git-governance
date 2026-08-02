@@ -111,8 +111,11 @@ controller accepts the branch only when it proves all of the following:
 - no Develop commit advanced after that merge;
 - delivery, delta, quality, security, and review gates succeed again.
 
-Only then does CI use its ephemeral broker-backed identity to publish the
-reviewed merge-commit PR to `develop`.
+Only then does CI use the `release-reconciliation` environment and its
+dedicated publisher broker to publish the reviewed merge-commit candidate and
+PR to `develop`. The publisher App has only repository contents and pull
+request permissions required for this path; it has no Ruleset bypass or
+shared-line mutation role.
 
 ## Cleanup
 

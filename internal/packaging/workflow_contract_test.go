@@ -177,6 +177,47 @@ func TestReleaseControlWorkflowUsesEphemeralBrokerIdentity(t *testing.T) {
 	}
 }
 
+func TestReleaseControlWorkflowUsesDedicatedReconciliationPublisher(t *testing.T) {
+	t.Parallel()
+
+	workflow := readWorkflow(t, "release-control.yml")
+	jobStart := strings.Index(workflow, "  reconciliation-align:")
+	if jobStart == -1 {
+		t.Fatal("release-control workflow does not contain the reconciliation job")
+	}
+	job := workflow[jobStart:]
+
+	for _, expected := range []string{
+		"environment: release-reconciliation",
+		"PUBLISHER_BROKER_URL: ${{ vars.GCP_RECONCILIATION_PUBLISHER_BROKER_URL }}",
+		"PUBLISHER_WIF_PROVIDER: ${{ vars.GCP_RECONCILIATION_PUBLISHER_WIF_PROVIDER }}",
+		"PUBLISHER_INVOKER_SERVICE_ACCOUNT: ${{ vars.GCP_RECONCILIATION_PUBLISHER_INVOKER_SERVICE_ACCOUNT }}",
+		"workload_identity_provider: ${{ vars.GCP_RECONCILIATION_PUBLISHER_WIF_PROVIDER }}",
+		"service_account: ${{ vars.GCP_RECONCILIATION_PUBLISHER_INVOKER_SERVICE_ACCOUNT }}",
+		"id_token_audience: ${{ vars.GCP_RECONCILIATION_PUBLISHER_BROKER_URL }}",
+		"id: publisher_auth",
+		"PUBLISHER_BROKER_ID_TOKEN: ${{ steps.publisher_auth.outputs.id_token }}",
+		`--request POST "$PUBLISHER_BROKER_URL/v1/github/installations/token"`,
+		`--header "Authorization: Bearer $PUBLISHER_BROKER_ID_TOKEN"`,
+		`export GIT_GOVERNANCE_GITHUB_CREDENTIAL_BROKER_URL="$PUBLISHER_BROKER_URL"`,
+		`export GIT_GOVERNANCE_WORKLOAD_IDENTITY_TOKEN="$PUBLISHER_BROKER_ID_TOKEN"`,
+	} {
+		if !strings.Contains(job, expected) {
+			t.Fatalf("reconciliation job does not contain %q", expected)
+		}
+	}
+	for _, forbidden := range []string{
+		"${{ vars.GCP_BROKER_URL }}",
+		"${{ vars.GCP_BROKER_WIF_PROVIDER }}",
+		"${{ vars.GCP_BROKER_INVOKER_SERVICE_ACCOUNT }}",
+		"${{ steps.broker_auth.outputs.id_token }}",
+	} {
+		if strings.Contains(job, forbidden) {
+			t.Fatalf("reconciliation job must not contain %q", forbidden)
+		}
+	}
+}
+
 func TestReleaseControlWorkflowConfiguresLocalReconciliationCommitIdentity(t *testing.T) {
 	t.Parallel()
 

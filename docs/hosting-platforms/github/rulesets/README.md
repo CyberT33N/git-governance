@@ -219,6 +219,12 @@ immutable release ref and the current Develop ref; it then reruns delivery,
 quality, review, and publication gates. Neither GitHub **Update branch** nor a
 Ruleset bypass is a replacement for that source-aware provenance check.
 
+The reconciliation publisher is a dedicated GitHub App and broker identity,
+separate from release-line automation. It may publish only the
+provenance-validated ticket-bound `chore/*` candidate and its reviewed PR to
+`develop`. It has no Ruleset bypass, release-line dispatch, workflow-write, or
+direct shared-line mutation role.
+
 The normal target path dispatches this controller automatically after verified
 release delivery. It remains idempotent, revalidates all delivery evidence,
 and creates a PR only for effective delta. Manual dispatch is retained only

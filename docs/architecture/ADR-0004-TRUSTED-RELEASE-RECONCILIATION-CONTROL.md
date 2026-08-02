@@ -53,6 +53,14 @@ anschließend `workflow release align-reconciliation-base` aus. Der Broker
 bleibt ausschließlich Token-Aussteller; er erzeugt weder Branches noch Pull
 Requests.
 
+Die Release-Automation-Identität und die Reconciliation-Publisher-Identität
+sind getrennt. Die Publisher-Identität wird ausschließlich über das geschützte
+`release-reconciliation` Environment und einen eigenen Broker, App-Key und
+kurzlebigen Installation-Token verwendet. Sie publiziert nur den
+provenance-validierten Kandidaten und dessen Pull Request; sie hat keinen
+Ruleset-Bypass, keine Release-Line-Dispatch- und keine Shared-Line-Mutation-
+Berechtigung. ADR-0005 definiert diese Identitätsgrenze.
+
 Bei einem Merge-Konflikt wird kein unaufgelöster Branch gepusht und kein PR
 erstellt. Der Konfliktnachweis bindet Release-SHA, Develop-SHA, Ticket,
 Preparation-Branch, Konfliktpfade und Controller-Run. Eine menschlich oder
@@ -74,6 +82,9 @@ erstellen.
   Release-Environment.
 - OIDC-Token und Installation-Token werden nicht ausgegeben, persistiert oder
   als Repository-Secret gespeichert.
+- Die Reconciliation-Publisher-Identität ist von der Release-Automation-
+  Identität getrennt und besitzt nur die minimale Kandidaten- und PR-
+  Publikationsberechtigung.
 - Der Git-Transport-Header ist nur im lokalen Runner-Konfigurationsbereich
   vorhanden und wird vor Job-Ende entfernt.
 - Der Preparation-Branch trägt den Ticketbezug, startet von der Release-Ref und
