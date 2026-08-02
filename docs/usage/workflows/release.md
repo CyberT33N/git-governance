@@ -63,6 +63,16 @@ those facts again and either creates the reviewed PR or records
 `not-required`. Manual `workflow_dispatch` remains an incident, retry, and
 recovery fallback; it is not the normal delivery path.
 
+If the controlled Develop merge conflicts, the controller stops before pushing
+an unresolved branch or creating a PR. Resolve the conflict in a non-shared,
+ticket-bound Preparation-Branch with
+`workflow release align-reconciliation-base --resume --push`. Then dispatch
+`reconciliation-resume` on `main` with `resolution_branch`; CI independently
+verifies the exact release/develop merge-parent topology before it publishes
+the Develop PR. Do not pass an arbitrary branch, use a local Device Flow
+session to create the PR, update `release/*`, or select `ours`/`theirs`
+globally. See [release reconciliation](release-reconciliation.md).
+
 ## Stabilization
 
 Only release-blocking fixes, final documentation, and release preparation are

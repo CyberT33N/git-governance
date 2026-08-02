@@ -22,6 +22,13 @@ type reconciliationAlignmentCommandGit struct {
 	mergedMessage commitmsg.Message
 	pushErr       error
 	pushed        bool
+	active        bool
+	operation     string
+	conflicts     bool
+	continueErr   error
+	continued     bool
+	mergeMatches  bool
+	mergeErrCheck error
 }
 
 func (git *reconciliationAlignmentCommandGit) HasMissingBaseCommits(
@@ -60,6 +67,40 @@ func (git *reconciliationAlignmentCommandGit) Push(
 	return nil
 }
 
+func (git *reconciliationAlignmentCommandGit) ActiveOperation(context.Context, port.RepositoryIdentity) (string, bool, error) {
+	return git.operation, git.active, nil
+}
+
+func (git *reconciliationAlignmentCommandGit) HasUnmergedConflicts(context.Context, port.RepositoryIdentity) (bool, error) {
+	return git.conflicts, nil
+}
+
+func (git *reconciliationAlignmentCommandGit) ContinueMerge(context.Context, port.RepositoryIdentity) error {
+	if git.continueErr != nil {
+		return git.continueErr
+	}
+	git.continued = true
+	return nil
+}
+
+func (git *reconciliationAlignmentCommandGit) HeadIsMergeOf(
+	context.Context,
+	port.RepositoryIdentity,
+	branch.TargetBase,
+	branch.TargetBase,
+) (bool, error) {
+	return git.mergeMatches, git.mergeErrCheck
+}
+
+func (git *reconciliationAlignmentCommandGit) ResolveReconciliationBases(
+	context.Context,
+	port.RepositoryIdentity,
+	branch.TargetBase,
+	branch.TargetBase,
+) (string, string, error) {
+	return "release-sha", "develop-sha", nil
+}
+
 type reconciliationAlignmentCommandQuality struct {
 	calls int
 	err   error
@@ -91,7 +132,7 @@ func newReconciliationAlignmentCommandGit(t *testing.T) *reconciliationAlignment
 	}
 	base := newCommandGit(t, worker.String(), nil)
 	base.workflowBases = map[string]branch.TargetBase{worker.String(): releaseBase}
-	return &reconciliationAlignmentCommandGit{commandGit: base, missing: true}
+	return &reconciliationAlignmentCommandGit{commandGit: base, missing: true, mergeMatches: true}
 }
 
 func newReconciliationAlignmentCommand(
@@ -163,6 +204,44 @@ func TestReleaseAlignReconciliationBaseCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("publishes a prepared branch only after merge provenance validation", func(t *testing.T) {
+		git := newReconciliationAlignmentCommandGit(t)
+		git.missing = false
+		quality := &reconciliationAlignmentCommandQuality{}
+		command := newReconciliationAlignmentCommand(t, git, quality)
+
+		output, err := executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never", "--output", "json", "--yes", "--pull-request-provider", "github",
+			"workflow", "release", "align-reconciliation-base",
+			"--release", "release/1.0.1", "--prepared", "--push", "--create-pull-request",
+		)
+		if err != nil || !git.pushed || !strings.Contains(output, `"prepared":"true"`) {
+			t.Fatalf("prepared publication = (%q, %v), pushed=%t", output, err, git.pushed)
+		}
+	})
+
+	t.Run("continues a resolved merge with explicit resume", func(t *testing.T) {
+		git := newReconciliationAlignmentCommandGit(t)
+		git.active = true
+		git.operation = "merge"
+		git.missing = false
+		quality := &reconciliationAlignmentCommandQuality{}
+		command := newReconciliationAlignmentCommand(t, git, quality)
+
+		output, err := executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never", "--output", "json", "--yes",
+			"workflow", "release", "align-reconciliation-base",
+			"--release", "release/1.0.1", "--resume",
+		)
+		if err != nil || !git.continued || !strings.Contains(output, `"resumed":"true"`) {
+			t.Fatalf("resume = (%q, %v), continued=%t", output, err, git.continued)
+		}
+	})
+
 	t.Run("rejects unsafe command inputs", func(t *testing.T) {
 		testCases := []struct {
 			name      string
@@ -186,6 +265,13 @@ func TestReleaseAlignReconciliationBaseCommand(t *testing.T) {
 			{
 				name:      "pull request without push",
 				arguments: []string{"--release", "release/1.0.1", "--create-pull-request"},
+				newGit: func() port.GitRepository {
+					return newReconciliationAlignmentCommandGit(t)
+				},
+			},
+			{
+				name:      "resume and prepared",
+				arguments: []string{"--release", "release/1.0.1", "--resume", "--prepared"},
 				newGit: func() port.GitRepository {
 					return newReconciliationAlignmentCommandGit(t)
 				},

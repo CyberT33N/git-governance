@@ -1,6 +1,6 @@
 # ADR-0004: Trusted Release Reconciliation Control
 
-- Status: Proposed
+- Status: Accepted
 - Datum: 2026-08-01
 - Geltungsbereich: Ausführung einer strikten
   `release/<semver> -> develop`-Reconciliation
@@ -32,6 +32,7 @@ trusted main control-plane source
   -> execute binary against that branch
   -> merge current develop only into preparation branch
   -> quality gates and reviewed PR to develop
+  -> or fail-closed conflict manifest and controlled recovery
 ```
 
 Die Workflow-Operation `reconciliation-align` benötigt Release-Linie,
@@ -52,6 +53,19 @@ anschließend `workflow release align-reconciliation-base` aus. Der Broker
 bleibt ausschließlich Token-Aussteller; er erzeugt weder Branches noch Pull
 Requests.
 
+Bei einem Merge-Konflikt wird kein unaufgelöster Branch gepusht und kein PR
+erstellt. Der Konfliktnachweis bindet Release-SHA, Develop-SHA, Ticket,
+Preparation-Branch, Konfliktpfade und Controller-Run. Eine menschlich oder
+agentisch aufgelöste Kandidatenbranch bleibt nicht-shared und erhält keine
+Release-Automation-Berechtigung.
+
+Der geschützte `reconciliation-resume`-Pfad übernimmt einen Kandidaten nicht
+aufgrund seines Namens. Er prüft Branch- und Ticketbindung, den unveränderten
+Release-Ursprung sowie einen exakten Zwei-Parent-Merge mit der gepinnten
+Develop-Revision. Erst danach darf CI mit kurzlebigem Broker-Token Quality
+ausführen, die Kandidatenbranch veröffentlichen und den PR nach `develop`
+erstellen.
+
 ## Invarianten
 
 - `release/<semver>` wird nie durch den Controller aktualisiert, rebased oder
@@ -64,6 +78,10 @@ Requests.
   vorhanden und wird vor Job-Ende entfernt.
 - Der Preparation-Branch trägt den Ticketbezug, startet von der Release-Ref und
   ist der einzige Merge-Ort für den aktuellen Develop-Stand.
+- Ein Konflikt führt fail-closed zu keiner Shared-Line-Mutation, keinem
+  unaufgelösten Remote-Branch und keinem PR.
+- Ein Recovery-Kandidat muss exakt aus Release- und gepinntem Develop-Parent
+  bestehen; beliebige Branch-Eingaben sind kein Vertrauensnachweis.
 - Der resultierende Pull Request zielt auf `develop` und verwendet einen Merge
   Commit.
 - Der Controller erstellt PRs idempotent, merged aber niemals direkt nach

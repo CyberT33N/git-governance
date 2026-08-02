@@ -16,14 +16,26 @@ import (
 type reconciliationAlignmentGit struct {
 	*releaseWhiteboxGit
 
-	current        branch.BranchName
-	currentErr     error
-	targetExists   bool
-	targetErr      error
-	mergeErr       error
-	validateErrors []error
-	mergedBase     branch.TargetBase
-	mergedMessage  commitmsg.Message
+	current         branch.BranchName
+	currentErr      error
+	targetExists    bool
+	targetErr       error
+	mergeErr        error
+	validateErrors  []error
+	mergedBase      branch.TargetBase
+	mergedMessage   commitmsg.Message
+	activeOperation string
+	active          bool
+	activeErr       error
+	conflicts       bool
+	conflictsErr    error
+	continueErr     error
+	continued       bool
+	mergeMatches    bool
+	mergeInspectErr error
+	releaseRevision string
+	developRevision string
+	revisionErr     error
 }
 
 func (git *reconciliationAlignmentGit) CurrentBranch(context.Context, port.RepositoryIdentity) (branch.BranchName, error) {
@@ -71,6 +83,16 @@ func (git *reconciliationAlignmentGit) Merge(
 	return nil
 }
 
+func (git *reconciliationAlignmentGit) ActiveOperation(context.Context, port.RepositoryIdentity) (string, bool, error) {
+	git.calls = append(git.calls, "active-operation")
+	return git.activeOperation, git.active, git.activeErr
+}
+
+func (git *reconciliationAlignmentGit) HasUnmergedConflicts(context.Context, port.RepositoryIdentity) (bool, error) {
+	git.calls = append(git.calls, "unmerged-conflicts")
+	return git.conflicts, git.conflictsErr
+}
+
 type reconciliationAlignmentPublisher struct {
 	releaseWhiteboxPublisher
 	preflightErr   error
@@ -98,11 +120,52 @@ func newReconciliationAlignmentGit(t *testing.T) *reconciliationAlignmentGit {
 		releaseWhiteboxGit: base,
 		current:            worker,
 		targetExists:       true,
+		mergeMatches:       true,
+		releaseRevision:    "release-sha",
+		developRevision:    "develop-sha",
 	}
 }
 
+type reconciliationAlignmentRecoveryGit struct {
+	*reconciliationAlignmentGit
+}
+
+func newReconciliationAlignmentRecoveryGit(t *testing.T) *reconciliationAlignmentRecoveryGit {
+	t.Helper()
+	return &reconciliationAlignmentRecoveryGit{reconciliationAlignmentGit: newReconciliationAlignmentGit(t)}
+}
+
+func (git *reconciliationAlignmentRecoveryGit) ContinueMerge(context.Context, port.RepositoryIdentity) error {
+	git.calls = append(git.calls, "continue-merge")
+	if git.continueErr != nil {
+		return git.continueErr
+	}
+	git.continued = true
+	return nil
+}
+
+func (git *reconciliationAlignmentRecoveryGit) HeadIsMergeOf(
+	context.Context,
+	port.RepositoryIdentity,
+	branch.TargetBase,
+	branch.TargetBase,
+) (bool, error) {
+	git.calls = append(git.calls, "head-is-merge-of")
+	return git.mergeMatches, git.mergeInspectErr
+}
+
+func (git *reconciliationAlignmentRecoveryGit) ResolveReconciliationBases(
+	context.Context,
+	port.RepositoryIdentity,
+	branch.TargetBase,
+	branch.TargetBase,
+) (string, string, error) {
+	git.calls = append(git.calls, "resolve-reconciliation-bases")
+	return git.releaseRevision, git.developRevision, git.revisionErr
+}
+
 func newReconciliationAlignmentService(
-	git *reconciliationAlignmentGit,
+	git port.GitRepository,
 	quality port.QualityRunner,
 	publisher port.PullRequestPublisher,
 	lifecycle port.ReleaseLifecycleProvider,
@@ -135,7 +198,7 @@ func requiredReconciliationEvidence() port.ReleaseReconciliationEvidence {
 
 func TestReleaseReconciliationBaseAlignment(t *testing.T) {
 	t.Run("plans a dry run without provider verification merge quality or publication", func(t *testing.T) {
-		git := newReconciliationAlignmentGit(t)
+		git := newReconciliationAlignmentRecoveryGit(t)
 		quality := &fakeQualityRunner{}
 		lifecycle := &releaseWhiteboxLifecycle{evidence: requiredReconciliationEvidence()}
 
@@ -161,7 +224,7 @@ func TestReleaseReconciliationBaseAlignment(t *testing.T) {
 	})
 
 	t.Run("merges current develop, validates quality, and publishes the reconciliation PR", func(t *testing.T) {
-		git := newReconciliationAlignmentGit(t)
+		git := newReconciliationAlignmentRecoveryGit(t)
 		quality := &fakeQualityRunner{}
 		publisher := &reconciliationAlignmentPublisher{
 			releaseWhiteboxPublisher: releaseWhiteboxPublisher{
@@ -198,7 +261,7 @@ func TestReleaseReconciliationBaseAlignment(t *testing.T) {
 	})
 
 	t.Run("returns a validated unpublished alignment after merging develop", func(t *testing.T) {
-		git := newReconciliationAlignmentGit(t)
+		git := newReconciliationAlignmentRecoveryGit(t)
 		quality := &fakeQualityRunner{}
 		lifecycle := &releaseWhiteboxLifecycle{evidence: requiredReconciliationEvidence()}
 
@@ -242,6 +305,52 @@ func TestReleaseReconciliationBaseAlignment(t *testing.T) {
 		if result.Merged || !result.Pushed || result.Quality == nil || quality.calls != 1 ||
 			len(git.pushed) != 1 {
 			t.Fatalf("already-aligned push = %#v quality=%d pushed=%v", result, quality.calls, git.pushed)
+		}
+	})
+
+	t.Run("continues a resolved merge before quality and publication", func(t *testing.T) {
+		git := newReconciliationAlignmentRecoveryGit(t)
+		git.active = true
+		git.activeOperation = "merge"
+		git.missing = false
+		quality := &fakeQualityRunner{}
+		lifecycle := &releaseWhiteboxLifecycle{evidence: requiredReconciliationEvidence()}
+		request := reconciliationAlignmentRequest()
+		request.Resume = true
+		request.Push = true
+
+		result, err := newReconciliationAlignmentService(git, quality, nil, lifecycle).
+			AlignReleaseReconciliationBase(context.Background(), request)
+		if err != nil || !result.Resumed || !result.Merged || result.Prepared || !result.Pushed ||
+			!git.continued || quality.calls != 1 {
+			t.Fatalf("resumed alignment = (%#v, %v), continued=%t quality=%d", result, err, git.continued, quality.calls)
+		}
+	})
+
+	t.Run("validates and publishes a prepared merge without local workflow metadata", func(t *testing.T) {
+		git := newReconciliationAlignmentRecoveryGit(t)
+		git.missing = false
+		git.workflowBases = nil
+		quality := &fakeQualityRunner{}
+		publisher := &reconciliationAlignmentPublisher{
+			releaseWhiteboxPublisher: releaseWhiteboxPublisher{
+				result: port.PublishedPullRequest{URL: "https://example.invalid/pr/prepared"},
+			},
+		}
+		lifecycle := &releaseWhiteboxLifecycle{evidence: requiredReconciliationEvidence()}
+		request := reconciliationAlignmentRequest()
+		request.Prepared = true
+		request.Push = true
+		request.CreatePullRequest = true
+
+		result, err := newReconciliationAlignmentService(git, quality, publisher, lifecycle).
+			AlignReleaseReconciliationBase(context.Background(), request)
+		if err != nil || !result.Prepared || !result.Merged || result.Resumed || !result.Pushed ||
+			result.PublishedURL != "https://example.invalid/pr/prepared" || quality.calls != 1 {
+			t.Fatalf("prepared alignment = (%#v, %v), quality=%d", result, err, quality.calls)
+		}
+		if !strings.Contains(strings.Join(git.calls, ","), "head-is-merge-of") {
+			t.Fatalf("prepared alignment did not inspect merge provenance: %v", git.calls)
 		}
 	})
 }
@@ -490,6 +599,63 @@ func TestReleaseReconciliationBaseAlignmentFailureAndCleanupPaths(t *testing.T) 
 		}
 	})
 
+	t.Run("classifies a reconciliation merge conflict without mutating a shared line", func(t *testing.T) {
+		git := newReconciliationAlignmentRecoveryGit(t)
+		mergeErr := errors.New("merge conflict")
+		git.mergeErr = mergeErr
+		git.conflicts = true
+		_, err := newReconciliationAlignmentService(
+			git,
+			&fakeQualityRunner{},
+			nil,
+			&releaseWhiteboxLifecycle{evidence: requiredReconciliationEvidence()},
+		).AlignReleaseReconciliationBase(context.Background(), reconciliationAlignmentRequest())
+		assertProblemCode(t, err, problem.CodeMergeConflict)
+		if !errors.Is(err, mergeErr) {
+			t.Fatalf("conflict error = %v, want %v", err, mergeErr)
+		}
+
+		git = newReconciliationAlignmentRecoveryGit(t)
+		inspectErr := errors.New("inspect conflicts")
+		git.mergeErr = mergeErr
+		git.conflictsErr = inspectErr
+		_, err = newReconciliationAlignmentService(
+			git,
+			&fakeQualityRunner{},
+			nil,
+			&releaseWhiteboxLifecycle{evidence: requiredReconciliationEvidence()},
+		).AlignReleaseReconciliationBase(context.Background(), reconciliationAlignmentRequest())
+		if !errors.Is(err, inspectErr) {
+			t.Fatalf("conflict inspection error = %v, want %v", err, inspectErr)
+		}
+
+		git = newReconciliationAlignmentRecoveryGit(t)
+		revisionErr := errors.New("resolve revisions")
+		git.mergeErr = mergeErr
+		git.conflicts = true
+		git.revisionErr = revisionErr
+		_, err = newReconciliationAlignmentService(
+			git,
+			&fakeQualityRunner{},
+			nil,
+			&releaseWhiteboxLifecycle{evidence: requiredReconciliationEvidence()},
+		).AlignReleaseReconciliationBase(context.Background(), reconciliationAlignmentRequest())
+		if !errors.Is(err, revisionErr) {
+			t.Fatalf("revision error = %v, want %v", err, revisionErr)
+		}
+
+		withoutInspector := newReconciliationAlignmentGit(t)
+		withoutInspector.mergeErr = mergeErr
+		withoutInspector.conflicts = true
+		_, err = newReconciliationAlignmentService(
+			withoutInspector,
+			&fakeQualityRunner{},
+			nil,
+			&releaseWhiteboxLifecycle{evidence: requiredReconciliationEvidence()},
+		).AlignReleaseReconciliationBase(context.Background(), reconciliationAlignmentRequest())
+		assertProblemCode(t, err, problem.CodeInternal)
+	})
+
 	t.Run("rejects unverified no-delta reconciliation before merge", func(t *testing.T) {
 		git := newReconciliationAlignmentGit(t)
 		evidence := requiredReconciliationEvidence()
@@ -626,6 +792,192 @@ func TestReleaseReconciliationBaseAlignmentFailureAndCleanupPaths(t *testing.T) 
 	})
 }
 
+func TestReleaseReconciliationBaseAlignmentRecoveryGuards(t *testing.T) {
+	t.Run("rejects mutually exclusive resume and prepared modes", func(t *testing.T) {
+		git := newReconciliationAlignmentGit(t)
+		request := reconciliationAlignmentRequest()
+		request.Resume = true
+		request.Prepared = true
+		_, err := newReconciliationAlignmentService(git, &fakeQualityRunner{}, nil, &releaseWhiteboxLifecycle{evidence: requiredReconciliationEvidence()}).
+			AlignReleaseReconciliationBase(context.Background(), request)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+	})
+
+	t.Run("requires an active resolved merge before resuming", func(t *testing.T) {
+		testCases := []struct {
+			name      string
+			configure func(*reconciliationAlignmentGit)
+			code      problem.Code
+		}{
+			{
+				name: "active operation lookup failure",
+				configure: func(git *reconciliationAlignmentGit) {
+					git.activeErr = errors.New("active operation")
+				},
+			},
+			{
+				name: "no active merge",
+				configure: func(git *reconciliationAlignmentGit) {
+					git.active = false
+				},
+				code: problem.CodeInvalidInput,
+			},
+			{
+				name: "different active operation",
+				configure: func(git *reconciliationAlignmentGit) {
+					git.active = true
+					git.activeOperation = "rebase"
+				},
+				code: problem.CodeInvalidInput,
+			},
+			{
+				name: "conflict inspection failure",
+				configure: func(git *reconciliationAlignmentGit) {
+					git.active = true
+					git.activeOperation = "merge"
+					git.conflictsErr = errors.New("conflicts")
+				},
+			},
+			{
+				name: "unresolved conflicts",
+				configure: func(git *reconciliationAlignmentGit) {
+					git.active = true
+					git.activeOperation = "merge"
+					git.conflicts = true
+				},
+				code: problem.CodeInvalidInput,
+			},
+			{
+				name: "missing merge continuator",
+				configure: func(git *reconciliationAlignmentGit) {
+					git.active = true
+					git.activeOperation = "merge"
+				},
+				code: problem.CodeInternal,
+			},
+		}
+		for _, testCase := range testCases {
+			testCase := testCase
+			t.Run(testCase.name, func(t *testing.T) {
+				git := newReconciliationAlignmentGit(t)
+				testCase.configure(git)
+				request := reconciliationAlignmentRequest()
+				request.Resume = true
+				_, err := newReconciliationAlignmentService(
+					git,
+					&fakeQualityRunner{},
+					nil,
+					&releaseWhiteboxLifecycle{evidence: requiredReconciliationEvidence()},
+				).AlignReleaseReconciliationBase(context.Background(), request)
+				if testCase.code != "" {
+					assertProblemCode(t, err, testCase.code)
+				} else if err == nil {
+					t.Fatal("expected recovery failure")
+				}
+			})
+		}
+	})
+
+	t.Run("propagates merge continuation failure and rejects a stale resumed target", func(t *testing.T) {
+		git := newReconciliationAlignmentRecoveryGit(t)
+		git.active = true
+		git.activeOperation = "merge"
+		git.continueErr = errors.New("continue merge")
+		request := reconciliationAlignmentRequest()
+		request.Resume = true
+		_, err := newReconciliationAlignmentService(
+			git,
+			&fakeQualityRunner{},
+			nil,
+			&releaseWhiteboxLifecycle{evidence: requiredReconciliationEvidence()},
+		).AlignReleaseReconciliationBase(context.Background(), request)
+		if !errors.Is(err, git.continueErr) {
+			t.Fatalf("continue error = %v, want %v", err, git.continueErr)
+		}
+
+		git = newReconciliationAlignmentRecoveryGit(t)
+		git.active = true
+		git.activeOperation = "merge"
+		git.missing = true
+		_, err = newReconciliationAlignmentService(
+			git,
+			&fakeQualityRunner{},
+			nil,
+			&releaseWhiteboxLifecycle{evidence: requiredReconciliationEvidence()},
+		).AlignReleaseReconciliationBase(context.Background(), request)
+		assertProblemCode(t, err, problem.CodeInvalidInput)
+	})
+
+	t.Run("requires exact prepared merge provenance", func(t *testing.T) {
+		testCases := []struct {
+			name   string
+			newGit func() port.GitRepository
+			code   problem.Code
+		}{
+			{
+				name: "prepared branch misses develop",
+				newGit: func() port.GitRepository {
+					git := newReconciliationAlignmentRecoveryGit(t)
+					git.workflowBases = nil
+					git.missing = true
+					return git
+				},
+				code: problem.CodeInvalidInput,
+			},
+			{
+				name: "missing merge inspector",
+				newGit: func() port.GitRepository {
+					git := newReconciliationAlignmentGit(t)
+					git.workflowBases = nil
+					git.missing = false
+					return git
+				},
+				code: problem.CodeInternal,
+			},
+			{
+				name: "merge inspector failure",
+				newGit: func() port.GitRepository {
+					git := newReconciliationAlignmentRecoveryGit(t)
+					git.workflowBases = nil
+					git.missing = false
+					git.mergeInspectErr = errors.New("inspect merge")
+					return git
+				},
+			},
+			{
+				name: "merge topology mismatch",
+				newGit: func() port.GitRepository {
+					git := newReconciliationAlignmentRecoveryGit(t)
+					git.workflowBases = nil
+					git.missing = false
+					git.mergeMatches = false
+					return git
+				},
+				code: problem.CodeInvalidInput,
+			},
+		}
+		for _, testCase := range testCases {
+			testCase := testCase
+			t.Run(testCase.name, func(t *testing.T) {
+				git := testCase.newGit()
+				request := reconciliationAlignmentRequest()
+				request.Prepared = true
+				_, err := newReconciliationAlignmentService(
+					git,
+					&fakeQualityRunner{},
+					nil,
+					&releaseWhiteboxLifecycle{evidence: requiredReconciliationEvidence()},
+				).AlignReleaseReconciliationBase(context.Background(), request)
+				if testCase.code != "" {
+					assertProblemCode(t, err, testCase.code)
+				} else if err == nil {
+					t.Fatal("expected prepared recovery failure")
+				}
+			})
+		}
+	})
+}
+
 func TestReconciliationBaseAlignmentHelpers(t *testing.T) {
 	worker := mustBranch("chore/GOV-20-align-release-reconciliation-base")
 	release := mustBranch("release/1.0.1")
@@ -637,5 +989,24 @@ func TestReconciliationBaseAlignmentHelpers(t *testing.T) {
 	if pullRequest.Source != worker || pullRequest.Target.String() != "develop" || pullRequest.Ticket.String() != "GOV-20" ||
 		pullRequest.Title != "GOV-20: align-release-reconciliation-base" || !pullRequest.Draft {
 		t.Fatalf("pull request = %#v", pullRequest)
+	}
+	cause := problem.New(problem.Details{
+		Code:       problem.CodeGitCommandFailed,
+		Category:   problem.CategoryGit,
+		Context:    "action=merge the target base",
+		Diagnostic: "CONFLICT (content): runtime.go",
+	})
+	conflict := reconciliationMergeConflictProblem(
+		worker,
+		release,
+		mustBase("origin", "develop"),
+		"release-sha",
+		"develop-sha",
+		cause,
+	)
+	assertProblemCode(t, conflict, problem.CodeMergeConflict)
+	value, ok := problem.As(conflict)
+	if !ok || value.Context != cause.Context || value.Diagnostic != cause.Diagnostic {
+		t.Fatalf("conflict manifest = %#v", value)
 	}
 }

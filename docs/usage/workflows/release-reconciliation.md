@@ -60,6 +60,60 @@ attestations, ticket metadata, and idempotency before it creates a PR. Manual
 dispatch exists only for incident, retry, or recovery and follows the same
 checks.
 
+## Conflict recovery
+
+A conflict while merging the current Develop ref into the ticket-bound
+Preparation-Branch is an expected fail-closed outcome. It does not authorize
+GitHub **Update branch**, a rebase, a direct update of `release/<semver>`, or
+an automatic `ours`/`theirs` decision.
+
+The failed controller run is the conflict manifest. It records the delivered
+release, current Develop context, ticket-bound branch, conflict paths, and
+provider-delivery evidence without exposing credentials. It creates neither a
+reconciliation PR nor a remote unresolved branch.
+
+Resolve semantic conflicts only in a non-shared, ticket-bound resolution
+workspace. Start the Preparation-Branch from the delivered release through the
+governed CLI, let the controlled alignment start the merge, resolve and stage
+only the exact conflicted paths, then resume and push the completed merge:
+
+```powershell
+git governance --interactive never --output json --yes `
+  workflow release stabilize `
+  --release release/2.8.0 `
+  --kind release-prep `
+  --key ABC `
+  --ticket 999 `
+  --slug reconcile-release-2-8-0
+
+git governance --interactive never --output json --yes `
+  workflow release align-reconciliation-base `
+  --release release/2.8.0
+
+# Resolve exact conflicts and stage only those paths.
+
+git governance --interactive never --output json --yes `
+  workflow release align-reconciliation-base `
+  --release release/2.8.0 `
+  --resume `
+  --push
+```
+
+The local workspace may prepare and push the non-shared candidate branch, but
+it must not create the Develop PR or receive release-automation credentials.
+Dispatch `reconciliation-resume` from `release-control.yml` on `main` with the
+same release, ticket, slug, and the exact candidate branch. The trusted
+controller accepts the branch only when it proves all of the following:
+
+- its ticket-bound `chore/*` name matches the supplied ticket and slug;
+- its merge commit has the immutable release ref as first parent and the
+  current Develop ref as second parent;
+- no Develop commit advanced after that merge;
+- delivery, delta, quality, security, and review gates succeed again.
+
+Only then does CI use its ephemeral broker-backed identity to publish the
+reviewed merge-commit PR to `develop`.
+
 ## Cleanup
 
 The release line remains protected until one reconciliation outcome is proven:
