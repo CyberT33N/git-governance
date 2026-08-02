@@ -299,7 +299,8 @@ func TestPublisherMergedPromotion(t *testing.T) {
 		for index := range firstPage {
 			firstPage[index] = releasePromotionResponseForTest(index+1, "release/other")
 		}
-		server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		promotion := releasePromotionResponseForTest(30, "release/2.8.0")
+		server := httptest.NewTLSServer(withGraphQLPromotion(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			if request.URL.Path != "/repos/acme/governance/pulls" {
 				t.Fatalf("unexpected path %q", request.URL.Path)
 			}
@@ -312,13 +313,11 @@ func TestPublisherMergedPromotion(t *testing.T) {
 			case "1":
 				_ = json.NewEncoder(writer).Encode(firstPage)
 			case "2":
-				_ = json.NewEncoder(writer).Encode([]releasePullRequestResponse{
-					releasePromotionResponseForTest(30, "release/2.8.0"),
-				})
+				_ = json.NewEncoder(writer).Encode([]releasePullRequestResponse{promotion})
 			default:
 				t.Fatalf("unexpected promotion page %q", query.Get("page"))
 			}
-		}))
+		}), promotion))
 		defer server.Close()
 
 		base, _ := url.Parse(server.URL)
@@ -349,7 +348,7 @@ func TestPublisherMergedPromotion(t *testing.T) {
 		candidates[1].Base.Repository.FullName = "acme/other"
 		candidates[3].Head.Repository.FullName = "acme/fork"
 		candidates[4].MergedAt = nil
-		candidates[5].MergeCommitSHA = ""
+		candidates[5].Number = 0
 		candidates[6].HTMLURL = ""
 
 		server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -375,6 +374,124 @@ func TestPublisherMergedPromotion(t *testing.T) {
 			t.Fatalf("mergedPromotion() problem = %#v", err)
 		}
 	})
+
+	t.Run("propagates GraphQL merge-evidence failures", func(t *testing.T) {
+		promotion := releasePromotionResponseForTest(30, "release/2.8.0")
+		server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			switch request.URL.Path {
+			case "/repos/acme/governance/pulls":
+				_ = json.NewEncoder(writer).Encode([]releasePullRequestResponse{promotion})
+			case "/graphql":
+				writer.WriteHeader(http.StatusForbidden)
+			default:
+				t.Fatalf("unexpected path %q", request.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		base, _ := url.Parse(server.URL)
+		publisher := New(Options{Resolver: testCredentialResolver(), APIBaseURL: server.URL, HTTPClient: server.Client()})
+		if _, err := publisher.mergedPromotion(context.Background(), base, repositoryRef{host: "github.com", owner: "acme", name: "governance"}, "release/2.8.0"); err == nil {
+			t.Fatal("GraphQL merge-evidence failure was accepted")
+		}
+	})
+}
+
+func TestPublisherPromotionMergeCommit(t *testing.T) {
+	repository := repositoryRef{host: "github.com", owner: "acme", name: "governance"}
+	promotion := releasePromotionResponseForTest(30, "release/2.8.0")
+
+	t.Run("queries GraphQL for the exact merged promotion commit", func(t *testing.T) {
+		server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path != "/graphql" || request.Method != http.MethodPost {
+				t.Fatalf("unexpected GraphQL request %s %s", request.Method, request.URL.Path)
+			}
+			var payload graphQLPromotionRequest
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Query != graphQLPromotionQuery ||
+				payload.Variables != (graphQLPromotionVariables{Owner: "acme", Name: "governance", Number: 30}) {
+				t.Fatalf("GraphQL payload = %#v", payload)
+			}
+			writeGraphQLPromotion(writer, promotion)
+		}))
+		defer server.Close()
+
+		base, _ := url.Parse(server.URL)
+		publisher := New(Options{Resolver: testCredentialResolver(), APIBaseURL: server.URL, HTTPClient: server.Client()})
+		mergeCommit, err := publisher.promotionMergeCommit(context.Background(), base, repository, "release/2.8.0", promotion)
+		if err != nil || mergeCommit != "merge-sha" {
+			t.Fatalf("promotionMergeCommit() = (%q, %v)", mergeCommit, err)
+		}
+	})
+
+	testCases := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{
+			name: "status",
+			handler: func(writer http.ResponseWriter, _ *http.Request) {
+				writer.WriteHeader(http.StatusForbidden)
+			},
+		},
+		{
+			name: "malformed response",
+			handler: func(writer http.ResponseWriter, _ *http.Request) {
+				_, _ = writer.Write([]byte("{"))
+			},
+		},
+		{
+			name: "GraphQL errors",
+			handler: func(writer http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(writer).Encode(graphQLPromotionResponse{
+					Errors: []graphQLErrorResponse{{Message: "provider failure"}},
+				})
+			},
+		},
+		{
+			name: "missing merge commit",
+			handler: func(writer http.ResponseWriter, _ *http.Request) {
+				response := graphQLPromotionResponseForTest(promotion)
+				response.Data.Repository.PullRequest.MergeCommit = nil
+				_ = json.NewEncoder(writer).Encode(response)
+			},
+		},
+		{
+			name: "mismatched promotion",
+			handler: func(writer http.ResponseWriter, _ *http.Request) {
+				response := graphQLPromotionResponseForTest(promotion)
+				response.Data.Repository.PullRequest.HeadRefName = "release/other"
+				_ = json.NewEncoder(writer).Encode(response)
+			},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(testCase.handler)
+			defer server.Close()
+
+			base, _ := url.Parse(server.URL)
+			publisher := New(Options{Resolver: testCredentialResolver(), APIBaseURL: server.URL, HTTPClient: server.Client()})
+			if _, err := publisher.promotionMergeCommit(context.Background(), base, repository, "release/2.8.0", promotion); err == nil {
+				t.Fatal("incomplete GraphQL promotion evidence was accepted")
+			}
+		})
+	}
+
+	t.Run("propagates GraphQL transport failures", func(t *testing.T) {
+		publisher := New(Options{
+			Resolver: testCredentialResolver(),
+			HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, errors.New("GraphQL unavailable")
+			})},
+		})
+		base, _ := url.Parse(defaultAPIBaseURL)
+		if _, err := publisher.promotionMergeCommit(context.Background(), base, repository, "release/2.8.0", promotion); err == nil {
+			t.Fatal("GraphQL transport failure was accepted")
+		}
+	})
 }
 
 func TestReleaseLifecycleHelpersAndFailures(t *testing.T) {
@@ -393,6 +510,18 @@ func TestReleaseLifecycleHelpersAndFailures(t *testing.T) {
 		if !validWorkflowFile("release.yml") || validWorkflowFile("") || validWorkflowFile("release.yaml") ||
 			validWorkflowFile("../release.yml") || validWorkflowFile("release.yml\n") {
 			t.Fatal("workflow file validation is incorrect")
+		}
+		for _, testCase := range []struct {
+			apiBase string
+			want    string
+		}{
+			{apiBase: "https://api.github.com", want: "https://api.github.com/graphql"},
+			{apiBase: "https://github.example/api/v3", want: "https://github.example/api/graphql"},
+		} {
+			apiBase, _ := url.Parse(testCase.apiBase)
+			if got := graphQLPromotionEndpoint(apiBase).String(); got != testCase.want {
+				t.Fatalf("graphQLPromotionEndpoint(%q) = %q, want %q", testCase.apiBase, got, testCase.want)
+			}
 		}
 		for _, testCase := range []struct {
 			status int
@@ -779,7 +908,10 @@ func TestReleaseLifecycleVerificationFailurePropagation(t *testing.T) {
 		}
 		for _, testCase := range testCases {
 			t.Run(testCase.name, func(t *testing.T) {
-				server := httptest.NewTLSServer(testCase.handler)
+				server := httptest.NewTLSServer(withGraphQLPromotion(
+					testCase.handler,
+					releasePromotionResponseForTest(8, "release/2.8.0"),
+				))
 				defer server.Close()
 				publisher := New(Options{Resolver: testCredentialResolver(), APIBaseURL: server.URL, HTTPClient: server.Client()})
 				_, err := publisher.VerifyReleaseReconciliation(context.Background(), port.ReleaseReconciliationRequest{
@@ -847,7 +979,8 @@ func TestReleaseLifecycleVerificationFailurePropagation(t *testing.T) {
 
 func lifecycleServer(t *testing.T, effectiveDelta, annotatedTag bool) *httptest.Server {
 	t.Helper()
-	return httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	promotion := releasePromotionResponseForTest(8, "release/2.8.0")
+	return httptest.NewTLSServer(withGraphQLPromotion(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/repos/acme/governance/pulls":
 			if request.URL.Query().Get("base") != "main" || request.URL.Query().Get("state") != "closed" ||
@@ -855,9 +988,7 @@ func lifecycleServer(t *testing.T, effectiveDelta, annotatedTag bool) *httptest.
 				request.URL.Query().Get("head") != "" {
 				t.Fatalf("promotion query = %q", request.URL.RawQuery)
 			}
-			_ = json.NewEncoder(writer).Encode([]releasePullRequestResponse{
-				releasePromotionResponseForTest(8, "release/2.8.0"),
-			})
+			_ = json.NewEncoder(writer).Encode([]releasePullRequestResponse{promotion})
 		case "/repos/acme/governance/git/ref/tags/v2.8.0":
 			objectType := "commit"
 			objectSHA := "merge-sha"
@@ -886,7 +1017,7 @@ func lifecycleServer(t *testing.T, effectiveDelta, annotatedTag bool) *httptest.
 		default:
 			t.Fatalf("unexpected lifecycle path %q", request.URL.Path)
 		}
-	}))
+	}), promotion))
 }
 
 func writeMergedPromotion(writer http.ResponseWriter) {
@@ -897,10 +1028,9 @@ func writeMergedPromotion(writer http.ResponseWriter) {
 
 func releasePromotionResponseForTest(number int, release string) releasePullRequestResponse {
 	return releasePullRequestResponse{
-		Number:         number,
-		HTMLURL:        "https://github.example/pull/" + strconv.Itoa(number),
-		MergedAt:       timePtr(time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)),
-		MergeCommitSHA: "merge-sha",
+		Number:   number,
+		HTMLURL:  "https://github.example/pull/" + strconv.Itoa(number),
+		MergedAt: timePtr(time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)),
 		Base: releasePullRequestBranchResponse{
 			Ref:        "main",
 			Repository: releasePullRequestRepositoryResponse{FullName: "acme/governance"},
@@ -910,6 +1040,39 @@ func releasePromotionResponseForTest(number int, release string) releasePullRequ
 			Repository: releasePullRequestRepositoryResponse{FullName: "acme/governance"},
 		},
 	}
+}
+
+func withGraphQLPromotion(handler http.HandlerFunc, promotion releasePullRequestResponse) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/graphql" {
+			writeGraphQLPromotion(writer, promotion)
+			return
+		}
+		handler(writer, request)
+	}
+}
+
+func writeGraphQLPromotion(writer http.ResponseWriter, promotion releasePullRequestResponse) {
+	_ = json.NewEncoder(writer).Encode(graphQLPromotionResponseForTest(promotion))
+}
+
+func graphQLPromotionResponseForTest(promotion releasePullRequestResponse) graphQLPromotionResponse {
+	var response graphQLPromotionResponse
+	response.Data.Repository.PullRequest = &graphQLPromotionPullRequestResponse{
+		Number:      promotion.Number,
+		HTMLURL:     promotion.HTMLURL,
+		MergedAt:    promotion.MergedAt,
+		BaseRefName: promotion.Base.Ref,
+		HeadRefName: promotion.Head.Ref,
+		BaseRepository: graphQLPromotionRepositoryResponse{
+			NameWithOwner: promotion.Base.Repository.FullName,
+		},
+		HeadRepository: graphQLPromotionRepositoryResponse{
+			NameWithOwner: promotion.Head.Repository.FullName,
+		},
+		MergeCommit: &graphQLPromotionCommitResponse{OID: "merge-sha"},
+	}
+	return response
 }
 
 func writeReleaseTagCommit(writer http.ResponseWriter) {
