@@ -262,37 +262,43 @@ func TestWindowsReplaceConfigurationReportsPostRecoveryTargetStatError(t *testin
 	temporaryPath := createTemporaryConfiguration(t, filepath.Dir(path), "replacement")
 
 	handle, event := requestLevel1Oplock(t, backup)
-	defer func() {
-		_ = windows.CloseHandle(event)
-		_ = windows.CloseHandle(handle)
-	}()
-
 	replaced := make(chan error, 1)
+	waiterDone := make(chan struct{})
 	go func() {
-		defer windows.CloseHandle(handle)
+		defer close(waiterDone)
 
-		status, err := windows.WaitForSingleObject(event, 5_000)
-		if err != nil {
-			replaced <- err
-			return
+		backgroundErr := func() error {
+			status, err := windows.WaitForSingleObject(event, 5_000)
+			if err != nil {
+				return err
+			}
+			if status != windows.WAIT_OBJECT_0 {
+				return fmt.Errorf("oplock wait status = %#x", status)
+			}
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+			if err := os.Symlink(filepath.Base(path), path); err != nil {
+				return err
+			}
+			return nil
+		}()
+		if err := windows.CloseHandle(handle); err != nil && backgroundErr == nil {
+			backgroundErr = fmt.Errorf("close oplock handle: %w", err)
 		}
-		if status != windows.WAIT_OBJECT_0 {
-			replaced <- fmt.Errorf("oplock wait status = %#x", status)
-			return
-		}
-		if err := os.Remove(path); err != nil {
-			replaced <- err
-			return
-		}
-		if err := os.Symlink(filepath.Base(path), path); err != nil {
-			replaced <- err
-			return
-		}
-		replaced <- nil
+		replaced <- backgroundErr
 	}()
+	t.Cleanup(func() {
+		<-waiterDone
+		if err := windows.CloseHandle(event); err != nil {
+			t.Errorf("close oplock event: %v", err)
+		}
+	})
 
 	err := replaceConfiguration(path, temporaryPath)
-	if backgroundErr := <-replaced; backgroundErr != nil {
+	backgroundErr := <-replaced
+	<-waiterDone
+	if backgroundErr != nil {
 		t.Fatalf("replace target during oplock break: %v", backgroundErr)
 	}
 	assertNonNotExistError(t, err)
