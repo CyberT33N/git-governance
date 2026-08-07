@@ -24,9 +24,10 @@ import (
 )
 
 const (
-	defaultTimeout         = 30 * time.Second
-	workflowBasesConfigKey = "git-governance.workflow-bases"
-	maxDiagnosticBytes     = 4096
+	defaultTimeout                = 30 * time.Second
+	workflowBasesConfigKey        = "git-governance.workflow-bases"
+	finalQualityEvidenceConfigKey = "git-governance.final-quality-evidence"
+	maxDiagnosticBytes            = 4096
 )
 
 var noPromptGitEnvironment = []string{
@@ -38,6 +39,7 @@ var noPromptGitEnvironment = []string{
 var (
 	urlCredentialsPattern   = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/\s@]+@`)
 	secretAssignmentPattern = regexp.MustCompile(`(?i)\b(token|password|secret|authorization)=\S+`)
+	commitObjectIDPattern   = regexp.MustCompile(`^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`)
 )
 
 // Options configures the Git process adapter.
@@ -507,6 +509,91 @@ func (repository *Repository) WorkflowBase(ctx context.Context, identity port.Re
 		return branch.TargetBase{}, false, err
 	}
 	return base, true, nil
+}
+
+// ResolveRevision resolves a ref to the exact commit object used by local
+// quality evidence. It never reads a revision from untrusted metadata.
+func (repository *Repository) ResolveRevision(
+	ctx context.Context,
+	identity port.RepositoryIdentity,
+	revision string,
+) (string, error) {
+	result := repository.invoke(ctx, identity.Root, nil, "rev-parse", "--verify", "--quiet", revision+"^{commit}")
+	if result.err != nil {
+		return "", repository.commandProblem(problem.CodeGitCommandFailed, identity, "resolve a commit revision", result)
+	}
+	resolved := strings.ToLower(strings.TrimSpace(result.stdout))
+	if !commitObjectIDPattern.MatchString(resolved) {
+		return "", problem.New(problem.Details{
+			Code:        problem.CodeGitCommandFailed,
+			Category:    problem.CategoryGit,
+			Field:       "Git revision",
+			Actual:      resolved,
+			Expected:    "a complete hexadecimal commit object ID",
+			Rule:        "revision-bound quality evidence uses an exact commit object",
+			Remediation: "repair the repository metadata and retry the publish validation",
+		})
+	}
+	return resolved, nil
+}
+
+// LoadFinalQualityEvidence reads the single short-lived quality record from
+// repository-local Git metadata. An absent record is a normal cache miss.
+func (repository *Repository) LoadFinalQualityEvidence(
+	ctx context.Context,
+	identity port.RepositoryIdentity,
+) (port.FinalQualityEvidence, bool, error) {
+	result := repository.invoke(ctx, identity.Root, nil, "config", "--local", "--get", finalQualityEvidenceConfigKey)
+	switch {
+	case result.err == nil:
+		var evidence port.FinalQualityEvidence
+		if err := json.Unmarshal([]byte(strings.TrimSpace(result.stdout)), &evidence); err != nil {
+			return port.FinalQualityEvidence{}, false, problem.Wrap(problem.Details{
+				Code:        problem.CodeConfigurationInvalid,
+				Category:    problem.CategoryConfig,
+				Field:       "final quality evidence",
+				Expected:    "a valid repository-local final-quality JSON record",
+				Rule:        "local publish quality evidence must remain machine-readable and fail closed when corrupted",
+				Remediation: "run the final local quality suite again to replace the local evidence record",
+			}, err)
+		}
+		return evidence, true, nil
+	case result.exitCode == 1:
+		return port.FinalQualityEvidence{}, false, nil
+	default:
+		return port.FinalQualityEvidence{}, false, repository.commandProblem(
+			problem.CodeGitCommandFailed,
+			identity,
+			"read final quality evidence",
+			result,
+		)
+	}
+}
+
+// StoreFinalQualityEvidence writes one JSON value through Git's local config
+// lockfile path, keeping the optimization outside versioned worktree files.
+func (repository *Repository) StoreFinalQualityEvidence(
+	ctx context.Context,
+	identity port.RepositoryIdentity,
+	evidence port.FinalQualityEvidence,
+) error {
+	// FinalQualityEvidence contains only JSON-serializable scalar, slice, and
+	// time values. Keeping this invariant in the port avoids an unreachable
+	// error path at the Git metadata boundary.
+	encoded, _ := json.Marshal(evidence)
+	result := repository.invoke(
+		ctx,
+		identity.Root,
+		nil,
+		"config",
+		"--local",
+		finalQualityEvidenceConfigKey,
+		string(encoded),
+	)
+	if result.err != nil {
+		return repository.commandProblem(problem.CodeGitCommandFailed, identity, "store final quality evidence", result)
+	}
+	return nil
 }
 
 // encodeWorkflowBases cannot fail because the workflow metadata is restricted
@@ -1017,3 +1104,5 @@ func parseWorkflowBase(remote, raw string) (branch.TargetBase, error) {
 
 var _ port.GitRepository = (*Repository)(nil)
 var _ port.GitTransportAuthenticator = (*Repository)(nil)
+var _ port.RevisionResolver = (*Repository)(nil)
+var _ port.FinalQualityEvidenceStore = (*Repository)(nil)

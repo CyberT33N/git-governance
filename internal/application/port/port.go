@@ -4,6 +4,7 @@ package port
 
 import (
 	"context"
+	"time"
 
 	"github.com/CyberT33N/git-governance/internal/domain/branch"
 	"github.com/CyberT33N/git-governance/internal/domain/commitmsg"
@@ -220,6 +221,76 @@ type QualityRequest struct {
 // publication-affecting operation.
 type QualityRunner interface {
 	Run(ctx context.Context, repository RepositoryIdentity, request QualityRequest) (QualityResult, error)
+}
+
+// QualityFingerprint binds a successful quality run to the configuration and
+// toolchain that selected its gates. It contains no process output or secrets.
+type QualityFingerprint struct {
+	ConfigurationDigest string
+	Gates               []string
+	Toolchain           string
+}
+
+// QualityEvidenceRunner executes configured quality gates and returns the
+// matching fingerprint from the same configuration snapshot.
+type QualityEvidenceRunner interface {
+	QualityRunner
+	RunWithFingerprint(
+		ctx context.Context,
+		repository RepositoryIdentity,
+		request QualityRequest,
+	) (QualityResult, QualityFingerprint, error)
+	Fingerprint(
+		ctx context.Context,
+		repository RepositoryIdentity,
+		request QualityRequest,
+	) (QualityFingerprint, error)
+}
+
+// FinalQualityEvidenceUpdate identifies one exact branch update covered by a
+// local final-quality result. BaseRevision is empty only when no target base
+// applies, such as a private scratch branch.
+type FinalQualityEvidenceUpdate struct {
+	LocalRef      string
+	LocalObjectID string
+	RemoteRef     string
+	Branch        string
+	Base          string
+	BaseRevision  string
+}
+
+// FinalQualityEvidence is local Git metadata used only to deduplicate an
+// identical quality run for an outgoing publish candidate. It is never a
+// server-side approval or authorization artifact.
+type FinalQualityEvidence struct {
+	SchemaVersion       int
+	Remote              string
+	ConfigurationDigest string
+	Gates               []string
+	Toolchain           string
+	WorktreeClean       bool
+	CreatedAt           time.Time
+	Updates             []FinalQualityEvidenceUpdate
+}
+
+// FinalQualityEvidenceStore persists a short-lived final-quality record in
+// repository-local Git metadata rather than in the working tree.
+type FinalQualityEvidenceStore interface {
+	LoadFinalQualityEvidence(
+		ctx context.Context,
+		repository RepositoryIdentity,
+	) (FinalQualityEvidence, bool, error)
+	StoreFinalQualityEvidence(
+		ctx context.Context,
+		repository RepositoryIdentity,
+		evidence FinalQualityEvidence,
+	) error
+}
+
+// RevisionResolver resolves a ref to the exact commit object used for
+// revision-bound local quality evidence.
+type RevisionResolver interface {
+	ResolveRevision(ctx context.Context, repository RepositoryIdentity, revision string) (string, error)
 }
 
 // PullRequest describes a provider-neutral pull request intent.

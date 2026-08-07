@@ -81,6 +81,17 @@ Ein Gate ohne eigenen Scope erbt `defaults.includeFamilies`; ein Gate mit
 zieht danach Familien ab. Jedes dadurch berechtigte Gate läuft bei einem
 Multi-Ref-Push höchstens einmal.
 
+Ein finaler lokaler Quality-Lauf bindet seinen Nachweis an die ausgehenden
+Revisionen, die Zielbasisrevision, den Remote, den Konfigurationsdigest, die
+Gate-Auswahl, die Toolchain und einen sauberen Arbeitsbaum. Der Nachweis liegt
+nur in lokaler Git-Metadatenauflösung unter
+`git-governance.final-quality-evidence`, enthält keine Credentials und wird
+nicht committed. `validate pre-push` prüft alle strukturellen Regeln weiterhin
+immer. Es verwendet den Nachweis nur bei exakter, frischer Übereinstimmung;
+bei fehlendem, abgelaufenem oder nicht passendem Nachweis läuft die
+repo-definierte Vollsuite als Fallback einmal. Beschädigte oder unvollständige
+Nachweise werden fail-closed abgewiesen.
+
 Die empfohlene Default-Menge enthält alle offiziellen Arbeitsfamilien:
 `feature`, `fix`, `docs`, `refactor`, `chore`, `test`, `perf` und `hotfix`.
 `scratch` ist damit standardmäßig nicht ausgewählt, kann aber gezielt für ein
@@ -502,10 +513,11 @@ Ablauf:
    ausführen und auf dem offiziellen Branch fortsetzen
 4. offiziellen Ticket-Branch und sauberen Zustand prüfen
 5. Branch- und Commit-Serie validieren
-6. projektdefinierte Quality Checks ausführen
-7. Basisfrische prüfen
-8. bei unveröffentlichtem Branch und Basisdelta rebasen
-9. nach einem Rebase Branch-/Policy-Prüfung, Commit-Serie und Quality Gates erneut ausführen
+6. Basisfrische prüfen
+7. bei unveröffentlichtem Branch und Basisdelta rebasen
+8. nach einem Rebase Branch-/Policy-Prüfung und Commit-Serie erneut ausführen
+9. projektdefinierte Vollsuite auf dem finalen Publish-Kandidaten ausführen
+   und den revisionsgebundenen lokalen Nachweis erzeugen
 10. in der interaktiven Ansicht anzeigen, ob ein Rebase erfolgt ist oder warum
     er nicht erfolgt ist
 11. bei einem pausierten Scratch-Squash oder Rebase Konflikte lösen und
@@ -513,7 +525,9 @@ Ablauf:
     statt den Workflow von vorn zu starten
 12. vor dem ersten Push interaktiv bestätigen oder `--push` nicht-interaktiv
     explizit setzen
-13. nach einem Push bei konfiguriertem Provider interaktiv die PR-Erstellung
+13. Pre-Push-Policy gegen die tatsächliche Aktualisierung prüfen und den
+    Nachweis nur bei exakter Bindung wiederverwenden
+14. nach einem Push bei konfiguriertem Provider interaktiv die PR-Erstellung
     bestätigen; nicht-interaktiv `--create-pull-request` explizit setzen;
     ohne Provider nur den providerneutralen PR-Intent ausgeben
 
@@ -799,8 +813,13 @@ Es liest die von Git gelieferte Ref-Liste begrenzt von stdin und prüft:
 - Löschungen, nicht-fast-forward-/Rewrite-Versuche und Mehrfach-Updates
 - Bundle-Präsenz und -Frische, sobald der Bundle-Adapter aktiv ist
 - Basislinien-Frische vor dem ersten Push
+- finalen lokalen Quality-Nachweis nur bei passender ausgehender Revision,
+  Basis, Konfiguration, Toolchain, Gate-Auswahl und frischem sauberen
+  Arbeitszustand
 
-Der Validator führt nie selbst Rebase oder Merge aus. Er blockiert mit einer konkreten, policy-konformen Handlungsanweisung.
+Der Validator führt nie selbst Rebase oder Merge aus. Fehlt ein passender
+finaler Nachweis, läuft die konfigurierte Vollsuite als lokaler Raw-Push-
+Fallback. Er blockiert mit einer konkreten, policy-konformen Handlungsanweisung.
 
 ## 16. Konfigurationskommandos
 

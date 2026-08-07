@@ -183,11 +183,16 @@ func (application *application) services() services {
 		})
 	}
 	branches := branchapp.NewService(git, application.runtime.KeyPolicy)
+	finalQuality := branchapp.NewFinalQualityGate(git, qualityRunner)
 	sync := branchapp.NewSynchronizer(git, branches, qualityRunner)
 	scratch := branchapp.NewScratchMerger(git, branches)
 	commits := commitapp.NewService(git, application.runtime.KeyPolicy, sync)
 	tickets := workflow.NewTicketService(branches, sync, git, qualityRunner, publisher).
 		WithScratchMerger(scratch)
+	if finalQuality.Available() {
+		sync.WithFinalQualityGate(finalQuality)
+		tickets.WithFinalQualityGate(finalQuality)
+	}
 	lifecycle, _ := publisher.(port.ReleaseLifecycleProvider)
 	releases := workflow.NewReleaseService(branches, git, publisher).
 		WithTicketService(tickets).
