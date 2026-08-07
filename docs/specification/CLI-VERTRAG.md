@@ -109,14 +109,15 @@ git governance
 │   │   ├── start
 │   │   ├── publish
 │   │   └── propagate
-│   └── release
-│       ├── cut
-│       ├── stabilize
-│       ├── publish-stabilization
-│       ├── promote
-│       ├── backmerge
-│       ├── align-reconciliation-base
-│       └── support
+│   ├── release
+│   │   ├── cut
+│   │   ├── stabilize
+│   │   ├── publish-stabilization
+│   │   ├── align-promotion-base
+│   │   ├── promote
+│   │   ├── backmerge
+│   │   ├── align-reconciliation-base
+│   │   └── support
 │   └── cleanup
 ├── validate
 │   └── pre-push

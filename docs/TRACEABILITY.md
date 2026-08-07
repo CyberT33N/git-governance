@@ -138,7 +138,7 @@ does not rely on any external governance repository or unpublished rule set.
 | GitHub release artifacts | IMPLEMENTED | tag/manual-tag validation, checksums, SBOM, Cosign, provenance attestation, and Linux package formats are configured |
 | CI-owned release tag lifecycle | IMPLEMENTED | merged same-repository `release/<semver> -> main` creates an immutable annotated tag and explicitly dispatches the artifact workflow because `GITHUB_TOKEN` tag pushes do not trigger `push` workflows |
 | Live protected-line creation | VERIFIED | `release/1.0.0` was created by the protected workflow from the verified `develop` revision; the release Ruleset applies after creation |
-| Live release delivery and reconciliation | PENDING | promotion to `main`, immutable tag, artifact publication, GitHub Release, and the conditional backmerge decision have not yet occurred |
+| Live release delivery and reconciliation | VERIFIED | PR #30 promoted `release/1.0.1` to `main`; annotated `v1.0.1` targets `f8a54acc4e9f36af869f44737a527a03e5fbf2c5`; the artifact workflow and GitHub Release completed; PR #46 merged the controlled reconciliation to `develop` at `271557e7e66b79e54512e96d4e3a923277a21010` while the delivered release ref remained unchanged |
 | Package-manager manifest templates | IMPLEMENTED | Homebrew, Scoop, and WinGet templates are version/checksum-driven under `packaging/` |
 | Package-manager publication | BLOCKED | maintainer-controlled tap, bucket, WinGet submission, and publisher identities are external prerequisites |
 | Platform-native signing and notarization | BLOCKED | Authenticode and Apple credentials are external publisher prerequisites; checksum Cosign signing remains configured |
