@@ -62,13 +62,13 @@ does not rely on any external governance repository or unpublished rule set.
 | `branch list`, `validate`, `create`, `merge-scratch`, `sync-base` | IMPLEMENTED | CLI contract tests cover help, JSON, flags, dry-run behavior, and structured commit composition |
 | `commit create`, `validate` | IMPLEMENTED | explicit staging, branch-derived ticket context, and canonical family selection are enforced |
 | `workflow ticket start` | IMPLEMENTED | optional scratch branch and provider-neutral PR intent |
-| `workflow ticket publish` | IMPLEMENTED | reports conditional rebase state, resumes resolved rebase and scratch-transfer conflicts interactively or with `--resume`, and creates a PR only through an explicit configured provider |
+| `workflow ticket publish` | IMPLEMENTED | reports conditional rebase state, runs final local quality only after synchronization, records revision-bound local Git metadata, resumes resolved rebase and scratch-transfer conflicts interactively or with `--resume`, and creates a PR only through an explicit configured provider |
 | `workflow hotfix start` | IMPLEMENTED | affected-line selection is mandatory |
 | hotfix publish and propagation | IMPLEMENTED | affected-line publish plus `cherry-pick -x` forward/backport workflow, including non-interactive `--resume` continuation |
 | `workflow release cut`, `stabilize`, `align-promotion-base`, `align-reconciliation-base`, `promote`, `backmerge`, `support`, `cleanup` | IMPLEMENTED | protected-line dispatch/verification, stabilization constraints, governed promotion- and reconciliation-base alignment, release-to-main intent, delivery-gated conditional backmerge, cleanup, and support-tag provenance are enforced |
 | GitHub App pull-request adapter | IMPLEMENTED | just-in-time App credential resolution, host/repository isolation, bounded REST responses, and idempotent existing-PR lookup |
 | `auth login/status/logout github` | IMPLEMENTED | explicit Device Flow, redacted status, native secret-store session lifecycle, and CLI contract tests |
-| `validate pre-push` | IMPLEMENTED | parses every Git stdin ref update and validates the actual remote target |
+| `validate pre-push` | IMPLEMENTED | parses every Git stdin ref update, validates the actual remote target, and reuses final local quality evidence only when it exactly matches the outgoing candidate |
 | `config key` | IMPLEMENTED | OS configuration directory, atomic JSON storage |
 | `policy describe`, `completion`, `version` | IMPLEMENTED | policy and environment inspection are read-only |
 | `doctor` | IMPLEMENTED | Git version, remote, fail-closed Git transport dry-run authentication, Lefthook, policy, configuration, and in-progress-operation checks |
@@ -161,6 +161,7 @@ does not rely on any external governance repository or unpublished rule set.
 | Application-level scratch base guard | reject remote-tracking scratch bases even for programmatic callers | IMPLEMENTED |
 | Regular ticket exclusivity | reject a second official regular branch for one ticket after fetch | IMPLEMENTED |
 | Project-agnostic quality gates | explicit repository-local command-array configuration; absent config reports `unconfigured` instead of pass | IMPLEMENTED |
+| Final local publish quality | full suite runs after final synchronization; short-lived local Git metadata is reused only for an exact fresh candidate and otherwise falls back | IMPLEMENTED |
 
 ## Explicit non-goals in v1
 

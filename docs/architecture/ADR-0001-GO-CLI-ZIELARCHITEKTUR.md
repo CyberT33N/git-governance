@@ -436,6 +436,14 @@ pre-push:
 
 Keine Regex und keine Git-Workflow-Logik werden in `lefthook.yml` dupliziert.
 
+Die lokale Vollsuite wird im Publish-Use-Case nach der finalen
+Synchronisationsentscheidung erzeugt und an den konkreten Publish-Kandidaten
+gebunden. Der Hook bleibt für jede ausgehende Ref-Aktualisierung zuständig und
+darf diesen Nachweis nur bei exakter Revision-, Basis-, Konfigurations-,
+Toolchain- und Worktree-Übereinstimmung wiederverwenden. Damit reduziert die
+lokale Deduplizierung keine Policy-Prüfung und ersetzt weder CI noch
+Branch-Protection.
+
 Quellen:
 
 - [Lefthook-Grundmodell](https://lefthook.dev/)
