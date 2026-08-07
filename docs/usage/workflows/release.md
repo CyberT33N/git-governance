@@ -74,6 +74,29 @@ After resolving and staging a paused rebase, add `--resume` to
 `workflow release publish-stabilization`; the original `--release` value is
 still required.
 
+## Promotion-base alignment
+
+When a release-to-main PR is structurally out of date and the `main` ruleset
+requires current status checks, do not use GitHub's **Update branch**, rebase
+the frozen release line, or weaken the main ruleset. Create a `release-prep`
+stabilization branch from the frozen line, then run the dedicated alignment:
+
+```powershell
+git governance --interactive never --output json --yes `
+  --pull-request-provider github workflow release align-promotion-base `
+  --release release/2.8.0 `
+  --push `
+  --create-pull-request
+```
+
+The command accepts only the checked-out `chore/*` release-preparation branch
+whose stored workflow base is the supplied `release/<semver>` line. It merges
+the current `origin/main` into that working branch with a ticket-scoped
+governed merge commit, runs the configured quality suite, and opens a PR back
+to the frozen release line. Merge that stabilization PR with a merge commit;
+then rerun the existing release-to-main PR checks and approval. This preserves
+the original promotion PR and never mutates a shared line directly.
+
 ## Promotion, delivery, and conditional backmerge
 
 After approval, create the release promotion:

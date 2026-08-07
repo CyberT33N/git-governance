@@ -651,7 +651,25 @@ Dieser Befehl validiert einen Stabilisierung-Branch gegen
 Release-Linie. `--create-pull-request` verlangt `--push`; nach manueller
 Rebase-Konfliktauflösung setzt `--resume` die vorhandene Stabilisierung fort.
 
-### 13.4 `workflow release promote`
+### 13.4 `workflow release align-promotion-base`
+
+```text
+git governance --pull-request-provider github workflow release align-promotion-base \
+  --release release/<semver> \
+  [--branch chore/<KEY-NUMBER>-<slug>] \
+  [--push --create-pull-request]
+```
+
+Der Befehl ist ausschließlich für eine `chore/*`-Release-Preparation-Branch
+zulässig, die durch `workflow release stabilize --kind release-prep` aus der
+angegebenen `release/<semver>`-Linie erzeugt wurde. Er prüft die gespeicherte
+Release-Basis, verlangt die ausgecheckte Branch und führt ausschließlich dort
+einen ticket-scoped Merge von `origin/main` aus. Nach der Quality-Suite kann
+er die Working-Branch pushen und ihren PR zurück auf die Release-Linie
+erstellen. Damit erfüllt ein striktes Main-Ruleset die Aktualitätsprüfung,
+ohne `Update branch`, Rebase oder Direktmutation einer Shared Line.
+
+### 13.5 `workflow release promote`
 
 Dieser Befehl erzeugt den providerneutralen PR-Intent:
 
@@ -666,7 +684,7 @@ unveränderlichen Tag. Ein echter Provider-PR ist nur mit
 `--pull-request-provider github --create-pull-request` und der expliziten
 Mutationsfreigabe möglich.
 
-### 13.5 `workflow release backmerge`
+### 13.6 `workflow release backmerge`
 
 Erzeugt keine stillen Direktcommits und keinen leeren Ritual-PR. Außerhalb
 eines Dry-Runs verlangt es einen konfigurierten Release-Lifecycle-Provider,
@@ -687,30 +705,53 @@ das Kommando `status=not-required`, den Delivery-Nachweis und keinen PR.
 Ein echter Provider-PR folgt derselben expliziten GitHub-Adapter-Konfiguration
 wie die Promotion.
 
-### 13.5.1 `workflow release align-reconciliation-base`
+### 13.6.1 `workflow release align-reconciliation-base`
 
 Dieser Workflow behandelt ausschließlich einen Backmerge, dessen Ziel-Policy
 einen aktuellen Pull-Request-Head verlangt. Er akzeptiert nur eine aktuell
 ausgecheckte, ticketgebundene `chore/*`-Preparation-Branch mit gespeicherter
 Workflow-Basis `origin/release/<semver>`.
 
-Der Workflow:
+Der Workflow prüft vollständige Release-Delivery und effektiven Delta,
+verifiziert die aktuelle `origin/develop`-Basis, merged diese ausschließlich
+in die Preparation-Branch, führt Quality-Gates aus und publiziert optional
+einen Merge-Commit-PR nach `develop`.
 
-1. prüft die vollständige Release-Delivery und einen effektiven
-   Release-only-Delta;
-2. verifiziert die aktuelle `origin/develop`-Basis;
-3. merged `origin/develop` ausschließlich in die Preparation-Branch;
-4. validiert die Working-Branch erneut und führt die Repository-Quality-Gates
-   aus;
-5. pusht und erstellt optional einen Merge-Commit-PR der Preparation-Branch
-   nach `develop`.
+Bei einem Konflikt bleibt der normale Merge-Zustand in der nicht-shared,
+ticketgebundenen Preparation-Branch erhalten. Nach expliziter Resolution und
+Staging der genauen Konfliktpfade setzt `--resume` ausschließlich diesen Merge
+fort; der Befehl übernimmt keine automatische `ours`/`theirs`-Entscheidung.
 
-`release/<semver>` bleibt unverändert. Der Workflow akzeptiert weder eine
-direkte Release-Ref-Aktualisierung noch Rebase, Force Push oder einen
-`develop -> release/<semver>`-PR. Im Dry-Run führt er keinen Fetch, Merge,
-Quality-Gate, Push, Provider- oder PR-Aufruf aus.
+```text
+git governance workflow release align-reconciliation-base \
+  --release release/<semver> \
+  [--branch chore/<KEY-NUMBER>-<slug>] \
+  [--resume] \
+  [--prepared] \
+  [--push --create-pull-request]
+```
 
-### 13.6 `workflow release support`
+`--resume` und `--prepared` schließen sich aus:
+
+- `--resume` verlangt einen aktiven, konfliktfreien und vollständig gestagten
+  Merge in derselben lokalen Preparation-Branch. Nach dem Merge muss
+  `origin/develop` weiterhin enthalten sein; sonst wird die Kandidatenbranch
+  fail-closed abgewiesen.
+- `--prepared` ist der serverseitige Recovery-Eingang für eine bereits
+  konfliktbereinigte, gepushte Preparation-Branch. Fehlende lokale
+  Workflow-Metadaten sind nur dann zulässig, wenn die CLI unabhängig beweist,
+  dass HEAD exakt den unveränderten Release-Ref als ersten und den aktuellen
+  Develop-Ref als zweiten Merge-Parent besitzt.
+
+Ein beliebiger Branch-Name genügt nie als Recovery-Nachweis. Der geschützte
+`reconciliation-resume`-Workflow validiert Ticket, Slug, Branch-Grammatik,
+Merge-Provenance, Delivery und Quality erneut, bevor er einen PR nach
+`develop` erstellt.
+
+`release/<semver>` bleibt unverändert. Im Dry-Run führt kein CLI-Workflow
+einen Fetch, Merge, Push, Provider-Preflight oder Provider-Publish aus.
+
+### 13.7 `workflow release support`
 
 `support/<major.minor>` darf nur angefordert werden, wenn die aktuell
 gefetchte `origin/main`-Revision einen passenden
@@ -719,7 +760,7 @@ gefetchte `origin/main`-Revision einen passenden
 CI-Workflow und verifiziert die Remote-Support-Linie von dieser freigegebenen
 Main-Revision.
 
-### 13.7 `workflow cleanup`
+### 13.8 `workflow cleanup`
 
 `workflow cleanup` löscht niemals Remote-Branches. Remote-Löschung und
 Lifecycle-Nachweise gehören zu GitHub, GitLab oder CI:

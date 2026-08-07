@@ -31,3 +31,7 @@ Policy:
 6. A published official branch never routine-rebases; a controlled merge is
    required instead.
 7. `scratch/*` remains private and is not a pull-request branch.
+8. A release-preparation branch must not use this generic command to import
+   `main` for a release promotion. Use
+   `workflow release align-promotion-base` so the release provenance,
+   quality gate, and release-line PR target remain explicit.

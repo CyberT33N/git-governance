@@ -59,17 +59,17 @@ func (service *ReleaseService) WithTicketService(tickets *TicketService) *Releas
 	return service
 }
 
+// WithQualityRunner wires repository quality gates into release preparation
+// workflows that mutate a working branch before publication.
+func (service *ReleaseService) WithQualityRunner(quality port.QualityRunner) *ReleaseService {
+	service.quality = quality
+	return service
+}
+
 // WithReleaseLifecycleProvider wires provider-owned protected-line dispatch
 // and release-delivery verification into release workflows.
 func (service *ReleaseService) WithReleaseLifecycleProvider(provider port.ReleaseLifecycleProvider) *ReleaseService {
 	service.lifecycle = provider
-	return service
-}
-
-// WithQualityRunner wires repository-local quality gates into release
-// preparation workflows before they are published for review.
-func (service *ReleaseService) WithQualityRunner(quality port.QualityRunner) *ReleaseService {
-	service.quality = quality
 	return service
 }
 

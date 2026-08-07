@@ -191,8 +191,8 @@ func (application *application) services() services {
 	lifecycle, _ := publisher.(port.ReleaseLifecycleProvider)
 	releases := workflow.NewReleaseService(branches, git, publisher).
 		WithTicketService(tickets).
-		WithReleaseLifecycleProvider(lifecycle).
-		WithQualityRunner(qualityRunner)
+		WithQualityRunner(qualityRunner).
+		WithReleaseLifecycleProvider(lifecycle)
 	policyInspector, _ := application.runtime.KeyPolicy.(port.PolicyInspector)
 	return services{
 		git:         git,
