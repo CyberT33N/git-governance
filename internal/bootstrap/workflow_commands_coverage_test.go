@@ -138,6 +138,43 @@ func TestWorkflowCommandsDryRunHappyPaths(t *testing.T) {
 	}
 }
 
+func TestTicketPublishCompletesQualityBeforePushAndPullRequest(t *testing.T) {
+	t.Parallel()
+
+	events := make([]string, 0, 4)
+	git := &ticketPublishOrderingGit{
+		commandGit: newCommandGit(
+			t,
+			"test/ABC-123-verify-ticket-publish-ordering",
+			[]string{"test(ABC-123): verify ticket publish ordering"},
+		),
+		events: &events,
+	}
+	runtime := commandRuntime(git)
+	runtime.Quality = &ticketPublishOrderingQuality{events: &events}
+	runtime.Publisher = &ticketPublishOrderingPublisher{events: &events}
+	command := NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+
+	output, err := executeBootstrapCommand(
+		t,
+		command,
+		"--interactive", "never", "--output", "json", "--yes",
+		"workflow", "ticket", "publish",
+		"--branch", "test/ABC-123-verify-ticket-publish-ordering",
+		"--push",
+		"--create-pull-request",
+	)
+	if err != nil {
+		t.Fatalf("ticket publish error = %v; output=%q", err, output)
+	}
+	if !strings.Contains(output, "https://example.invalid/pr/ticket-publish-ordering") {
+		t.Fatalf("ticket publish output does not contain the published pull request URL: %q", output)
+	}
+	if got, want := strings.Join(events, ","), "quality,quality,push,pull-request"; got != want {
+		t.Fatalf("ticket publish events = %q, want %q", got, want)
+	}
+}
+
 func TestWorkflowCommandsResumeSilentlyAndPublishExplicitly(t *testing.T) {
 	t.Run("resumes ticket, hotfix, and stabilization publication without prompts", func(t *testing.T) {
 		testCases := []struct {
@@ -1171,6 +1208,41 @@ type plainWorkflowPublisher struct{}
 
 func (plainWorkflowPublisher) Publish(context.Context, port.PullRequestPublication) (port.PublishedPullRequest, error) {
 	return port.PublishedPullRequest{}, nil
+}
+
+type ticketPublishOrderingGit struct {
+	*commandGit
+	events *[]string
+}
+
+func (git *ticketPublishOrderingGit) Push(context.Context, port.RepositoryIdentity, branch.BranchName, bool) error {
+	*git.events = append(*git.events, "push")
+	return nil
+}
+
+type ticketPublishOrderingQuality struct {
+	events *[]string
+}
+
+func (runner *ticketPublishOrderingQuality) Run(
+	context.Context,
+	port.RepositoryIdentity,
+	port.QualityRequest,
+) (port.QualityResult, error) {
+	*runner.events = append(*runner.events, "quality")
+	return port.QualityResult{Status: port.QualityPassed}, nil
+}
+
+type ticketPublishOrderingPublisher struct {
+	events *[]string
+}
+
+func (publisher *ticketPublishOrderingPublisher) Publish(
+	context.Context,
+	port.PullRequestPublication,
+) (port.PublishedPullRequest, error) {
+	*publisher.events = append(*publisher.events, "pull-request")
+	return port.PublishedPullRequest{URL: "https://example.invalid/pr/ticket-publish-ordering"}, nil
 }
 
 func (publisher *workflowRecordingPublisher) Publish(
