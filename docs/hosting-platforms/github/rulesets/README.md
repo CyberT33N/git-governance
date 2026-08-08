@@ -87,6 +87,7 @@ The shared-line Rulesets `02-develop.json`, `03-main.json`,
 
 | Gate | Configured threshold | Why it applies |
 |---|---|---|
+| Dependency admission review | fail dependency additions at `low` severity or above across `runtime`, `development`, and `unknown` scopes | Every dependency change reaches a shared-line PR through the immutable `actions/dependency-review-action` gate. |
 | CodeQL code scanning | `alerts_threshold: all`; `security_alerts_threshold: all` | Every unresolved CodeQL alert, including the lowest reported severity, blocks a pull request. |
 | GitHub Code Quality | `severity: all` | Every unresolved Code Quality result blocks a pull request. |
 | GitHub Code Quality coverage | `minimum_coverage: 100`; `max_coverage_drop: 0` | Any aggregate coverage below 100% or any coverage decrease blocks a pull request. |
@@ -351,9 +352,18 @@ Shared-line rulesets require the CI job names from `.github/workflows/ci.yml`:
 - `Quality gates (linux-amd64)`
 - `Quality gates (macos-arm64)`
 - `Quality gates (windows-amd64)`
+- `Dependency admission review`
 
-If those check names change, update the `required_status_checks` arrays before
-import, or adjust them in the GitHub UI after import.
+The dependency-admission workflow emits its required check for pull requests
+targeting `develop`, `main`, `release/**`, and `support/**`. It has no path
+filter because a skipped required workflow leaves its check pending and blocks
+the pull request.
+
+If any of those check names or target branches change, update the
+`required_status_checks` arrays before import, or adjust them in the GitHub UI
+after import. Enable a required check on a live shared-line Ruleset only after
+the corresponding workflow can report that check for pull requests to the
+target line.
 
 For `04-release.json` and `05-support.json`, retain
 `do_not_enforce_on_create: true` while updating those arrays. It is required

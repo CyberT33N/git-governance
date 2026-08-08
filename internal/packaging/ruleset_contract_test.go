@@ -12,7 +12,7 @@ import (
 func TestProtectedLineRulesetsAllowInitialCreation(t *testing.T) {
 	t.Parallel()
 
-	expectedChecks := ciQualityStatusChecks(t)
+	expectedChecks := sharedLineStatusChecks(t)
 	for _, fileName := range []string{"04-release.json", "05-support.json"} {
 		fileName := fileName
 		t.Run(fileName, func(t *testing.T) {
@@ -29,10 +29,10 @@ func TestProtectedLineRulesetsAllowInitialCreation(t *testing.T) {
 	}
 }
 
-func TestSharedLineRulesetsMatchCIQualityChecks(t *testing.T) {
+func TestSharedLineRulesetsMatchRequiredChecks(t *testing.T) {
 	t.Parallel()
 
-	expectedChecks := ciQualityStatusChecks(t)
+	expectedChecks := sharedLineStatusChecks(t)
 	for _, fileName := range []string{
 		"02-develop.json",
 		"03-main.json",
@@ -45,9 +45,28 @@ func TestSharedLineRulesetsMatchCIQualityChecks(t *testing.T) {
 
 			_, got := rulesetStatusChecks(t, fileName)
 			if !equalStrings(got, expectedChecks) {
-				t.Fatalf("required status checks = %#v, want CI quality checks %#v", got, expectedChecks)
+				t.Fatalf("required status checks = %#v, want shared-line checks %#v", got, expectedChecks)
 			}
 		})
+	}
+}
+
+func TestDependencyAdmissionReviewTargetsEverySharedLine(t *testing.T) {
+	t.Parallel()
+
+	workflow := strings.ReplaceAll(readWorkflow(t, "dependency-review.yml"), "\r\n", "\n")
+	const pullRequestContract = `on:
+  pull_request:
+    branches:
+      - develop
+      - main
+      - release/**
+      - support/**`
+	if !strings.Contains(workflow, pullRequestContract) {
+		t.Fatalf("dependency-review workflow must target every shared line:\n%s", pullRequestContract)
+	}
+	if !strings.Contains(workflow, "\n  dependency-review:\n    name: "+dependencyAdmissionReviewStatusCheck+"\n") {
+		t.Fatalf("dependency-review workflow must publish %q", dependencyAdmissionReviewStatusCheck)
 	}
 }
 
@@ -88,6 +107,14 @@ func rulesetStatusChecks(t *testing.T, fileName string) (bool, []string) {
 	}
 	t.Fatal("ruleset does not define required status checks")
 	return false, nil
+}
+
+const dependencyAdmissionReviewStatusCheck = "Dependency admission review"
+
+func sharedLineStatusChecks(t *testing.T) []string {
+	t.Helper()
+
+	return append(ciQualityStatusChecks(t), dependencyAdmissionReviewStatusCheck)
 }
 
 func ciQualityStatusChecks(t *testing.T) []string {
