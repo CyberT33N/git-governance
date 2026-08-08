@@ -1,6 +1,6 @@
 # ADR-0004: Governed Release Reconciliation Base Alignment
 
-- Status: Proposed
+- Status: angenommen
 - Datum: 2026-08-01
 - Geltungsbereich: `release/<semver> -> develop` bei strikter
   Develop-Basisaktualität

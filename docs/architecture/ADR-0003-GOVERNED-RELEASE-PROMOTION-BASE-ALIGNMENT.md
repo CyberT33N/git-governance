@@ -1,6 +1,6 @@
 # ADR-0003: Governed Release Promotion Base Alignment
 
-- Status: proposed
+- Status: angenommen
 - Datum: 2026-08-01
 - Geltungsbereich: `release/<semver> -> main` bei strikter Main-Basisaktualität
 - Entscheider: Release-Governance
