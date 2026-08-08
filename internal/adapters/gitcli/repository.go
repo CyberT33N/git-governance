@@ -24,10 +24,11 @@ import (
 )
 
 const (
-	defaultTimeout                = 30 * time.Second
-	workflowBasesConfigKey        = "git-governance.workflow-bases"
-	finalQualityEvidenceConfigKey = "git-governance.final-quality-evidence"
-	maxDiagnosticBytes            = 4096
+	defaultTimeout                  = 30 * time.Second
+	workflowBasesConfigKey          = "git-governance.workflow-bases"
+	finalQualityEvidenceConfigKey   = "git-governance.final-quality-evidence"
+	hotfixManifestProgressConfigKey = "git-governance.hotfix-manifest-progress"
+	maxDiagnosticBytes              = 4096
 )
 
 var noPromptGitEnvironment = []string{
@@ -594,6 +595,154 @@ func (repository *Repository) StoreFinalQualityEvidence(
 		return repository.commandProblem(problem.CodeGitCommandFailed, identity, "store final quality evidence", result)
 	}
 	return nil
+}
+
+// LoadHotfixManifestProgress reads the one active ordered propagation state.
+// An absent value is a normal no-progress result; malformed state fails
+// closed instead of guessing which commit to cherry-pick next.
+func (repository *Repository) LoadHotfixManifestProgress(
+	ctx context.Context,
+	identity port.RepositoryIdentity,
+) (port.HotfixManifestProgress, bool, error) {
+	result := repository.invoke(ctx, identity.Root, nil, "config", "--local", "--get", hotfixManifestProgressConfigKey)
+	switch {
+	case result.err == nil:
+		var document hotfixManifestProgressDocument
+		if err := json.Unmarshal([]byte(strings.TrimSpace(result.stdout)), &document); err != nil {
+			return port.HotfixManifestProgress{}, false, invalidHotfixManifestProgress(err)
+		}
+		progress, err := document.progress()
+		if err != nil {
+			return port.HotfixManifestProgress{}, false, err
+		}
+		return progress, true, nil
+	case result.exitCode == 1:
+		return port.HotfixManifestProgress{}, false, nil
+	default:
+		return port.HotfixManifestProgress{}, false, repository.commandProblem(
+			problem.CodeGitCommandFailed,
+			identity,
+			"read hotfix manifest propagation progress",
+			result,
+		)
+	}
+}
+
+// StoreHotfixManifestProgress writes one bounded propagation cursor through
+// Git's local config lockfile path.
+func (repository *Repository) StoreHotfixManifestProgress(
+	ctx context.Context,
+	identity port.RepositoryIdentity,
+	progress port.HotfixManifestProgress,
+) error {
+	document, err := newHotfixManifestProgressDocument(progress)
+	if err != nil {
+		return err
+	}
+	encoded, _ := json.Marshal(document)
+	result := repository.invoke(
+		ctx,
+		identity.Root,
+		nil,
+		"config",
+		"--local",
+		hotfixManifestProgressConfigKey,
+		string(encoded),
+	)
+	if result.err != nil {
+		return repository.commandProblem(problem.CodeGitCommandFailed, identity, "store hotfix manifest propagation progress", result)
+	}
+	return nil
+}
+
+// ClearHotfixManifestProgress removes the completed or abandoned local cursor.
+func (repository *Repository) ClearHotfixManifestProgress(
+	ctx context.Context,
+	identity port.RepositoryIdentity,
+) error {
+	result := repository.invoke(ctx, identity.Root, nil, "config", "--local", "--unset-all", hotfixManifestProgressConfigKey)
+	switch {
+	case result.err == nil, result.exitCode == 1:
+		return nil
+	default:
+		return repository.commandProblem(problem.CodeGitCommandFailed, identity, "clear hotfix manifest propagation progress", result)
+	}
+}
+
+type hotfixManifestProgressDocument struct {
+	Branch   string   `json:"branch"`
+	Source   string   `json:"source"`
+	Target   string   `json:"target"`
+	Manifest []string `json:"manifest"`
+	Next     int      `json:"next"`
+}
+
+func newHotfixManifestProgressDocument(progress port.HotfixManifestProgress) (hotfixManifestProgressDocument, error) {
+	document := hotfixManifestProgressDocument{
+		Branch:   progress.Branch.String(),
+		Source:   progress.Source.String(),
+		Target:   progress.Target.String(),
+		Manifest: append([]string(nil), progress.Manifest...),
+		Next:     progress.Next,
+	}
+	if _, err := document.progress(); err != nil {
+		return hotfixManifestProgressDocument{}, err
+	}
+	return document, nil
+}
+
+func (document hotfixManifestProgressDocument) progress() (port.HotfixManifestProgress, error) {
+	branchName, err := branch.ParseName(document.Branch)
+	if err != nil {
+		return port.HotfixManifestProgress{}, invalidHotfixManifestProgress(err)
+	}
+	source, err := branch.ParseName(document.Source)
+	if err != nil {
+		return port.HotfixManifestProgress{}, invalidHotfixManifestProgress(err)
+	}
+	target, err := branch.ParseName(document.Target)
+	if err != nil {
+		return port.HotfixManifestProgress{}, invalidHotfixManifestProgress(err)
+	}
+	if branchName.Family() != branch.FamilyFix || source.Family() != branch.FamilyHotfix {
+		return port.HotfixManifestProgress{}, invalidHotfixManifestProgress(nil)
+	}
+	switch target.Family() {
+	case branch.FamilyDevelop, branch.FamilyRelease, branch.FamilySupport:
+	default:
+		return port.HotfixManifestProgress{}, invalidHotfixManifestProgress(nil)
+	}
+	if len(document.Manifest) == 0 || document.Next < 0 || document.Next > len(document.Manifest) {
+		return port.HotfixManifestProgress{}, invalidHotfixManifestProgress(nil)
+	}
+	seen := make(map[string]struct{}, len(document.Manifest))
+	for _, commit := range document.Manifest {
+		if !commitObjectIDPattern.MatchString(commit) {
+			return port.HotfixManifestProgress{}, invalidHotfixManifestProgress(nil)
+		}
+		if _, found := seen[commit]; found {
+			return port.HotfixManifestProgress{}, invalidHotfixManifestProgress(nil)
+		}
+		seen[commit] = struct{}{}
+	}
+	return port.HotfixManifestProgress{
+		Branch:   branchName,
+		Source:   source,
+		Target:   target,
+		Manifest: append([]string(nil), document.Manifest...),
+		Next:     document.Next,
+	}, nil
+}
+
+func invalidHotfixManifestProgress(cause error) error {
+	return problem.Wrap(problem.Details{
+		Code:        problem.CodeConfigurationInvalid,
+		Category:    problem.CategoryConfig,
+		Field:       "hotfix manifest propagation progress",
+		Expected:    "a valid repository-local ordered hotfix propagation record",
+		Rule:        "multi-commit hotfix propagation resumes only from exact local metadata",
+		Remediation: "recreate the controlled propagation branch instead of guessing the next cherry-pick",
+	}, cause)
 }
 
 // encodeWorkflowBases cannot fail because the workflow metadata is restricted

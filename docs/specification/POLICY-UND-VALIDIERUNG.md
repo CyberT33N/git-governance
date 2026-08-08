@@ -298,6 +298,30 @@ einer weiteren aktiven Linie benötigt wird, erzeugt das Tool dort einen
 kontrollierten `fix/*`-Branch und führt `git cherry-pick -x <sha>` aus. Die
 Herkunft bleibt dadurch in der Commit-Historie sichtbar.
 
+Ein Main-Hotfix erhält vor dem Merge einen versionierten Record unter
+`.git-governance/hotfix-release-records/<KEY-NUMBER>.json`. Der Record bindet
+Ticket, Incident, betroffene Linie, vorherigen Tag, Patch-Zielversion,
+Same-Repository-PR, vollständiges SHA-Manifest, Commit-Budget-Ausnahme und
+alle zusätzlichen Ziel-Linien. Ein bis drei semantische Manifest-Commits sind
+normal; vier benötigen eine begründete Ausnahme. Fünf oder mehr benötigen
+zusätzlich eine explizite, im Record referenzierte Release-Freigabe; ohne sie
+wird der Main-Merge fail-closed abgewiesen.
+
+Die Ein-Commit-Oberfläche `workflow hotfix propagate` bleibt für einen
+reviewten Commit bestehen. `workflow hotfix propagate-manifest` darf nur
+deklarierte Ziele verwenden und erzeugt einen lokalen, nicht-shared
+`fix/*`-Kandidaten. Er speichert den Resume-Cursor ausschließlich in lokaler
+Git-Metadatenauflösung, nicht im Record und nicht im Arbeitsbaum. Der Kandidat
+wird erst durch die getrennte Hotfix-Propagation-Publisher-Grenze veröffentlicht;
+bis dahin existiert keine lokale `--push`- oder PR-Umgehung.
+
+Ein serverseitiger Main-Hotfix-Delivery-Controller revalidiert Record,
+PR-Identität, Merge, Manifest und Tag-Idempotenz, bevor er den immutable
+Patch-Tag erzeugt. Anschließend ist der Release erst nach nicht-draft Release,
+Payload, Checksums, SBOM, Sigstore-Bundle und erfolgreichem Artifact-Workflow
+vollständig. Ein pauschaler `main -> develop`-Merge ist weder Propagation noch
+Reconciliation und bleibt verboten.
+
 ### 6.4 Lokale Workflow-Basis-Metadaten
 
 Hotfix-, Release-Stabilisierungs- und Propagation-Workflows speichern ihre
