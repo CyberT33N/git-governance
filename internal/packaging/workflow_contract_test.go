@@ -90,6 +90,52 @@ func TestMainHotfixDeliveryWorkflowUsesTrustedReleaseBoundary(t *testing.T) {
 	}
 }
 
+func TestHotfixPropagationWorkflowUsesDedicatedPublisherBoundary(t *testing.T) {
+	t.Parallel()
+
+	workflow := readWorkflow(t, "hotfix-propagation.yml")
+	for _, expected := range []string{
+		"workflow_dispatch:",
+		"environment: release",
+		"environment: hotfix-propagation",
+		"needs: verify-delivery",
+		"id-token: write",
+		"test \"$GITHUB_REF\" = \"refs/heads/main\"",
+		"GCP_BROKER_URL",
+		"GCP_BROKER_WIF_PROVIDER",
+		"GCP_BROKER_INVOKER_SERVICE_ACCOUNT",
+		"GCP_HOTFIX_PROPAGATION_PUBLISHER_BROKER_URL",
+		"GCP_HOTFIX_PROPAGATION_PUBLISHER_WIF_PROVIDER",
+		"GCP_HOTFIX_PROPAGATION_PUBLISHER_INVOKER_SERVICE_ACCOUNT",
+		"google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093",
+		"GIT_GOVERNANCE_GITHUB_CREDENTIAL_BROKER_URL",
+		"GIT_GOVERNANCE_WORKLOAD_IDENTITY_TOKEN",
+		`GIT_GOVERNANCE_HOTFIX_PROPAGATION_PUBLISHER="server"`,
+		`GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"`,
+		`echo "::add-mask::$token"`,
+		"workflow hotfix verify-delivery",
+		"workflow hotfix propagate-manifest",
+		"--publish",
+		`rm -f "$response"`,
+	} {
+		if !strings.Contains(workflow, expected) {
+			t.Fatalf("hotfix propagation workflow does not contain %q", expected)
+		}
+	}
+	for _, forbidden := range []string{
+		"actions: write",
+		"contents: write",
+		"GITHUB_TOKEN",
+		"git cherry-pick",
+		"git push",
+		"--no-verify",
+	} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("hotfix propagation workflow must not contain %q", forbidden)
+		}
+	}
+}
+
 func TestTagApprovalArtifactDispatchUsesJobToken(t *testing.T) {
 	t.Parallel()
 

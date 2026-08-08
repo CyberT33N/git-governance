@@ -268,6 +268,26 @@ workflow dispatch and read access plus the limited Contents/Pull requests
 access required by the controlled workflow. Do not grant ordinary developer
 sessions a Ruleset bypass or reuse a broad administrator credential.
 
+### Hotfix propagation publication
+
+Main-hotfix propagation uses a third, separate broker-backed GitHub App
+identity. The Hotfix-Propagation-Publisher App is installed only for the
+approved repository and receives only:
+
+```text
+Contents: Read and write
+Pull requests: Read and write
+Metadata: Read-only
+```
+
+It receives no Actions, Workflows, Administration, Secrets, or Ruleset-bypass
+permission. The protected `hotfix-propagation` environment supplies its own
+OIDC/WIF invocation path to a dedicated Cloud Run broker. The controller
+temporarily configures masked in-memory Git transport credentials only for the
+provenance-validated `fix/*` candidate and removes them before the job exits.
+The local Device-Flow App, the release-automation App, and the reconciliation
+publisher App are not substitutes for this boundary.
+
 When broker configuration is present, it is used for non-interactive
 publication. The publisher derives `https://<host>/api/v3` for a GitHub
 Enterprise remote; no legacy API-base environment variable is accepted.

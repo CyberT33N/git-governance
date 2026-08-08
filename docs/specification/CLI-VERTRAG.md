@@ -665,7 +665,8 @@ anschließend mit `--source`, `--target-line`, dem erzeugten `--branch` und
 ```text
 git governance workflow hotfix propagate-manifest \
   --source hotfix/<KEY-NUMBER>-<slug> \
-  --target-line develop|release/<semver>|support/<major.minor>
+  --target-line develop|release/<semver>|support/<major.minor> \
+  [--publish]
 ```
 
 Der Befehl akzeptiert ausschließlich eine im geprüften Record deklarierte
@@ -673,9 +674,13 @@ Ziel-Linie. Er erzeugt einen workflow-managed `fix/*`-Kandidaten, speichert
 seinen lokalen Resume-Cursor in Git-Metadaten, appliziert die deklarierte
 SHA-Serie in der angegebenen Reihenfolge und führt die Quality-Suite aus. Bei
 Konflikt verlangt `--resume` den identischen Source-, Target- und
-Kandidatenbranch. Die Oberfläche veröffentlicht bewusst keinen Kandidaten:
-`--push` und `--create-pull-request` existieren erst im getrennten
-Hotfix-Publisher-Controller.
+Kandidatenbranch. `--push` und `--create-pull-request` bleiben absichtlich
+nicht verfügbar. `--publish` ist nur innerhalb des geschützten
+Hotfix-Propagation-Publisher-Controllers zulässig: Er verlangt die dedizierte
+Broker-Workload-Identität, erzeugt den Kandidaten aus der erklärten Ziel-Linie,
+prüft ihn erneut, pusht nur den nicht-shared `fix/*`-Branch und erstellt dessen
+PR. Ohne diese serverseitige Boundary endet `--publish` fail-closed; lokale
+Kandidaten bleiben nicht veröffentlichend.
 
 ## 14. Release-Kommandos
 
