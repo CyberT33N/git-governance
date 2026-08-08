@@ -42,22 +42,23 @@ type appOptions struct {
 }
 
 type Runtime struct {
-	GitFactory                func(timeout time.Duration) port.GitRepository
-	StoreFactory              func(path string) port.PreferencesStore
-	KeyPolicy                 port.KeyPolicy
-	Quality                   port.QualityRunner
-	QualityFactory            func(path string, timeout time.Duration) port.QualityRunner
-	HotfixRecords             port.HotfixReleaseRecordStore
-	Publisher                 port.PullRequestPublisher
-	GitHubAuthFactory         func(timeout time.Duration) github.AuthProvider
-	Browser                   browser.Opener
-	GitHubAppClientID         func() string
-	GitHubCredentialBrokerURL func() string
-	GitHubWorkloadIdentity    func() string
-	Tools                     port.ToolInspector
-	PromptFactory             func(accessible bool, color string) port.Prompt
-	InputIsTerminal           func() bool
-	OutputIsTerminal          func() bool
+	GitFactory                        func(timeout time.Duration) port.GitRepository
+	StoreFactory                      func(path string) port.PreferencesStore
+	KeyPolicy                         port.KeyPolicy
+	Quality                           port.QualityRunner
+	QualityFactory                    func(path string, timeout time.Duration) port.QualityRunner
+	HotfixRecords                     port.HotfixReleaseRecordStore
+	Publisher                         port.PullRequestPublisher
+	GitHubAuthFactory                 func(timeout time.Duration) github.AuthProvider
+	Browser                           browser.Opener
+	GitHubAppClientID                 func() string
+	GitHubCredentialBrokerURL         func() string
+	GitHubWorkloadIdentity            func() string
+	HotfixPropagationPublisherEnabled func() bool
+	Tools                             port.ToolInspector
+	PromptFactory                     func(accessible bool, color string) port.Prompt
+	InputIsTerminal                   func() bool
+	OutputIsTerminal                  func() bool
 }
 
 type application struct {
@@ -110,6 +111,11 @@ func defaultRuntime() Runtime {
 		GitHubWorkloadIdentity: func() string {
 			return os.Getenv("GIT_GOVERNANCE_WORKLOAD_IDENTITY_TOKEN")
 		},
+		HotfixPropagationPublisherEnabled: func() bool {
+			return strings.TrimSpace(os.Getenv("GIT_GOVERNANCE_HOTFIX_PROPAGATION_PUBLISHER")) == "server" &&
+				strings.TrimSpace(os.Getenv("GIT_GOVERNANCE_GITHUB_CREDENTIAL_BROKER_URL")) != "" &&
+				strings.TrimSpace(os.Getenv("GIT_GOVERNANCE_WORKLOAD_IDENTITY_TOKEN")) != ""
+		},
 		Tools: system.New(system.Options{}),
 		PromptFactory: func(accessible bool, color string) port.Prompt {
 			return terminal.New(terminal.Options{Accessible: accessible, Color: color})
@@ -149,6 +155,9 @@ func newApplication(runtime Runtime, options *appOptions) *application {
 	}
 	if runtime.GitHubWorkloadIdentity == nil {
 		runtime.GitHubWorkloadIdentity = defaultRuntime().GitHubWorkloadIdentity
+	}
+	if runtime.HotfixPropagationPublisherEnabled == nil {
+		runtime.HotfixPropagationPublisherEnabled = defaultRuntime().HotfixPropagationPublisherEnabled
 	}
 	if runtime.Tools == nil {
 		runtime.Tools = defaultRuntime().Tools
@@ -205,6 +214,7 @@ func (application *application) services() services {
 		WithTicketService(tickets).
 		WithQualityRunner(qualityRunner).
 		WithHotfixReleaseRecordStore(application.runtime.HotfixRecords).
+		WithHotfixManifestPublication(application.runtime.HotfixPropagationPublisherEnabled()).
 		WithMainHotfixLifecycleProvider(hotfixLifecycle).
 		WithReleaseLifecycleProvider(lifecycle)
 	policyInspector, _ := application.runtime.KeyPolicy.(port.PolicyInspector)

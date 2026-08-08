@@ -16,14 +16,15 @@ import (
 // ReleaseService owns the bounded hotfix, release, support, and release
 // backmerge workflows.
 type ReleaseService struct {
-	branches  *branchapp.Service
-	git       port.GitRepository
-	publisher port.PullRequestPublisher
-	lifecycle port.ReleaseLifecycleProvider
-	hotfix    port.MainHotfixLifecycleProvider
-	tickets   *TicketService
-	quality   port.QualityRunner
-	records   port.HotfixReleaseRecordStore
+	branches            *branchapp.Service
+	git                 port.GitRepository
+	publisher           port.PullRequestPublisher
+	lifecycle           port.ReleaseLifecycleProvider
+	hotfix              port.MainHotfixLifecycleProvider
+	tickets             *TicketService
+	quality             port.QualityRunner
+	records             port.HotfixReleaseRecordStore
+	manifestPublication bool
 }
 
 var commitIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
@@ -66,6 +67,13 @@ func (service *ReleaseService) WithTicketService(tickets *TicketService) *Releas
 // workflows that mutate a working branch before publication.
 func (service *ReleaseService) WithQualityRunner(quality port.QualityRunner) *ReleaseService {
 	service.quality = quality
+	return service
+}
+
+// WithHotfixManifestPublication enables publication only for the dedicated
+// server-side hotfix propagation publisher boundary.
+func (service *ReleaseService) WithHotfixManifestPublication(enabled bool) *ReleaseService {
+	service.manifestPublication = enabled
 	return service
 }
 
@@ -903,29 +911,38 @@ type PropagateHotfixManifestRequest struct {
 	TargetLine branch.BranchName
 	Location   string
 	Slug       branch.Slug
+	Publish    bool
 	DryRun     bool
 }
 
-// PropagateHotfixManifestResult records the local candidate created from a
-// declared propagation target. It deliberately contains no push or PR result.
+// PropagateHotfixManifestResult records a declared propagation candidate. Local
+// callers prepare without publication; the dedicated server-side publisher can
+// additionally publish the validated candidate.
 type PropagateHotfixManifestResult struct {
 	Branch          branchapp.CreateResult
 	Record          hotfix.ReleaseRecord
 	CherryPickCount int
 	Quality         *port.QualityResult
+	Publication     *PublishTicketResult
 	DryRun          bool
 }
 
 // PropagateHotfixManifest creates a target-derived fix branch and applies the
-// exact ordered full-SHA manifest under a resumable local cursor. It never
-// pushes or publishes a candidate because that authority belongs to the
-// dedicated hotfix propagation publisher.
+// exact ordered full-SHA manifest under a resumable local cursor. Publication
+// is available only when the service was composed for the dedicated hotfix
+// propagation publisher boundary.
 func (service *ReleaseService) PropagateHotfixManifest(
 	ctx context.Context,
 	request PropagateHotfixManifestRequest,
 ) (PropagateHotfixManifestResult, error) {
 	if service.branches == nil || service.git == nil || service.quality == nil {
 		return PropagateHotfixManifestResult{}, internalDependencyError("hotfix manifest propagation services")
+	}
+	if request.Publish && !service.manifestPublication {
+		return PropagateHotfixManifestResult{}, hotfixManifestPublicationUnavailable()
+	}
+	if request.Publish && service.tickets == nil {
+		return PropagateHotfixManifestResult{}, internalDependencyError("hotfix manifest publication service")
 	}
 	progressStore, ok := service.git.(port.HotfixManifestProgressStore)
 	if !ok {
@@ -975,7 +992,19 @@ func (service *ReleaseService) PropagateHotfixManifest(
 	if err := progressStore.StoreHotfixManifestProgress(ctx, repository, progress); err != nil {
 		return PropagateHotfixManifestResult{}, err
 	}
-	return service.applyHotfixManifest(ctx, repository, record, progress, progressStore, result)
+	result, err = service.applyHotfixManifest(ctx, repository, record, progress, progressStore, result, !request.Publish)
+	if err != nil {
+		return PropagateHotfixManifestResult{}, err
+	}
+	if request.Publish {
+		publication, err := service.publishHotfixManifestCandidate(ctx, repository, result.Branch.Name, request.TargetLine)
+		if err != nil {
+			return PropagateHotfixManifestResult{}, err
+		}
+		result.Publication = &publication
+		result.Quality = &publication.Quality
+	}
+	return result, nil
 }
 
 // ResumeHotfixManifestPropagationRequest identifies an existing local
@@ -986,16 +1015,24 @@ type ResumeHotfixManifestPropagationRequest struct {
 	TargetLine branch.BranchName
 	Branch     branch.BranchName
 	Location   string
+	Publish    bool
 }
 
 // ResumeHotfixManifestPropagation continues exactly the paused manifest item,
-// then applies the remaining ordered commits and re-runs quality gates.
+// then applies the remaining ordered commits and re-runs quality gates. Only
+// the dedicated server-side publisher may publish the resumed candidate.
 func (service *ReleaseService) ResumeHotfixManifestPropagation(
 	ctx context.Context,
 	request ResumeHotfixManifestPropagationRequest,
 ) (PropagateHotfixManifestResult, error) {
 	if service.branches == nil || service.git == nil || service.quality == nil {
 		return PropagateHotfixManifestResult{}, internalDependencyError("hotfix manifest propagation services")
+	}
+	if request.Publish && !service.manifestPublication {
+		return PropagateHotfixManifestResult{}, hotfixManifestPublicationUnavailable()
+	}
+	if request.Publish && service.tickets == nil {
+		return PropagateHotfixManifestResult{}, internalDependencyError("hotfix manifest publication service")
 	}
 	progressStore, ok := service.git.(port.HotfixManifestProgressStore)
 	if !ok {
@@ -1064,7 +1101,19 @@ func (service *ReleaseService) ResumeHotfixManifestPropagation(
 		Record:          record,
 		CherryPickCount: progress.Next,
 	}
-	return service.applyHotfixManifest(ctx, repository, record, progress, progressStore, result)
+	result, err = service.applyHotfixManifest(ctx, repository, record, progress, progressStore, result, !request.Publish)
+	if err != nil {
+		return PropagateHotfixManifestResult{}, err
+	}
+	if request.Publish {
+		publication, err := service.publishHotfixManifestCandidate(ctx, repository, result.Branch.Name, request.TargetLine)
+		if err != nil {
+			return PropagateHotfixManifestResult{}, err
+		}
+		result.Publication = &publication
+		result.Quality = &publication.Quality
+	}
+	return result, nil
 }
 
 func (service *ReleaseService) applyHotfixManifest(
@@ -1074,6 +1123,7 @@ func (service *ReleaseService) applyHotfixManifest(
 	progress port.HotfixManifestProgress,
 	progressStore port.HotfixManifestProgressStore,
 	result PropagateHotfixManifestResult,
+	runQuality bool,
 ) (PropagateHotfixManifestResult, error) {
 	for index := progress.Next; index < len(progress.Manifest); index++ {
 		if err := service.git.CherryPick(ctx, repository, progress.Manifest[index]); err != nil {
@@ -1094,6 +1144,10 @@ func (service *ReleaseService) applyHotfixManifest(
 	}); err != nil {
 		return PropagateHotfixManifestResult{}, err
 	}
+	if !runQuality {
+		result.Record = record
+		return result, nil
+	}
 	quality, err := service.quality.Run(ctx, repository, port.QualityRequest{
 		Families: []branch.Family{result.Branch.Name.Family()},
 	})
@@ -1103,6 +1157,47 @@ func (service *ReleaseService) applyHotfixManifest(
 	result.Quality = &quality
 	result.Record = record
 	return result, nil
+}
+
+func (service *ReleaseService) publishHotfixManifestCandidate(
+	ctx context.Context,
+	repository port.RepositoryIdentity,
+	candidate branch.BranchName,
+	target branch.BranchName,
+) (PublishTicketResult, error) {
+	if !service.manifestPublication {
+		return PublishTicketResult{}, hotfixManifestPublicationUnavailable()
+	}
+	if service.tickets == nil {
+		return PublishTicketResult{}, internalDependencyError("hotfix manifest publication service")
+	}
+	if !service.tickets.HasPullRequestPublisher() {
+		return PublishTicketResult{}, pullRequestPublisherUnavailable()
+	}
+	base, err := branch.NewTargetBase(repository.Remote, target)
+	if err != nil {
+		return PublishTicketResult{}, err
+	}
+	pullRequest := newTicketPullRequest(candidate, target, false)
+	if err := service.tickets.PreflightPullRequest(ctx, repository, pullRequest); err != nil {
+		return PublishTicketResult{}, err
+	}
+	return service.tickets.PublishTicket(ctx, PublishTicketRequest{
+		Repository:        repository,
+		Branch:            candidate,
+		Base:              &base,
+		Target:            &target,
+		WorkflowManaged:   true,
+		Push:              true,
+		CreatePullRequest: true,
+	})
+}
+
+func hotfixManifestPublicationUnavailable() error {
+	return invalidWorkflowInput(
+		"hotfix manifest candidate publication requires the dedicated server-side hotfix propagation publisher",
+		"run the protected hotfix propagation controller; local manifest preparation remains non-publishing",
+	)
 }
 
 func validateManifestTarget(record hotfix.ReleaseRecord, target branch.BranchName) error {

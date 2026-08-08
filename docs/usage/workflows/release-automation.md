@@ -60,3 +60,21 @@ and waits for the artifact workflow and published evidence.
 The controller may use the release-automation boundary only for tag and
 artifact delivery. It does not publish a propagation candidate, mutate
 `develop`, or grant local credentials any release authority.
+
+## Main-hotfix propagation
+
+`hotfix-propagation.yml` is a separate, main-bound controller for one declared
+additional target of a delivered main hotfix. It uses the protected
+`hotfix-propagation` environment, its own OIDC/WIF path, and a separate
+least-privilege Publisher broker. The controller independently rechecks the
+delivery record before invoking:
+
+```text
+workflow hotfix propagate-manifest --publish
+```
+
+The source CLI prepares the ordered `cherry-pick -x` candidate, runs its
+quality gates, pushes only the non-shared `fix/*` branch, and creates one PR
+for the declared target. The controller does not merge that PR, mutate a
+Shared Line directly, or reuse the release-automation or reconciliation
+publisher identity.

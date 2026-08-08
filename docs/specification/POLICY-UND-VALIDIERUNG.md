@@ -312,8 +312,12 @@ reviewten Commit bestehen. `workflow hotfix propagate-manifest` darf nur
 deklarierte Ziele verwenden und erzeugt einen lokalen, nicht-shared
 `fix/*`-Kandidaten. Er speichert den Resume-Cursor ausschließlich in lokaler
 Git-Metadatenauflösung, nicht im Record und nicht im Arbeitsbaum. Der Kandidat
-wird erst durch die getrennte Hotfix-Propagation-Publisher-Grenze veröffentlicht;
-bis dahin existiert keine lokale `--push`- oder PR-Umgehung.
+wird ausschließlich durch die getrennte Hotfix-Propagation-Publisher-Grenze
+veröffentlicht. Der geschützte Controller revalidiert Delivery, Record,
+Manifest, Ziel-Linie und Quality, konfiguriert nur temporäre maskierte
+Git-Transport-Credentials und ruft `propagate-manifest --publish` auf. Es gibt
+keine lokale `--push`- oder PR-Umgehung, keinen pauschalen `main -> develop`-
+Merge und keine direkte Shared-Line-Mutation.
 
 Ein serverseitiger Main-Hotfix-Delivery-Controller revalidiert Record,
 PR-Identität, Merge, Manifest und Tag-Idempotenz, bevor er den immutable

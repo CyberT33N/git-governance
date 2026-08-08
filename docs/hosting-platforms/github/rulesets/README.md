@@ -69,6 +69,14 @@ gate inside an already required main check instead of creating an optional
 hotfix-only status context. The record and manifest remain domain/controller
 responsibilities; Rulesets alone cannot validate their semantic content.
 
+After immutable Main-hotfix delivery, each declared multi-commit propagation
+candidate is published only by the protected `hotfix-propagation` controller.
+Its dedicated Publisher App may push the provenance-validated `fix/*`
+candidate and create a PR for the declared target line, but it has no Ruleset
+bypass, Actions, Workflows, Administration, Secrets, or direct Shared-Line
+permission. Rulesets continue to enforce the target-line review and Required
+Checks; the controller never merges a propagation PR.
+
 ### Scratch
 
 `scratch/*` is private, short-lived exploration. It is neither an official

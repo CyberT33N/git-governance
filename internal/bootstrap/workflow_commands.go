@@ -1097,10 +1097,11 @@ func newHotfixPropagateManifestCommand(application *application) *cobra.Command 
 		slugRaw   string
 		branchRaw string
 		resume    bool
+		publish   bool
 	)
 	command := &cobra.Command{
 		Use:   "propagate-manifest",
-		Short: "Prepare a local ordered multi-commit hotfix propagation candidate",
+		Short: "Prepare or publish an ordered multi-commit hotfix propagation candidate",
 		RunE: withWorkflowInputs(func(command *cobra.Command, inputs *workflowInputSummary) error {
 			services := application.services()
 			repository, err := application.discover(command.Context(), services)
@@ -1109,6 +1110,9 @@ func newHotfixPropagateManifestCommand(application *application) *cobra.Command 
 			}
 			if resume && application.options.dryRun {
 				return invalidOption("resume", "true", "a non-dry-run invocation")
+			}
+			if publish && !application.hotfixManifestPublisherEnabled() {
+				return hotfixManifestPublisherUnavailable()
 			}
 			if resume && sourceRaw == "" {
 				return missingInput("hotfix source branch")
@@ -1135,10 +1139,16 @@ func newHotfixPropagateManifestCommand(application *application) *cobra.Command 
 					return err
 				}
 				inputs.add("propagation branch", candidate.String())
+				label := "Resume hotfix manifest propagation"
+				description := "Continue the resolved ordered cherry-pick on " + candidate.String() + " without publishing it?"
+				if publish {
+					label = "Publish resumed hotfix manifest propagation"
+					description = "Continue the resolved ordered cherry-pick on " + candidate.String() + " and publish it only through the dedicated server-side publisher?"
+				}
 				if err := application.confirmMutation(
 					command.Context(),
-					"Resume hotfix manifest propagation",
-					"Continue the resolved ordered cherry-pick on "+candidate.String()+" without publishing it?",
+					label,
+					description,
 				); err != nil {
 					return err
 				}
@@ -1150,14 +1160,19 @@ func newHotfixPropagateManifestCommand(application *application) *cobra.Command 
 						TargetLine: target,
 						Branch:     candidate,
 						Location:   recordRaw,
+						Publish:    publish,
 					},
 				)
 				if err != nil {
 					return err
 				}
+				summary := "Hotfix manifest propagation candidate resumed and verified."
+				if publish {
+					summary = "Hotfix manifest propagation candidate resumed, verified, and published."
+				}
 				return application.report(command, port.Report{
 					Operation: "workflow.hotfix.propagate-manifest",
-					Summary:   "Hotfix manifest propagation candidate resumed and verified.",
+					Summary:   summary,
 					Fields:    manifestPropagationFields(result, true),
 				})
 			}
@@ -1170,10 +1185,16 @@ func newHotfixPropagateManifestCommand(application *application) *cobra.Command 
 				}
 				inputs.add("propagation description", slug.String())
 			}
+			label := "Prepare hotfix manifest propagation"
+			description := "Create a controlled local fix branch from " + target.String() + " and apply the reviewed manifest without publishing it?"
+			if publish {
+				label = "Publish hotfix manifest propagation"
+				description = "Create a controlled fix branch from " + target.String() + ", apply the reviewed manifest, and publish it only through the dedicated server-side publisher?"
+			}
 			if err := application.confirmMutation(
 				command.Context(),
-				"Prepare hotfix manifest propagation",
-				"Create a controlled local fix branch from "+target.String()+" and apply the reviewed manifest without publishing it?",
+				label,
+				description,
 			); err != nil {
 				return err
 			}
@@ -1185,15 +1206,20 @@ func newHotfixPropagateManifestCommand(application *application) *cobra.Command 
 					TargetLine: target,
 					Location:   recordRaw,
 					Slug:       slug,
+					Publish:    publish,
 					DryRun:     application.options.dryRun,
 				},
 			)
 			if err != nil {
 				return err
 			}
+			summary := "Hotfix manifest propagation candidate prepared without publication."
+			if publish {
+				summary = "Hotfix manifest propagation candidate prepared, verified, and published."
+			}
 			return application.report(command, port.Report{
 				Operation: "workflow.hotfix.propagate-manifest",
-				Summary:   "Hotfix manifest propagation candidate prepared without publication.",
+				Summary:   summary,
 				Fields:    manifestPropagationFields(result, false),
 			})
 		}),
@@ -1204,18 +1230,25 @@ func newHotfixPropagateManifestCommand(application *application) *cobra.Command 
 	command.Flags().StringVar(&slugRaw, "slug", "", "optional kebab-case propagation branch description")
 	command.Flags().StringVar(&branchRaw, "branch", "", "generated fix branch; required with --resume")
 	command.Flags().BoolVar(&resume, "resume", false, "continue a manually resolved manifest cherry-pick")
+	command.Flags().BoolVar(&publish, "publish", false, "publish only through the dedicated server-side hotfix propagation publisher")
 	return command
 }
 
 func manifestPropagationFields(result workflow.PropagateHotfixManifestResult, resumed bool) map[string]string {
+	pushed := "false"
+	publishedPullRequest := ""
+	if result.Publication != nil {
+		pushed = boolString(result.Publication.Pushed)
+		publishedPullRequest = result.Publication.PublishedURL
+	}
 	fields := map[string]string{
 		"source":               result.Record.ExpectedSource().String(),
 		"target":               result.Branch.Base.Branch().String(),
 		"branch":               result.Branch.Name.String(),
 		"cherryPickCount":      strconv.Itoa(result.CherryPickCount),
 		"manifestCommitCount":  strconv.Itoa(len(result.Record.Manifest())),
-		"pushed":               "false",
-		"publishedPullRequest": "",
+		"pushed":               pushed,
+		"publishedPullRequest": publishedPullRequest,
 		"resumed":              boolString(resumed),
 		"dryRun":               boolString(result.DryRun),
 	}
@@ -1224,6 +1257,22 @@ func manifestPropagationFields(result workflow.PropagateHotfixManifestResult, re
 		fields["qualityDetail"] = result.Quality.Detail
 	}
 	return fields
+}
+
+func (application *application) hotfixManifestPublisherEnabled() bool {
+	return application.runtime.HotfixPropagationPublisherEnabled != nil &&
+		application.runtime.HotfixPropagationPublisherEnabled()
+}
+
+func hotfixManifestPublisherUnavailable() error {
+	return problem.New(problem.Details{
+		Code:        problem.CodeConfigurationUnavailable,
+		Category:    problem.CategoryConfig,
+		Field:       "hotfix propagation publisher",
+		Expected:    "the dedicated server-side hotfix propagation publisher boundary",
+		Rule:        "manifest candidates may be published only by the protected hotfix propagation controller",
+		Remediation: "run the protected hotfix propagation workflow after its broker, workload identity, and publisher application are configured",
+	})
 }
 
 func newReleaseWorkflowCommand(application *application) *cobra.Command {

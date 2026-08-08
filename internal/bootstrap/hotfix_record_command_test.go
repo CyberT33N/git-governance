@@ -154,6 +154,95 @@ func TestHotfixValidateRecordCommand(t *testing.T) {
 		if err == nil {
 			t.Fatal("manifest propagation unexpectedly exposed a push flag")
 		}
+
+		_, err = executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never",
+			"--output", "json",
+			"--yes",
+			"workflow", "hotfix", "propagate-manifest",
+			"--source", "hotfix/ABC-999-payment-timeout",
+			"--target-line", "develop",
+			"--publish",
+		)
+		if err == nil {
+			t.Fatal("manifest propagation unexpectedly published without the dedicated publisher boundary")
+		}
+	})
+
+	t.Run("publishes only with the dedicated publisher runtime", func(t *testing.T) {
+		source := "hotfix/ABC-999-payment-timeout"
+		record := commandHotfixRecord(t, source)
+		messages := []string{"fix(ABC-999): resolve payment timeout"}
+		git := &manifestCommandGit{commandGit: newCommandGit(t, source, messages)}
+		publisher := &workflowRecordingPublisher{
+			result: port.PublishedPullRequest{URL: "https://example.invalid/pr/propagation"},
+		}
+		runtime := commandRuntime(git)
+		runtime.HotfixRecords = &hotfixRecordCommandStore{record: record}
+		runtime.Quality = commandHotfixQuality{}
+		runtime.Publisher = publisher
+		runtime.HotfixPropagationPublisherEnabled = func() bool { return true }
+		command := NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+
+		output, err := executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never",
+			"--output", "json",
+			"--yes",
+			"--pull-request-provider", "github",
+			"workflow", "hotfix", "propagate-manifest",
+			"--source", source,
+			"--target-line", "develop",
+			"--publish",
+		)
+		if err != nil ||
+			!strings.Contains(output, `"pushed":"true"`) ||
+			!strings.Contains(output, `"publishedPullRequest":"https://example.invalid/pr/propagation"`) {
+			t.Fatalf("publish manifest = (%q, %v)", output, err)
+		}
+
+		candidate := "fix/ABC-999-propagate-to-develop"
+		git = &manifestCommandGit{
+			commandGit:    newCommandGit(t, source, messages),
+			current:       mustCommandBranch(t, candidate),
+			active:        true,
+			operation:     "cherry-pick",
+			progressFound: true,
+			progress: port.HotfixManifestProgress{
+				Branch:   mustCommandBranch(t, candidate),
+				Source:   mustCommandBranch(t, source),
+				Target:   mustCommandBranch(t, "develop"),
+				Manifest: record.Manifest(),
+			},
+		}
+		runtime = commandRuntime(git)
+		runtime.HotfixRecords = &hotfixRecordCommandStore{record: record}
+		runtime.Quality = commandHotfixQuality{}
+		runtime.Publisher = publisher
+		runtime.HotfixPropagationPublisherEnabled = func() bool { return true }
+		command = NewWithRuntime(BuildInfo{Version: "test"}, runtime)
+		output, err = executeBootstrapCommand(
+			t,
+			command,
+			"--interactive", "never",
+			"--output", "json",
+			"--yes",
+			"--pull-request-provider", "github",
+			"workflow", "hotfix", "propagate-manifest",
+			"--source", source,
+			"--target-line", "develop",
+			"--branch", candidate,
+			"--resume",
+			"--publish",
+		)
+		if err != nil ||
+			!strings.Contains(output, `"resumed":"true"`) ||
+			!strings.Contains(output, `"pushed":"true"`) {
+			t.Fatalf("resume publish manifest = (%q, %v)", output, err)
+		}
 	})
 
 	t.Run("accepts an explicit slug and resumes a resolved manifest candidate", func(t *testing.T) {

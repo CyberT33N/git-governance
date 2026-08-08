@@ -139,3 +139,19 @@ git governance --interactive never --output json --pull-request-provider github 
 They do not create a tag, push a branch, or publish a pull request. Local
 device-flow credentials and static tokens are not a replacement for the
 protected controller.
+
+## Manifest propagation publisher
+
+After the immutable main patch delivery is verified, each propagation target
+declared in the reviewed record is handled by the separate
+`hotfix-propagation.yml` controller. It builds trusted `main` source, verifies
+the delivery again, creates the target-derived candidate with
+`workflow hotfix propagate-manifest --publish`, and publishes only through the
+dedicated Hotfix-Propagation-Publisher identity.
+
+That identity is separate from release automation and reconciliation
+publication. It may publish a provenance-validated `fix/*` candidate and its
+reviewable pull request, but it has no Actions, Workflows, Administration,
+Secrets, Ruleset-bypass, or direct Shared-Line authority. A local workflow
+command cannot substitute a Device-Flow token, a static token, or a raw Git
+push for this control plane.

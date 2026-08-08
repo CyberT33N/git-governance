@@ -66,7 +66,28 @@ git governance --interactive never --output json --yes workflow hotfix propagate
   --resume
 ```
 
-This command deliberately has no `--push` or `--create-pull-request` option.
-Publishing a validated multi-commit candidate requires the separate,
-least-privileged Hotfix-Propagation-Publisher control plane; until that trust
-boundary exists, the candidate remains local and no Shared Line is changed.
+This command deliberately has no generic `--push` or
+`--create-pull-request` option. Its `--publish` mode is accepted only when the
+protected Hotfix-Propagation-Publisher control plane supplies its dedicated
+broker-backed workload identity:
+
+```text
+hotfix-propagation.yml on main
+→ hotfix-propagation environment
+→ OIDC and Workload Identity Federation
+→ dedicated Hotfix-Propagation-Publisher broker and GitHub App
+→ workflow hotfix verify-delivery
+→ workflow hotfix propagate-manifest --publish
+→ provenance-validated fix/* candidate and pull request
+```
+
+The controller creates the candidate itself, validates the delivered source
+record, keeps the target branch non-shared, and uses the source CLI for every
+cherry-pick, quality, push, and pull-request step. It never performs a raw
+`git cherry-pick`, a direct Shared-Line mutation, or a local Device-Flow
+fallback.
+
+Until the dedicated GitHub App, Secret Manager key, Cloud Run broker, OIDC/WIF,
+GitHub Environment, and least-privilege IAM boundaries are provisioned,
+`--publish` fails closed. Local invocations remain candidate preparation or
+resume only.
