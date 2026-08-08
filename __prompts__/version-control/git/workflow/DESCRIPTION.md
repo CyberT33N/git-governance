@@ -1,171 +1,158 @@
-# Description: Governed Task-to-PR Workflow Prompt
+# Description: Git-Governance Source-Repository Workflow Adapter
 [INTENT: CONTEXT]
 
-This directory owns the canonical, complete prompt for the repository's
-governed task-to-pull-request workflow. The Cursor rule entrypoint remains
-available through a relative symlink; the workflow instruction content is
-preserved without semantic changes.
+## 1. Purpose
 
----
+This directory provides the repository-local entrypoint for a complete
+`git-governance` agent workflow.
 
-## 1. Scope Overview
-[INTENT: CONTEXT]
-
-The canonical source is `prompt.md`. It contains the full governed workflow
-for branch context, source-CLI help reanchoring, intake, verification,
-semantic commits, publication, release handling, and hotfix delivery gates.
-
-The repository-level Cursor rule
-`.cursor/rules/governed-task-to-pr-workflow.mdc` resolves to this source with a
-relative symlink. This keeps the existing Cursor rule location stable while
-making the prompt directory the single editable source.
-
----
-
-## 2. Information Register
-[INTENT: REFERENCE]
-
-| ID | Type | Description | Change | Status |
-|----|------|-------------|--------|--------|
-| REQ-001 | REQUIREMENT | Canonicalize the complete governed workflow prompt at `prompt.md`. | Yes | Active |
-| REQ-002 | REQUIREMENT | Keep the existing Cursor rule entrypoint as a relative symlink to the canonical prompt. | Yes | Active |
-| CONV-001 | CONSTRAINT | Preserve the governed workflow text and its operational contract without semantic changes. | No | Active |
-| META-001 | INFORMATION | Maintain canonical description and changelog metadata in this prompt directory. | Yes | Active |
-
----
-
-## 3. Information Units
-[INTENT: SPECIFICATION]
-
-### 3.1 REQ-001: Canonical governed workflow source
-[INTENT: SPECIFICATION]
-
-**Type:** REQUIREMENT
-
-**Description:**
-`prompt.md` is the canonical source for the complete Governed Task-to-PR
-Workflow prompt.
-
-**Current State:**
-Before this change, the complete workflow existed only as a Cursor rule under
-`.cursor/rules`.
-
-**Target State:**
-The complete workflow is preserved in `prompt.md` without changing its
-governance, testing, publication, release, or hotfix requirements.
-
-**Affected Files:**
-
-| Path | Relevance | Elements |
-|------|-----------|----------|
-| `__prompts__/version-control/git/workflow/prompt.md` | Canonical prompt source | Complete governed workflow |
-
-**Positive Example(s):**
+It deliberately separates:
 
 ```text
-__prompts__/version-control/git/workflow/prompt.md
+workflow/
+├── prompt.md
+│   -> thin adapter for this Go source repository
+├── CONVENTIONS.md
+├── DESCRIPTION.md
+├── CHANGELOG.md
+└── core/
+    ├── prompt.md
+    │   -> complete portable binary-oriented workflow
+    ├── CONVENTIONS.md
+    ├── DESCRIPTION.md
+    └── CHANGELOG.md
 ```
 
-is edited as the single canonical source of the governed workflow.
+The adapter is the stable target of the Cursor rule symlink. It fully loads
+the relative core and maps the core's logical binary invocation to this
+repository's source entrypoint.
 
-**Negative Example(s):**
+## 2. Why the Separation Exists
+
+The original workflow prompt contained two different concerns:
 
 ```text
-Two independently edited copies of the governed workflow
+portable git-governance workflow architecture
+and
+this repository's Go-source invocation
 ```
 
-This would allow the Cursor rule and canonical prompt to diverge.
+That coupling would force every downstream binary user to carry a `go run`
+and `cmd/git-governance` assumption. It also makes a source checkout and an
+installed release binary appear to be the same runtime environment.
 
----
+The new architecture resolves that conflict:
 
-### 3.2 REQ-002: Stable Cursor rule entrypoint
-[INTENT: SPECIFICATION]
+| Layer | Responsibility | Deliberately excludes |
+|---|---|---|
+| `core/prompt.md` | Complete agent workflow, state, proof gates, Help-first endpoint discovery, branch, Scratch, release and hotfix decisions | Go source layout, fixed CLI flags, project documentation |
+| `prompt.md` | Relative core loading and Go source-entrypoint binding | Generic workflow policy and CLI option duplication |
+| Running CLI | Current flags, values, validators, errors and actual capabilities | Agent workflow architecture |
 
-**Type:** REQUIREMENT
+## 3. Architectural Decision Matrix
 
-**Description:**
-The existing Cursor rule path remains available as a relative symlink to the
-canonical prompt.
+| Decision | Portability | Drift resistance | Workflow completeness | Isolation | Result |
+|---|---:|---:|---:|---:|---|
+| One source-repository prompt with Go commands | low | low | medium | low | Rejected |
+| A core that copies current CLI flags and regexes | high | low | high | medium | Rejected |
+| A binary-oriented core with per-endpoint Help-first discovery | high | high | high | high | Selected |
+| A thin relative source adapter | high | high | high | high | Selected |
+| Scratch for every non-trivial task | low | medium | low | low | Rejected |
+| Scratch only after a weighted uncertainty threshold | high | high | high | high | Selected |
 
-**Current State:**
-The repository consumed the governed workflow directly from
-`.cursor/rules/governed-task-to-pr-workflow.mdc`.
+The selected design gives the current binary authority over evolving technical
+details while retaining an explicit, complete agent workflow for every
+branching, commit, release, hotfix and delivery transition.
 
-**Target State:**
-The same path resolves to `prompt.md` through the relative target
-`../../__prompts__/version-control/git/workflow/prompt.md`.
+## 4. How the Adapter Works
 
-**Affected Files:**
+1. The agent begins at `prompt.md`.
+2. It resolves `core/prompt.md` relative to this file.
+3. It reads the core completely before any workflow action.
+4. It applies the core's Help-first contract to every endpoint.
+5. Whenever the core specifies:
 
-| Path | Relevance | Elements |
-|------|-----------|----------|
-| `.cursor/rules/governed-task-to-pr-workflow.mdc` | Stable Cursor entrypoint | Relative symbolic link |
-| `__prompts__/version-control/git/workflow/prompt.md` | Canonical target | Governed workflow text |
+```text
+git-governance <endpoint> ...
+```
 
-**Positive Example(s):**
+the adapter runs:
+
+```text
+go run -mod=readonly ./cmd/git-governance <endpoint> ...
+```
+
+6. The adapter never adds hardcoded flags, values or argument shapes. Each
+   invocation derives those details from the immediately preceding current
+   `--help` output.
+
+## 5. Architectural Guarantees
+
+The combined adapter and core guarantee:
+
+```text
+- the portable workflow has no dependency on AI-Base-Rules, docs/ or business files;
+- this source repository retains its source-based execution binding;
+- the current CLI help remains the authority for command syntax;
+- branch and commit conventions are obtained from the live policy and validators;
+- regular ticket, hotfix, release, support and conflict paths are all explicit;
+- Scratch is selected through a decision matrix instead of created by default;
+- current GOV-42 main-hotfix delivery endpoints and controller boundaries are represented;
+- unavailable binary or protected-controller capability fails closed;
+- no raw Git, static-token or provider-CLI workaround replaces a governed path.
+```
+
+## 6. Current Endpoint Coverage
+
+The portable core requires Help-first discovery for the current CLI's:
+
+```text
+branch, commit, policy, doctor, validation and authentication endpoints
+ticket start and publication workflows
+hotfix record, delivery, single-commit and manifest propagation workflows
+release cut, stabilization, alignment, promotion, backmerge and support workflows
+Scratch cleanup and controlled transfer paths
+```
+
+The prompt does not reproduce the current option list. The live binary reports
+the current option, value and validation contract at the moment each endpoint
+is needed.
+
+## 7. Cursor Entry Point and Portability
+
+The stable Cursor entrypoint remains:
 
 ```text
 .cursor/rules/governed-task-to-pr-workflow.mdc
-  -> ../../__prompts__/version-control/git/workflow/prompt.md
 ```
 
-**Negative Example(s):**
+It is a relative Git symlink to:
 
 ```text
-.cursor/rules/governed-task-to-pr-workflow.mdc
-  -> C:\absolute\machine-specific\path\prompt.md
+../../__prompts__/version-control/git/workflow/prompt.md
 ```
 
-An absolute target would not remain portable across repository checkouts.
+That target remains portable across Windows, Linux and macOS checkouts. The
+adapter then resolves the core using its own relative path, so neither layer
+depends on a machine-specific absolute path.
 
----
+## 8. File Index
 
-### 3.3 CONV-001: Content preservation
-[INTENT: CONSTRAINT]
+| Path | Role |
+|---|---|
+| `prompt.md` | This Go-source adapter |
+| `CONVENTIONS.md` | Adapter-only constraints |
+| `DESCRIPTION.md` | This architecture explanation |
+| `CHANGELOG.md` | Adapter version ledger |
+| `core/prompt.md` | Complete portable workflow |
+| `core/CONVENTIONS.md` | Portable core conventions |
+| `core/DESCRIPTION.md` | Portable core architecture |
+| `core/CHANGELOG.md` | Portable core history |
+| `.cursor/rules/governed-task-to-pr-workflow.mdc` | Stable relative Cursor symlink to this adapter |
 
-The canonical prompt and the Cursor rule target must remain byte-equivalent
-workflow content. The migration changes source ownership and lookup only; it
-does not relax, replace, or reinterpret the governed workflow contract.
+## 9. Execution Context for LLM Agents
 
----
-
-### 3.4 META-001: Local metadata pair
-[INTENT: INFORMATION]
-
-`DESCRIPTION.md` explains the canonical prompt boundary, and `CHANGELOG.md`
-records versioned metadata changes for this prompt directory.
-
----
-
-## 4. Conventions and Constraints
-[INTENT: CONSTRAINT]
-
-- `prompt.md` is the canonical editable source.
-- The Cursor rule path is retained as a relative symbolic link.
-- The symbolic-link target stored by Git uses forward slashes and is relative
-  to `.cursor/rules`.
-- The governed workflow text remains complete and unchanged by this
-  canonicalization.
-- `DESCRIPTION.md` and `CHANGELOG.md` use their exact uppercase filenames.
-
----
-
-## 5. Path Index
-[INTENT: REFERENCE]
-
-| # | Path | Relevance | Unit IDs |
-|---|------|-----------|----------|
-| 1 | `__prompts__/version-control/git/workflow/prompt.md` | Canonical governed workflow source | REQ-001, REQ-002, CONV-001 |
-| 2 | `__prompts__/version-control/git/workflow/DESCRIPTION.md` | Scope reference for the canonical prompt | META-001 |
-| 3 | `__prompts__/version-control/git/workflow/CHANGELOG.md` | Version ledger for metadata changes | META-001 |
-| 4 | `.cursor/rules/governed-task-to-pr-workflow.mdc` | Relative Cursor rule entrypoint | REQ-002 |
-
----
-
-## 6. Execution Context for LLM Agents
-[INTENT: CONTEXT]
-
-Read `prompt.md` as the complete governed workflow contract. The
-`.cursor/rules` path is a compatibility entrypoint and must not be maintained
-as a separate content source. When this prompt changes, retain the relative
-link target and update this metadata pair in the same scoped change.
+Treat `prompt.md` as a loader and source-execution adapter. Read
+`core/prompt.md` completely before acting. Do not use the adapter's small
+size as permission to omit core workflow gates. Do not consult external
+documentation to reconstruct CLI syntax: use the current binary's `--help`.
