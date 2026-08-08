@@ -62,6 +62,13 @@ the Ruleset for its actual destination:
 This preserves the actual incident lineage and avoids treating every hotfix as
 if it belonged to `main`.
 
+For a same-repository `hotfix/* -> main` pull request, the existing required
+Linux quality job also validates the ticket-bound release record under
+`.git-governance/hotfix-release-records/`. This keeps the pre-merge record
+gate inside an already required main check instead of creating an optional
+hotfix-only status context. The record and manifest remain domain/controller
+responsibilities; Rulesets alone cannot validate their semantic content.
+
 ### Scratch
 
 `scratch/*` is private, short-lived exploration. It is neither an official

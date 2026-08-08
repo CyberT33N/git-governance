@@ -64,7 +64,10 @@ does not rely on any external governance repository or unpublished rule set.
 | `workflow ticket start` | IMPLEMENTED | optional scratch branch and provider-neutral PR intent |
 | `workflow ticket publish` | IMPLEMENTED | reports conditional rebase state, runs final local quality only after synchronization, records revision-bound local Git metadata, resumes resolved rebase and scratch-transfer conflicts interactively or with `--resume`, and creates a PR only through an explicit configured provider |
 | `workflow hotfix start` | IMPLEMENTED | affected-line selection is mandatory |
-| hotfix publish and propagation | IMPLEMENTED | affected-line publish plus `cherry-pick -x` forward/backport workflow, including non-interactive `--resume` continuation |
+| hotfix publish and single-commit propagation | IMPLEMENTED | affected-line publish plus reviewed `cherry-pick -x` forward/backport workflow, including non-interactive `--resume` continuation |
+| main hotfix release record and delivery verification | IMPLEMENTED | schema-validated ticket record, semantic commit budget, GraphQL merge evidence, immutable tag/release evidence verification, and protected main delivery controller |
+| manifest hotfix propagation preparation | IMPLEMENTED | declared multi-commit SHA manifest creates and verifies a local resumable `fix/*` candidate without publication |
+| manifest hotfix candidate publication | BLOCKED | requires the separate least-privileged Hotfix-Propagation-Publisher control plane; no local token or raw-Git fallback exists |
 | `workflow release cut`, `stabilize`, `align-promotion-base`, `align-reconciliation-base`, `promote`, `backmerge`, `support`, `cleanup` | IMPLEMENTED | protected-line dispatch/verification, stabilization constraints, governed promotion- and reconciliation-base alignment, release-to-main intent, delivery-gated conditional backmerge, cleanup, and support-tag provenance are enforced |
 | GitHub App pull-request adapter | IMPLEMENTED | just-in-time App credential resolution, host/repository isolation, bounded REST responses, and idempotent existing-PR lookup |
 | `auth login/status/logout github` | IMPLEMENTED | explicit Device Flow, redacted status, native secret-store session lifecycle, and CLI contract tests |
@@ -130,7 +133,7 @@ does not rely on any external governance repository or unpublished rule set.
 | Reproducible release configuration | VERIFIED | GoReleaser v2.16.0 installed locally and validated `.goreleaser.yaml` |
 | Controlled Go execution | IMPLEMENTED | CI and release set `GOTOOLCHAIN=local`, `GOFLAGS=-mod=readonly`, and `GOVCS=*:off`, then verify Go 1.26.5 before running Go commands |
 | Dependency admission review | IMPLEMENTED | immutable `actions/dependency-review-action` gate blocks dependency changes that introduce low-severity-or-higher findings across all dependency scopes |
-| Dependency-review merge enforcement | BLOCKED | the GitHub branch ruleset must mark `Dependency admission review` as a required status check |
+| Dependency-review merge enforcement | VERIFIED | `Dependency admission review` is a required status check for `develop`, `main`, `release/*`, and `support/*`; the repository contract test binds the workflow name and all four ruleset arrays |
 | Periodic dependency re-evaluation | IMPLEMENTED | the CI workflow runs daily in addition to pull-request, push, and manual triggers |
 | Dependency update intake | IMPLEMENTED | Dependabot opens daily reviewable update pull requests for the application module, the tools module, and GitHub Actions |
 | Hosted runner major-version pinning | IMPLEMENTED | GitHub workflows use concrete Ubuntu and Windows runner labels rather than `*-latest` labels |

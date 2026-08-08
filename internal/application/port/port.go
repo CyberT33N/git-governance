@@ -8,6 +8,7 @@ import (
 
 	"github.com/CyberT33N/git-governance/internal/domain/branch"
 	"github.com/CyberT33N/git-governance/internal/domain/commitmsg"
+	"github.com/CyberT33N/git-governance/internal/domain/hotfix"
 	"github.com/CyberT33N/git-governance/internal/domain/problem"
 	"github.com/CyberT33N/git-governance/internal/domain/ticket"
 )
@@ -293,6 +294,46 @@ type RevisionResolver interface {
 	ResolveRevision(ctx context.Context, repository RepositoryIdentity, revision string) (string, error)
 }
 
+// HotfixReleaseRecordStore loads a reviewed hotfix release record from the
+// repository without allowing callers to escape its controlled record area.
+type HotfixReleaseRecordStore interface {
+	LoadHotfixReleaseRecord(
+		ctx context.Context,
+		repository RepositoryIdentity,
+		id ticket.ID,
+		location string,
+	) (hotfix.ReleaseRecord, error)
+}
+
+// HotfixManifestProgress records one in-progress ordered propagation in
+// repository-local Git metadata. It is not a reviewed release record and
+// never grants publication authority.
+type HotfixManifestProgress struct {
+	Branch   branch.BranchName
+	Source   branch.BranchName
+	Target   branch.BranchName
+	Manifest []string
+	Next     int
+}
+
+// HotfixManifestProgressStore persists the local state needed to continue an
+// explicitly user-resolved ordered cherry-pick without guessing its position.
+type HotfixManifestProgressStore interface {
+	LoadHotfixManifestProgress(
+		ctx context.Context,
+		repository RepositoryIdentity,
+	) (HotfixManifestProgress, bool, error)
+	StoreHotfixManifestProgress(
+		ctx context.Context,
+		repository RepositoryIdentity,
+		progress HotfixManifestProgress,
+	) error
+	ClearHotfixManifestProgress(
+		ctx context.Context,
+		repository RepositoryIdentity,
+	) error
+}
+
 // PullRequest describes a provider-neutral pull request intent.
 type PullRequest struct {
 	Source branch.BranchName
@@ -371,4 +412,36 @@ type ReleaseReconciliationEvidence struct {
 type ReleaseLifecycleProvider interface {
 	DispatchSharedLine(ctx context.Context, request SharedLineDispatchRequest) (SharedLineDispatchResult, error)
 	VerifyReleaseReconciliation(ctx context.Context, request ReleaseReconciliationRequest) (ReleaseReconciliationEvidence, error)
+}
+
+// MainHotfixDeliveryRequest binds a reviewed record to its repository before a
+// production hotfix controller can create or verify a patch delivery.
+type MainHotfixDeliveryRequest struct {
+	Repository RepositoryIdentity
+	RemoteURL  string
+	Record     hotfix.ReleaseRecord
+}
+
+// MainHotfixMergeEvidence proves the exact same-repository hotfix pull
+// request and merge that a delivery controller may tag.
+type MainHotfixMergeEvidence struct {
+	PullRequestURL string
+	MergeCommit    string
+	Tag            string
+}
+
+// MainHotfixDeliveryEvidence adds the published release and successful
+// artifact workflow that bind the patch delivery evidence to the merge.
+type MainHotfixDeliveryEvidence struct {
+	MainHotfixMergeEvidence
+	ReleaseURL     string
+	WorkflowRunURL string
+}
+
+// MainHotfixLifecycleProvider verifies provider-owned facts for a main hotfix
+// before immutable tagging and after artifact delivery. It is intentionally a
+// read-only contract; the trusted workflow owns tag creation and dispatch.
+type MainHotfixLifecycleProvider interface {
+	VerifyMainHotfixMerge(ctx context.Context, request MainHotfixDeliveryRequest) (MainHotfixMergeEvidence, error)
+	VerifyMainHotfixDelivery(ctx context.Context, request MainHotfixDeliveryRequest) (MainHotfixDeliveryEvidence, error)
 }

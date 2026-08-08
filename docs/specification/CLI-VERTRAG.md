@@ -118,8 +118,12 @@ git governance
 │   │   └── publish
 │   ├── hotfix
 │   │   ├── start
+│   │   ├── validate-record
+│   │   ├── verify-merge
+│   │   ├── verify-delivery
 │   │   ├── publish
-│   │   └── propagate
+│   │   ├── propagate
+│   │   └── propagate-manifest
 │   ├── release
 │   │   ├── cut
 │   │   ├── stabilize
@@ -593,7 +597,7 @@ Ablauf:
 
 Ein Hotfix startet nie automatisch von `develop`.
 
-### 12.1 `workflow hotfix publish`
+### 13.1 `workflow hotfix publish`
 
 ```text
 git governance workflow hotfix publish \
@@ -608,7 +612,39 @@ Ein Hotfix wird niemals stillschweigend nach `develop` umgeleitet.
 manueller Rebase-Konfliktauflösung setzt `--resume` dieselbe Hotfix-Publikation
 ohne interaktive Eingaben fort.
 
-### 12.2 `workflow hotfix propagate`
+### 13.2 `workflow hotfix validate-record`
+
+```text
+git governance workflow hotfix validate-record \
+  --branch hotfix/<KEY-NUMBER>-<slug> \
+  [--record .git-governance/hotfix-release-records/<KEY-NUMBER>.json]
+```
+
+Der read-only Befehl lädt nur den Ticket-gebundenen JSON-Record aus dem
+kontrollierten Repository-Verzeichnis. Er verlangt Schema-Version 1, einen
+Main-Hotfix, einen stabilen Patch-Nachfolger des vorherigen Tags, die exakte
+Hotfix-PR-Bindung, einen geordneten vollständigen SHA-Manifest und deklarierte
+zusätzliche Propagationsziele.
+
+### 13.3 `workflow hotfix verify-merge` und `verify-delivery`
+
+```text
+git governance --pull-request-provider github workflow hotfix verify-merge \
+  --branch hotfix/<KEY-NUMBER>-<slug>
+
+git governance --pull-request-provider github workflow hotfix verify-delivery \
+  --branch hotfix/<KEY-NUMBER>-<slug>
+```
+
+`verify-merge` prüft den gemergten Same-Repository-Main-PR, den exakten
+GraphQL-Merge-Commit, das geordnete Commit-Manifest und die Abwesenheit des
+neuen immutable Tags. `verify-delivery` prüft zusätzlich, dass der Tag exakt
+auf den Merge zeigt, ein nicht-draft GitHub Release mit Payload, Checksums,
+SBOM und Sigstore-Bundle existiert und der Artifact-Workflow erfolgreich war.
+Beide Befehle sind read-only und erhalten ihre kurzlebige Identität nur im
+geschützten Controller.
+
+### 13.4 `workflow hotfix propagate`
 
 ```text
 git governance workflow hotfix propagate \
@@ -623,6 +659,23 @@ vor. Damit bleibt die Herkunft eines Forward- oder Backports nachweisbar.
 Bei einem pausierten Cherry-Pick löst der Benutzer die Konflikte und setzt
 anschließend mit `--source`, `--target-line`, dem erzeugten `--branch` und
 `--resume` fort. `--commit` ist beim Fortsetzen nicht erneut erforderlich.
+
+### 13.5 `workflow hotfix propagate-manifest`
+
+```text
+git governance workflow hotfix propagate-manifest \
+  --source hotfix/<KEY-NUMBER>-<slug> \
+  --target-line develop|release/<semver>|support/<major.minor>
+```
+
+Der Befehl akzeptiert ausschließlich eine im geprüften Record deklarierte
+Ziel-Linie. Er erzeugt einen workflow-managed `fix/*`-Kandidaten, speichert
+seinen lokalen Resume-Cursor in Git-Metadaten, appliziert die deklarierte
+SHA-Serie in der angegebenen Reihenfolge und führt die Quality-Suite aus. Bei
+Konflikt verlangt `--resume` den identischen Source-, Target- und
+Kandidatenbranch. Die Oberfläche veröffentlicht bewusst keinen Kandidaten:
+`--push` und `--create-pull-request` existieren erst im getrennten
+Hotfix-Publisher-Controller.
 
 ## 14. Release-Kommandos
 

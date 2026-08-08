@@ -12,6 +12,7 @@ import (
 	"github.com/CyberT33N/git-governance/internal/adapters/configfs"
 	"github.com/CyberT33N/git-governance/internal/adapters/gitcli"
 	"github.com/CyberT33N/git-governance/internal/adapters/github"
+	"github.com/CyberT33N/git-governance/internal/adapters/hotfixrecord"
 	"github.com/CyberT33N/git-governance/internal/adapters/quality"
 	"github.com/CyberT33N/git-governance/internal/adapters/report"
 	"github.com/CyberT33N/git-governance/internal/adapters/system"
@@ -46,6 +47,7 @@ type Runtime struct {
 	KeyPolicy                 port.KeyPolicy
 	Quality                   port.QualityRunner
 	QualityFactory            func(path string, timeout time.Duration) port.QualityRunner
+	HotfixRecords             port.HotfixReleaseRecordStore
 	Publisher                 port.PullRequestPublisher
 	GitHubAuthFactory         func(timeout time.Duration) github.AuthProvider
 	Browser                   browser.Opener
@@ -92,6 +94,7 @@ func defaultRuntime() Runtime {
 				DefaultTimeout: timeout,
 			})
 		},
+		HotfixRecords: hotfixrecord.New(),
 		GitHubAuthFactory: func(timeout time.Duration) github.AuthProvider {
 			return github.NewAuthService(github.AuthOptions{
 				HTTPClient: &http.Client{Timeout: timeout},
@@ -128,6 +131,9 @@ func newApplication(runtime Runtime, options *appOptions) *application {
 	}
 	if runtime.Quality == nil && runtime.QualityFactory == nil {
 		runtime.QualityFactory = defaultRuntime().QualityFactory
+	}
+	if runtime.HotfixRecords == nil {
+		runtime.HotfixRecords = defaultRuntime().HotfixRecords
 	}
 	if runtime.GitHubAuthFactory == nil {
 		runtime.GitHubAuthFactory = defaultRuntime().GitHubAuthFactory
@@ -194,9 +200,12 @@ func (application *application) services() services {
 		tickets.WithFinalQualityGate(finalQuality)
 	}
 	lifecycle, _ := publisher.(port.ReleaseLifecycleProvider)
+	hotfixLifecycle, _ := publisher.(port.MainHotfixLifecycleProvider)
 	releases := workflow.NewReleaseService(branches, git, publisher).
 		WithTicketService(tickets).
 		WithQualityRunner(qualityRunner).
+		WithHotfixReleaseRecordStore(application.runtime.HotfixRecords).
+		WithMainHotfixLifecycleProvider(hotfixLifecycle).
 		WithReleaseLifecycleProvider(lifecycle)
 	policyInspector, _ := application.runtime.KeyPolicy.(port.PolicyInspector)
 	return services{
