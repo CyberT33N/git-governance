@@ -101,7 +101,10 @@ jobs:
           PUBLISHER_INVOKER_SERVICE_ACCOUNT: ${{ vars.GCP_RECONCILIATION_PUBLISHER_INVOKER_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "release-reconciliation requires the default-branch ref refs/heads/main, got $GITHUB_REF (dispatch ref); the reconciliation record anchors at the default branch, so dispatch the lane from main" >&2
+            exit 1
+          }
           for variable in RELEASE TICKET_KEY TICKET SLUG; do
             test -n "${!variable:-}" || { echo "missing release-reconciliation input: $variable" >&2; exit 1; }
           done
@@ -173,9 +176,18 @@ jobs:
               --header "Authorization: Bearer $PUBLISHER_BROKER_ID_TOKEN" \
               --header "Content-Type: application/json" \
               --data "{\"host\":\"github.com\",\"owner\":\"${GITHUB_REPOSITORY%%/*}\",\"repository\":\"${GITHUB_REPOSITORY#*/}\"}")"
-            test "$status" = "200"
-            transport_token="$(jq --exit-status --raw-output '.access_token' "$response")"
-            test -n "$transport_token"
+            test "$status" = "200" || {
+              echo "the reconciliation publisher credential mint did not answer 200, got $status (broker response status); verify the publisher broker URL, the WIF provider, and the invoker service account variables" >&2
+              exit 1
+            }
+            transport_token="$(jq --exit-status --raw-output '.access_token' "$response")" || {
+              echo "the reconciliation publisher credential response did not carry access_token (broker JSON output contract); verify the broker version and the response shape" >&2
+              exit 1
+            }
+            test -n "$transport_token" || {
+              echo "the reconciliation publisher credential is empty (broker token value); verify the broker mint response" >&2
+              exit 1
+            }
             echo "::add-mask::$transport_token"
             transport_header="$(printf 'x-access-token:%s' "$transport_token" | base64 --wrap=0)"
             echo "::add-mask::$transport_header"

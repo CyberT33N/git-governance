@@ -95,7 +95,10 @@ jobs:
           INVOKER_SERVICE_ACCOUNT: ${{ vars.GCP_HOTFIX_DELIVERY_INVOKER_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "hotfix-propagation requires the default-branch ref refs/heads/main, got $GITHUB_REF (dispatch ref); the propagation record anchors at the default branch, so dispatch the lane from main" >&2
+            exit 1
+          }
           test -n "$DELIVERY_ENVIRONMENT" || { echo "hotfix-propagation requires delivery_environment" >&2; exit 1; }
           test "$DELIVERY_VARIANT" = "cloud" || {
             echo "hotfix-propagation binds the tenant credential-broker boundary; the github-only delivery variant of this lane is bound with the lane evidence-path migration" >&2
@@ -226,7 +229,10 @@ jobs:
           INVOKER_SERVICE_ACCOUNT: ${{ vars.GCP_HOTFIX_PROPAGATION_PUBLISHER_INVOKER_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "hotfix-propagation requires the default-branch ref refs/heads/main, got $GITHUB_REF (dispatch ref); the propagation record anchors at the default branch, so dispatch the lane from main" >&2
+            exit 1
+          }
           test -n "$PROPAGATION_ENVIRONMENT" || { echo "hotfix-propagation requires propagation_environment" >&2; exit 1; }
           test "$DELIVERY_VARIANT" = "cloud" || {
             echo "hotfix-propagation binds the tenant credential-broker boundary; the github-only delivery variant of this lane is bound with the lane evidence-path migration" >&2
@@ -240,7 +246,10 @@ jobs:
             echo "target_line must be develop, release/<semver>, or support/<major.minor>" >&2
             exit 1
           }
-          test -n "$RECORD"
+          test -n "$RECORD" || {
+            echo "hotfix-propagation requires the delivered hotfix record from the verify-delivery job (record value); verify the needs.verify-delivery output wiring" >&2
+            exit 1
+          }
           for variable in BROKER_URL WIF_PROVIDER INVOKER_SERVICE_ACCOUNT; do
             test -n "${!variable:-}" || { echo "missing GitHub variable: $variable" >&2; exit 1; }
           done
@@ -295,10 +304,19 @@ jobs:
             --header "Authorization: Bearer $BROKER_ID_TOKEN" \
             --header "Content-Type: application/json" \
             --data "{\"host\":\"github.com\",\"owner\":\"${GITHUB_REPOSITORY%%/*}\",\"repository\":\"${GITHUB_REPOSITORY#*/}\"}")"
-          test "$status" = "200"
+          test "$status" = "200" || {
+            echo "the propagation publisher credential mint did not answer 200, got $status (broker response status); verify the publisher broker URL, the WIF provider, and the invoker service account variables" >&2
+            exit 1
+          }
 
-          token="$(jq --exit-status --raw-output '.access_token' "$response")"
-          test -n "$token"
+          token="$(jq --exit-status --raw-output '.access_token' "$response")" || {
+            echo "the propagation publisher credential response did not carry access_token (broker JSON output contract); verify the broker version and the response shape" >&2
+            exit 1
+          }
+          test -n "$token" || {
+            echo "the propagation publisher credential is empty (broker token value); verify the broker mint response" >&2
+            exit 1
+          }
           echo "::add-mask::$token"
           basic="$(printf 'x-access-token:%s' "$token" | base64 --wrap=0)"
           echo "::add-mask::$basic"

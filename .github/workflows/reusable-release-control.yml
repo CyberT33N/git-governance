@@ -111,14 +111,20 @@ jobs:
             --header "Authorization: Bearer $BROKER_ID_TOKEN" \
             --header "Content-Type: application/json" \
             --data "{\"host\":\"github.com\",\"owner\":\"$owner\",\"repository\":\"$name\"}")"
-          test "$approved_status" = "200"
+          test "$approved_status" = "200" || {
+            echo "broker-smoke expected the approved repository request to answer 200, got $approved_status (broker response status); verify the broker URL, the WIF provider, and the invoker service account variables" >&2
+            exit 1
+          }
 
           rejected_status="$(curl --silent --show-error --output "$response" --write-out '%{http_code}' \
             --request POST "$BROKER_URL/v1/github/installations/token" \
             --header "Authorization: Bearer $BROKER_ID_TOKEN" \
             --header "Content-Type: application/json" \
             --data "{\"host\":\"github.com\",\"owner\":\"$owner\",\"repository\":\"not-approved\"}")"
-          test "$rejected_status" = "403"
+          test "$rejected_status" = "403" || {
+            echo "broker-smoke expected the unapproved repository request to be rejected with 403, got $rejected_status (broker response status); verify the broker allowlist boundary" >&2
+            exit 1
+          }
 
   release-request:
     if: ${{ inputs.operation == 'release-request' }}
@@ -189,7 +195,10 @@ jobs:
           REQUEST_ENVIRONMENT: ${{ inputs.request_environment }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "release-request requires the default-branch ref refs/heads/main, got $GITHUB_REF (dispatch ref); the request record anchors at the default branch, so dispatch the lane from main" >&2
+            exit 1
+          }
           test -n "$REQUEST_ENVIRONMENT" || { echo "release-request requires request_environment" >&2; exit 1; }
           for variable in VERSION KIND TICKET_KEY TICKET; do
             test -n "${!variable:-}" || { echo "release-request requires $variable" >&2; exit 1; }
