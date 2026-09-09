@@ -64,11 +64,14 @@ jobs:
         run: |
           set -euo pipefail
           if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Tag $TAG is not a valid v<semver> release tag."
+            echo "Tag $TAG is not a valid v<semver> release tag." >&2
             exit 1
           fi
           tag_commit="$(git rev-parse "refs/tags/${TAG}^{commit}")"
-          test "${tag_commit}" = "$(git rev-parse HEAD)"
+          test "${tag_commit}" = "$(git rev-parse HEAD)" || {
+            echo "the release tag does not point at the checked-out release source (tag commit identity); check out the immutable tag and retry the delivery" >&2
+            exit 1
+          }
 
       - name: Resolve the pinned toolchain
         id: toolchain
@@ -102,8 +105,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(go env GOTOOLCHAIN)" = "local"
-          test "$(go env GOVERSION)" = "go${{ steps.toolchain.outputs.version }}"
+          test "$(go env GOTOOLCHAIN)" = "local" || {
+            echo "the delivery lane requires GOTOOLCHAIN=local, got $(go env GOTOOLCHAIN) (toolchain resolution mode); set the lane env and never resolve the latest patch" >&2
+            exit 1
+          }
+          test "$(go env GOVERSION)" = "go${{ steps.toolchain.outputs.version }}" || {
+            echo "the delivery lane requires the pinned toolchain go${{ steps.toolchain.outputs.version }}, got $(go env GOVERSION) (toolchain version); verify the setup-go step and the go.mod toolchain directive" >&2
+            exit 1
+          }
 
       - name: Verify release source
         shell: bash
@@ -144,11 +153,26 @@ jobs:
         run: |
           set -euo pipefail
           checksum="$(find dist -type f -name '*checksums.txt' -print -quit)"
-          test -n "${checksum}"
-          test -n "$(find dist -type f \( -name '*.zip' -o -name '*.tar.gz' \) -print -quit)"
-          test -n "$(find dist -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) -print -quit)"
-          test -n "$(find dist -type f -name '*.sigstore.json' -print -quit)"
-          test -n "$(find dist -type f \( -name '*.sbom.json' -o -name '*.spdx.json' \) -print -quit)"
+          test -n "${checksum}" || {
+            echo "the published artifact set carries no checksums file (delivery artifact set); verify the GoReleaser output layout" >&2
+            exit 1
+          }
+          test -n "$(find dist -type f \( -name '*.zip' -o -name '*.tar.gz' \) -print -quit)" || {
+            echo "the published artifact set carries no release archive (delivery artifact set); verify the GoReleaser archives configuration" >&2
+            exit 1
+          }
+          test -n "$(find dist -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) -print -quit)" || {
+            echo "the published artifact set carries no Linux package (delivery artifact set); verify the GoReleaser package configuration" >&2
+            exit 1
+          }
+          test -n "$(find dist -type f -name '*.sigstore.json' -print -quit)" || {
+            echo "the published artifact set carries no sigstore signature bundle (delivery artifact set); verify the signing step" >&2
+            exit 1
+          }
+          test -n "$(find dist -type f \( -name '*.sbom.json' -o -name '*.spdx.json' \) -print -quit)" || {
+            echo "the published artifact set carries no SBOM (delivery artifact set); verify the SBOM generation" >&2
+            exit 1
+          }
           (
             cd "$(dirname "${checksum}")"
             sha256sum --check "$(basename "${checksum}")"
@@ -200,11 +224,14 @@ jobs:
         run: |
           set -euo pipefail
           if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Tag $TAG is not a valid v<semver> release tag."
+            echo "Tag $TAG is not a valid v<semver> release tag." >&2
             exit 1
           fi
           tag_commit="$(git rev-parse "refs/tags/${TAG}^{commit}")"
-          test "${tag_commit}" = "$(git rev-parse HEAD)"
+          test "${tag_commit}" = "$(git rev-parse HEAD)" || {
+            echo "the release tag does not point at the checked-out release source (tag commit identity); check out the immutable tag and retry the delivery" >&2
+            exit 1
+          }
 
       - name: Resolve the pinned toolchain
         id: toolchain
@@ -238,8 +265,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(go env GOTOOLCHAIN)" = "local"
-          test "$(go env GOVERSION)" = "go${{ steps.toolchain.outputs.version }}"
+          test "$(go env GOTOOLCHAIN)" = "local" || {
+            echo "the delivery lane requires GOTOOLCHAIN=local, got $(go env GOTOOLCHAIN) (toolchain resolution mode); set the lane env and never resolve the latest patch" >&2
+            exit 1
+          }
+          test "$(go env GOVERSION)" = "go${{ steps.toolchain.outputs.version }}" || {
+            echo "the delivery lane requires the pinned toolchain go${{ steps.toolchain.outputs.version }}, got $(go env GOVERSION) (toolchain version); verify the setup-go step and the go.mod toolchain directive" >&2
+            exit 1
+          }
 
       - name: Verify release source
         shell: bash
@@ -255,7 +288,10 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           git ls-files -z | sort -z | xargs -0 sha256sum > "dist/source-manifest-${TAG}.txt"
-          test -s "dist/source-manifest-${TAG}.txt"
+          test -s "dist/source-manifest-${TAG}.txt" || {
+            echo "the release source manifest is missing or empty (delivery manifest); verify the manifest write step" >&2
+            exit 1
+          }
 
       - name: Attest the release source manifest
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1

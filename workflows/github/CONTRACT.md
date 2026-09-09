@@ -31,6 +31,14 @@ Every payload input uses only the `workflow_call` types `string`, `number`, and
 surface, never to a payload. The allowed values of a string input are named in
 its description and validated fail-closed by the payload at runtime.
 
+Every fail-closed check in a payload emits the named reason on the lane's own
+diagnostic surface — the failed check, the value class that failed, and the
+remediation pointer — and never a secret, a token, or an internal reference. A
+fail-closed stop without its named reason is a defect of the lane: the operator
+must never reverse-engineer the failing check from a bare exit code. The
+contract-test set proves the named form on every home change and rejects the
+silent form.
+
 ## The trigger surface
 
 The callers own the trigger surface: `release-control.yml`,

@@ -120,10 +120,22 @@ jobs:
             workflow release execute-request \
             --request-id "$REQUEST_ID" \
             --executor-run "$EXECUTOR_RUN")"
-          request_id="$(jq --exit-status --raw-output '.fields.requestID' <<<"$result")"
-          source_sha="$(jq --exit-status --raw-output '.fields.sourceSHA' <<<"$result")"
-          target="$(jq --exit-status --raw-output '.fields.target' <<<"$result")"
-          needs_mutation="$(jq --exit-status --raw-output '.fields.needsMutation' <<<"$result")"
+          request_id="$(jq --exit-status --raw-output '.fields.requestID' <<<"$result")" || {
+            echo "the execute-request response did not carry fields.requestID (CLI JSON output contract); verify the governance CLI of the running checkout" >&2
+            exit 1
+          }
+          source_sha="$(jq --exit-status --raw-output '.fields.sourceSHA' <<<"$result")" || {
+            echo "the execute-request response did not carry fields.sourceSHA (CLI JSON output contract); verify the governance CLI of the running checkout" >&2
+            exit 1
+          }
+          target="$(jq --exit-status --raw-output '.fields.target' <<<"$result")" || {
+            echo "the execute-request response did not carry fields.target (CLI JSON output contract); verify the governance CLI of the running checkout" >&2
+            exit 1
+          }
+          needs_mutation="$(jq --exit-status --raw-output '.fields.needsMutation' <<<"$result")" || {
+            echo "the execute-request response did not carry fields.needsMutation (CLI JSON output contract); verify the governance CLI of the running checkout" >&2
+            exit 1
+          }
           printf 'request_id=%s\n' "$request_id" >> "$GITHUB_OUTPUT"
           printf 'source_sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
           printf 'target=%s\n' "$target" >> "$GITHUB_OUTPUT"
@@ -137,7 +149,10 @@ jobs:
           TARGET: ${{ steps.authorization.outputs.target }}
         run: |
           set -euo pipefail
-          git cat-file -e "${SOURCE_SHA}^{commit}"
+          if ! git cat-file -e "${SOURCE_SHA}^{commit}"; then
+            echo "the authorized source revision is not an available commit in the checkout (source revision); verify the request record and the full-history checkout" >&2
+            exit 1
+          fi
           existing="$(git ls-remote --heads origin "refs/heads/${TARGET}" | cut -f1)"
           if test -n "$existing"; then
             test "$existing" = "$SOURCE_SHA" || {

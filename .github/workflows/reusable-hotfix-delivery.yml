@@ -84,7 +84,10 @@ jobs:
           INVOKER_SERVICE_ACCOUNT: ${{ vars.GCP_HOTFIX_DELIVERY_INVOKER_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "hotfix-delivery requires the default-branch ref refs/heads/main, got $GITHUB_REF (dispatch ref); the hotfix record anchors at the default branch, so dispatch the lane from main" >&2
+            exit 1
+          }
           test -n "$DELIVERY_ENVIRONMENT" || { echo "hotfix-delivery requires delivery_environment" >&2; exit 1; }
           test "$DELIVERY_VARIANT" = "cloud" || {
             echo "hotfix-delivery binds the tenant credential-broker boundary; the github-only delivery variant of this lane is bound with the lane evidence-path migration" >&2
@@ -153,10 +156,22 @@ jobs:
             --branch "$SOURCE_BRANCH" \
             "${record_args[@]}" >"$response"
 
-          tag="$(jq --exit-status --raw-output '.fields.tag' "$response")"
-          merge_commit="$(jq --exit-status --raw-output '.fields.mergeCommit' "$response")"
-          test -n "$tag"
-          test -n "$merge_commit"
+          tag="$(jq --exit-status --raw-output '.fields.tag' "$response")" || {
+            echo "the verify-merge response did not carry fields.tag (CLI JSON output contract); verify the governance CLI of the running checkout" >&2
+            exit 1
+          }
+          merge_commit="$(jq --exit-status --raw-output '.fields.mergeCommit' "$response")" || {
+            echo "the verify-merge response did not carry fields.mergeCommit (CLI JSON output contract); verify the governance CLI of the running checkout" >&2
+            exit 1
+          }
+          test -n "$tag" || {
+            echo "the verify-merge response carried an empty tag (CLI output value); verify the hotfix record and the merge evidence" >&2
+            exit 1
+          }
+          test -n "$merge_commit" || {
+            echo "the verify-merge response carried an empty merge commit (CLI output value); verify the hotfix record and the merge evidence" >&2
+            exit 1
+          }
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
